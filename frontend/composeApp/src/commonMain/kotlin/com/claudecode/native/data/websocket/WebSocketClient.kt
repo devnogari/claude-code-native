@@ -5,6 +5,8 @@ import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -19,7 +21,7 @@ import kotlinx.serialization.json.Json
  *
  * Usage:
  * ```
- * val client = WebSocketClient(httpClient)
+ * val client = WebSocketClient(httpClient, coroutineScope)
  * client.connect(conversationId, authToken)
  * client.messages.collect { message ->
  *     when (message.type) {
@@ -32,10 +34,12 @@ import kotlinx.serialization.json.Json
  */
 class WebSocketClient(
     private val httpClient: HttpClient,
+    private val scope: CoroutineScope,
     private val baseUrl: String = "ws://localhost:8080/api/v1"
 ) {
     private var session: WebSocketSession? = null
     private var receiveJob: Job? = null
+    private val mutex = Mutex()
 
     private val _messages = MutableSharedFlow<IncomingMessage>()
     /** Flow of incoming messages from the server. Collectors receive all messages. */
@@ -58,57 +62,63 @@ class WebSocketClient(
      * @throws IllegalStateException if already connected (use disconnect first)
      */
     suspend fun connect(conversationId: String, token: String) {
-        if (_connectionState.value == ConnectionState.Connected) {
-            return
-        }
-
-        _connectionState.value = ConnectionState.Connecting
-
-        try {
-            session = httpClient.webSocketSession("$baseUrl/ws/$conversationId") {
-                url {
-                    parameters.append("token", token)
-                }
+        mutex.withLock {
+            if (_connectionState.value == ConnectionState.Connected) {
+                return
             }
 
-            _connectionState.value = ConnectionState.Connected
+            _connectionState.value = ConnectionState.Connecting
 
-            receiveJob = CoroutineScope(Dispatchers.Default).launch {
-                session?.let { ws ->
-                    try {
-                        for (frame in ws.incoming) {
-                            when (frame) {
-                                is Frame.Text -> {
-                                    val text = frame.readText()
-                                    try {
-                                        val message = json.decodeFromString<IncomingMessage>(text)
-                                        _messages.emit(message)
-                                    } catch (e: Exception) {
-                                        // Log parsing error but don't crash
-                                        _messages.emit(
-                                            IncomingMessage(
-                                                type = MessageType.ERROR,
-                                                error = "Failed to parse message: ${e.message}"
-                                            )
-                                        )
-                                    }
-                                }
-                                is Frame.Close -> {
-                                    _connectionState.value = ConnectionState.Disconnected
-                                }
-                                else -> { /* Ignore binary and other frames */ }
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        // Normal cancellation, don't treat as error
-                        throw e
-                    } catch (e: Exception) {
-                        _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
+            try {
+                session = httpClient.webSocketSession("$baseUrl/ws/$conversationId") {
+                    url {
+                        parameters.append("token", token)
                     }
                 }
+
+                _connectionState.value = ConnectionState.Connected
+
+                receiveJob = scope.launch {
+                    session?.let { ws ->
+                        try {
+                            for (frame in ws.incoming) {
+                                when (frame) {
+                                    is Frame.Text -> {
+                                        val text = frame.readText()
+                                        try {
+                                            val message = json.decodeFromString<IncomingMessage>(text)
+                                            _messages.emit(message)
+                                        } catch (e: Exception) {
+                                            // Log parsing error but don't crash
+                                            _messages.emit(
+                                                IncomingMessage(
+                                                    type = MessageType.ERROR,
+                                                    error = "Failed to parse message: ${e.message}"
+                                                )
+                                            )
+                                        }
+                                    }
+                                    is Frame.Close -> {
+                                        _connectionState.value = ConnectionState.Disconnected
+                                    }
+                                    else -> { /* Ignore binary and other frames */ }
+                                }
+                            }
+                            // Update state after receive loop ends normally
+                            if (_connectionState.value == ConnectionState.Connected) {
+                                _connectionState.value = ConnectionState.Disconnected
+                            }
+                        } catch (e: CancellationException) {
+                            // Normal cancellation, don't treat as error
+                            throw e
+                        } catch (e: Exception) {
+                            _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                _connectionState.value = ConnectionState.Error(e.message ?: "Connection failed")
             }
-        } catch (e: Exception) {
-            _connectionState.value = ConnectionState.Error(e.message ?: "Connection failed")
         }
     }
 
@@ -119,11 +129,13 @@ class WebSocketClient(
      * @throws IllegalStateException if not connected
      */
     suspend fun send(message: OutgoingMessage) {
-        val currentSession = session
-        if (currentSession == null || _connectionState.value != ConnectionState.Connected) {
-            throw IllegalStateException("WebSocket is not connected")
+        mutex.withLock {
+            val currentSession = session
+            if (currentSession == null || _connectionState.value != ConnectionState.Connected) {
+                throw IllegalStateException("WebSocket is not connected")
+            }
+            currentSession.send(Frame.Text(json.encodeToString(message)))
         }
-        currentSession.send(Frame.Text(json.encodeToString(message)))
     }
 
     /**
@@ -154,15 +166,17 @@ class WebSocketClient(
      * Safe to call even if not connected.
      */
     suspend fun disconnect() {
-        receiveJob?.cancel()
-        receiveJob = null
-        try {
-            session?.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnected"))
-        } catch (e: Exception) {
-            // Ignore close errors
+        mutex.withLock {
+            receiveJob?.cancelAndJoin()  // Wait for cancellation to complete
+            receiveJob = null
+            try {
+                session?.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnected"))
+            } catch (e: Exception) {
+                // Ignore close errors
+            }
+            session = null
+            _connectionState.value = ConnectionState.Disconnected
         }
-        session = null
-        _connectionState.value = ConnectionState.Disconnected
     }
 
     /**
