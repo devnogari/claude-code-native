@@ -32,6 +32,7 @@ func (m *Manager) CreateProcess(convID uuid.UUID, workDir string, env []string) 
 
 	// Create new process
 	process := NewProcess(convID, workDir)
+	process.Env = env
 	m.processes[convID] = process
 
 	return process, nil

@@ -26,6 +26,7 @@ type OutputMessage struct {
 type Process struct {
 	ConversationID uuid.UUID
 	WorkDir        string
+	Env            []string
 	Cmd            *exec.Cmd
 	Status         string
 	Input          chan string
@@ -34,6 +35,7 @@ type Process struct {
 	Done           chan struct{}
 	StartedAt      *time.Time
 	mu             sync.RWMutex
+	closeOnce      sync.Once
 }
 
 // NewProcess creates a new Process for a conversation
@@ -72,42 +74,13 @@ func (p *Process) SendInput(msg string) {
 	}
 }
 
-// Close closes the process channels
-// Done channel is closed first, then Input
+// Close closes the process channels safely using sync.Once
+// All channels are closed to prevent goroutine leaks
 func (p *Process) Close() {
-	// Close Done channel first to signal shutdown
-	select {
-	case <-p.Done:
-		// Already closed
-	default:
+	p.closeOnce.Do(func() {
 		close(p.Done)
-	}
-
-	// Close Input channel
-	select {
-	case <-p.Input:
-		// Drain and check if closed
-	default:
-	}
-	// Use a sync.Once pattern or check to prevent double close
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	// Safe close of Input channel
-	select {
-	case _, ok := <-p.Input:
-		if ok {
-			// Channel not closed, drain it first
-			for len(p.Input) > 0 {
-				<-p.Input
-			}
-		}
-	default:
-		// Channel empty, close it
-	}
-
-	// Close input channel using a helper to avoid double close
-	defer func() {
-		recover() // Recover from panic if channel already closed
-	}()
-	close(p.Input)
+		close(p.Input)
+		close(p.Output)
+		close(p.Error)
+	})
 }
