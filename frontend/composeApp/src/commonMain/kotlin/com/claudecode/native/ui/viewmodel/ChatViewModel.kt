@@ -141,7 +141,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Retry failed"
+                _error.value = e.toUserMessage()
             }
         }
     }
@@ -183,7 +183,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to send message"
+                _error.value = e.toUserMessage()
                 _isStreaming.value = false
             }
         }
@@ -200,7 +200,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to stop generation"
+                _error.value = e.toUserMessage()
             }
         }
     }

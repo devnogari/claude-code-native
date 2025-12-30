@@ -2,6 +2,7 @@ package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.AuthApi
 import com.claudecode.native.data.model.TokenResponse
+import com.claudecode.native.util.toUserMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +31,7 @@ class LoginViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.value = LoginUiState.Error(e.message ?: "Login failed")
+                _uiState.value = LoginUiState.Error(e.toUserMessage())
             }
         }
     }
@@ -54,7 +55,7 @@ class LoginViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.value = LoginUiState.Error(e.message ?: "Registration failed")
+                _uiState.value = LoginUiState.Error(e.toUserMessage())
             }
         }
     }

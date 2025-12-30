@@ -4,6 +4,7 @@ import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.ProjectApi
 import com.claudecode.native.data.model.Conversation
 import com.claudecode.native.data.model.Project
+import com.claudecode.native.util.toUserMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,7 +74,7 @@ class ProjectListViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load projects"
+                _error.value = e.toUserMessage()
             } finally {
                 _isLoading.value = false
             }
@@ -92,7 +93,7 @@ class ProjectListViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to refresh projects"
+                _error.value = e.toUserMessage()
             } finally {
                 _isRefreshing.value = false
             }
@@ -124,7 +125,7 @@ class ProjectListViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to create project"
+                _error.value = e.toUserMessage()
             } finally {
                 _isLoading.value = false
             }
@@ -151,7 +152,7 @@ class ProjectListViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to delete project"
+                _error.value = e.toUserMessage()
             } finally {
                 _isLoading.value = false
             }
@@ -182,7 +183,7 @@ class ProjectListViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load conversations"
+                _error.value = e.toUserMessage()
             } finally {
                 _isLoadingConversations.value = false
             }
@@ -212,7 +213,7 @@ class ProjectListViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to create conversation"
+                _error.value = e.toUserMessage()
             } finally {
                 _isLoadingConversations.value = false
             }
