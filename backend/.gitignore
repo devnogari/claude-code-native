@@ -1,0 +1,30 @@
+# Binaries (only in root backend directory)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/ccn-server
+/server
+
+# Test binary
+*.test
+
+# Output
+*.out
+
+# Go workspace
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Vendor (if using)
+# vendor/
