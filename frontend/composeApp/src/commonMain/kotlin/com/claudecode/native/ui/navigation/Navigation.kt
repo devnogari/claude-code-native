@@ -22,4 +22,9 @@ sealed class Screen(val route: String) {
      * @param conversationId The unique identifier for the conversation
      */
     data class Chat(val conversationId: String) : Screen("chat/$conversationId")
+
+    /**
+     * Settings screen - app configuration and preferences.
+     */
+    data object Settings : Screen("settings")
 }

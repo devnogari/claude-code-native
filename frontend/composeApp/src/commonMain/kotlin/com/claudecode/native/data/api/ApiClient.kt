@@ -18,8 +18,10 @@ import kotlinx.serialization.json.Json
  * Thread-safety: Auth token access is protected by a mutex for safe concurrent access.
  */
 class ApiClient(
-    @PublishedApi internal val baseUrl: String = "http://localhost:8080/api/v1"
+    baseUrl: String = "http://localhost:8080/api/v1"
 ) {
+    @PublishedApi internal var baseUrl: String = baseUrl
+        private set
     private val tokenMutex = Mutex()
     @PublishedApi internal var currentAuthToken: String? = null
 
@@ -75,6 +77,26 @@ class ApiClient(
      * Thread-safe: Uses mutex for safe concurrent access.
      */
     suspend fun getAuthToken(): String? = tokenMutex.withLock { currentAuthToken }
+
+    /**
+     * Clears the authentication token (for logout).
+     * Thread-safe: Uses mutex for safe concurrent access.
+     */
+    suspend fun clearAuthToken() {
+        tokenMutex.withLock {
+            currentAuthToken = null
+        }
+    }
+
+    /**
+     * Updates the base URL for API requests.
+     * Note: This affects all subsequent requests.
+     *
+     * @param url The new base URL
+     */
+    fun updateBaseUrl(url: String) {
+        baseUrl = url
+    }
 
     /**
      * Closes the HTTP client and releases resources.

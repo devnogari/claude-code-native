@@ -8,6 +8,7 @@ import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.LoginViewModel
 import com.claudecode.native.ui.viewmodel.ProjectListViewModel
+import com.claudecode.native.ui.viewmodel.SettingsViewModel
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
@@ -67,6 +68,7 @@ val appModule = module {
     factory { LoginViewModel(get(), get()) }
     factory { ChatViewModel(get(), get(), get()) }  // WebSocketClient, ApiClient, CoroutineScope
     factory { ProjectListViewModel(get(), get(), get()) }  // ProjectApi, ConversationApi, CoroutineScope
+    factory { SettingsViewModel(get(), get()) }  // ApiClient, CoroutineScope
 
     // WebSocket Client for real-time communication
     single {

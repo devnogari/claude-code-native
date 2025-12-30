@@ -14,6 +14,7 @@ import com.claudecode.native.ui.navigation.Screen
 import com.claudecode.native.ui.screen.ChatScreen
 import com.claudecode.native.ui.screen.LoginScreen
 import com.claudecode.native.ui.screen.ProjectListScreen
+import com.claudecode.native.ui.screen.SettingsScreen
 import org.koin.compose.KoinApplication
 
 @Composable
@@ -56,6 +57,9 @@ fun AppNavigation() {
                 onConversationSelected = { conversationId ->
                     selectedConversationId = conversationId
                     currentScreen = Screen.Chat(conversationId)
+                },
+                onSettingsClick = {
+                    currentScreen = Screen.Settings
                 }
             )
         }
@@ -65,6 +69,17 @@ fun AppNavigation() {
                 conversationId = screen.conversationId,
                 onBack = {
                     currentScreen = Screen.ProjectList
+                }
+            )
+        }
+
+        is Screen.Settings -> {
+            SettingsScreen(
+                onBack = {
+                    currentScreen = Screen.ProjectList
+                },
+                onLogout = {
+                    currentScreen = Screen.Login
                 }
             )
         }
