@@ -4,14 +4,17 @@ package main
 
 import (
 	"github.com/devnogari/claude-code-native/backend/internal/auth"
+	"github.com/devnogari/claude-code-native/backend/internal/claude"
 	"github.com/devnogari/claude-code-native/backend/internal/config"
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
 	"github.com/devnogari/claude-code-native/backend/internal/database"
 	"github.com/devnogari/claude-code-native/backend/internal/logger"
+	"github.com/devnogari/claude-code-native/backend/internal/message"
 	"github.com/devnogari/claude-code-native/backend/internal/middleware"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
 	"github.com/devnogari/claude-code-native/backend/internal/server"
 	"github.com/devnogari/claude-code-native/backend/internal/user"
+	"github.com/devnogari/claude-code-native/backend/internal/ws"
 	"go.uber.org/fx"
 )
 
@@ -28,6 +31,11 @@ func main() {
 		middleware.Module,
 		project.Module,
 		conversation.Module,
+		message.Module,
+
+		// Real-time modules
+		claude.Module,
+		ws.Module,
 
 		// Server (starts on OnStart, stops on OnStop)
 		server.Module,

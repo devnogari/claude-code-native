@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -33,6 +34,10 @@ func (s *Server) setupRoutes() {
 	protected.Get("/conversations/:id", s.convHandler.Get)
 	protected.Put("/conversations/:id", s.convHandler.Update)
 	protected.Delete("/conversations/:id", s.convHandler.Delete)
+
+	// WebSocket route for real-time conversation streaming
+	// Auth is handled via query params within the handler for WebSocket connections
+	protected.Get("/ws/:conversationID", s.wsHandler.Upgrade, websocket.New(s.wsHandler.HandleConnection))
 }
 
 func (s *Server) healthCheck(c *fiber.Ctx) error {

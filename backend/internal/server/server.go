@@ -11,6 +11,7 @@ import (
 	"github.com/devnogari/claude-code-native/backend/internal/middleware"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
 	"github.com/devnogari/claude-code-native/backend/internal/user"
+	"github.com/devnogari/claude-code-native/backend/internal/ws"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
@@ -32,6 +33,7 @@ type Server struct {
 	authHandler    *auth.Handler
 	projectHandler *project.Handler
 	convHandler    *conversation.Handler
+	wsHandler      *ws.Handler
 }
 
 type ServerParams struct {
@@ -43,6 +45,7 @@ type ServerParams struct {
 	UserRepo       *user.Repository
 	ProjectRepo    *project.Repository
 	ConvRepo       *conversation.Repository
+	WSHandler      *ws.Handler
 }
 
 func New(p ServerParams) *Server {
@@ -80,6 +83,7 @@ func New(p ServerParams) *Server {
 		authHandler:    authHandler,
 		projectHandler: projectHandler,
 		convHandler:    convHandler,
+		wsHandler:      p.WSHandler,
 	}
 
 	s.setupRoutes()
