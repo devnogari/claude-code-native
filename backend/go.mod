@@ -1,6 +1,6 @@
 module github.com/devnogari/claude-code-native/backend
 
-go 1.25.5
+go 1.25
 
 require go.uber.org/fx v1.24.0
 
