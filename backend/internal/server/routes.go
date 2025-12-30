@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/devnogari/claude-code-native/backend/internal/auth"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -12,9 +13,10 @@ func (s *Server) setupRoutes() {
 	api := s.app.Group("/api/v1")
 
 	// Auth routes (public)
+	authHandler := auth.NewHandler(s.auth, s.userRepo)
 	authGroup := api.Group("/auth")
-	authGroup.Post("/login", s.handleLogin)
-	authGroup.Post("/register", s.handleRegister)
+	authGroup.Post("/login", authHandler.Login)
+	authGroup.Post("/register", authHandler.Register)
 
 	// Protected routes (to be added with middleware)
 	// api.Use(s.authMiddleware)
@@ -25,19 +27,5 @@ func (s *Server) healthCheck(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status":  "ok",
 		"service": "claude-code-native",
-	})
-}
-
-func (s *Server) handleLogin(c *fiber.Ctx) error {
-	// TODO: Implement in Phase 2
-	return c.Status(501).JSON(fiber.Map{
-		"error": "not implemented",
-	})
-}
-
-func (s *Server) handleRegister(c *fiber.Ctx) error {
-	// TODO: Implement in Phase 2
-	return c.Status(501).JSON(fiber.Map{
-		"error": "not implemented",
 	})
 }
