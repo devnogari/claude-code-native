@@ -114,6 +114,12 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 		Title:     req.Title,
 	}
 
+	if err := conv.Validate(); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: err.Error(),
+		})
+	}
+
 	if err := h.convRepo.Create(ctx, conv); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error: "failed to create conversation",
