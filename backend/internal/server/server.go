@@ -7,6 +7,9 @@ import (
 
 	"github.com/devnogari/claude-code-native/backend/internal/auth"
 	"github.com/devnogari/claude-code-native/backend/internal/config"
+	"github.com/devnogari/claude-code-native/backend/internal/conversation"
+	"github.com/devnogari/claude-code-native/backend/internal/middleware"
+	"github.com/devnogari/claude-code-native/backend/internal/project"
 	"github.com/devnogari/claude-code-native/backend/internal/user"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -16,19 +19,30 @@ import (
 )
 
 type Server struct {
-	app      *fiber.App
-	config   *config.Config
-	logger   *zap.Logger
-	auth     *auth.Service
-	userRepo *user.Repository
+	app            *fiber.App
+	config         *config.Config
+	logger         *zap.Logger
+	authService    *auth.Service
+	authMiddleware *middleware.AuthMiddleware
+	userRepo       *user.Repository
+	projectRepo    *project.Repository
+	convRepo       *conversation.Repository
+
+	// Handlers
+	authHandler    *auth.Handler
+	projectHandler *project.Handler
+	convHandler    *conversation.Handler
 }
 
 type ServerParams struct {
 	fx.In
-	Config   *config.Config
-	Logger   *zap.Logger
-	Auth     *auth.Service
-	UserRepo *user.Repository
+	Config         *config.Config
+	Logger         *zap.Logger
+	AuthService    *auth.Service
+	AuthMiddleware *middleware.AuthMiddleware
+	UserRepo       *user.Repository
+	ProjectRepo    *project.Repository
+	ConvRepo       *conversation.Repository
 }
 
 func New(p ServerParams) *Server {
@@ -49,12 +63,23 @@ func New(p ServerParams) *Server {
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
 	}))
 
+	// Create handlers with proper dependencies
+	authHandler := auth.NewHandler(p.AuthService, p.UserRepo)
+	projectHandler := project.NewHandler(p.ProjectRepo)
+	convHandler := conversation.NewHandler(p.ConvRepo, p.ProjectRepo)
+
 	s := &Server{
-		app:      app,
-		config:   p.Config,
-		logger:   p.Logger,
-		auth:     p.Auth,
-		userRepo: p.UserRepo,
+		app:            app,
+		config:         p.Config,
+		logger:         p.Logger,
+		authService:    p.AuthService,
+		authMiddleware: p.AuthMiddleware,
+		userRepo:       p.UserRepo,
+		projectRepo:    p.ProjectRepo,
+		convRepo:       p.ConvRepo,
+		authHandler:    authHandler,
+		projectHandler: projectHandler,
+		convHandler:    convHandler,
 	}
 
 	s.setupRoutes()

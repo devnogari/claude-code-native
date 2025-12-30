@@ -1,7 +1,6 @@
 package server
 
 import (
-	"github.com/devnogari/claude-code-native/backend/internal/auth"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -13,14 +12,27 @@ func (s *Server) setupRoutes() {
 	api := s.app.Group("/api/v1")
 
 	// Auth routes (public)
-	authHandler := auth.NewHandler(s.auth, s.userRepo)
 	authGroup := api.Group("/auth")
-	authGroup.Post("/login", authHandler.Login)
-	authGroup.Post("/register", authHandler.Register)
+	authGroup.Post("/login", s.authHandler.Login)
+	authGroup.Post("/register", s.authHandler.Register)
 
-	// Protected routes (to be added with middleware)
-	// api.Use(s.authMiddleware)
-	// api.Get("/projects", s.handleListProjects)
+	// Protected routes
+	protected := api.Group("")
+	protected.Use(s.authMiddleware.Authenticate)
+
+	// Project routes
+	protected.Post("/projects", s.projectHandler.Create)
+	protected.Get("/projects", s.projectHandler.List)
+	protected.Get("/projects/:id", s.projectHandler.Get)
+	protected.Put("/projects/:id", s.projectHandler.Update)
+	protected.Delete("/projects/:id", s.projectHandler.Delete)
+
+	// Conversation routes
+	protected.Post("/projects/:projectId/conversations", s.convHandler.Create)
+	protected.Get("/projects/:projectId/conversations", s.convHandler.List)
+	protected.Get("/conversations/:id", s.convHandler.Get)
+	protected.Put("/conversations/:id", s.convHandler.Update)
+	protected.Delete("/conversations/:id", s.convHandler.Delete)
 }
 
 func (s *Server) healthCheck(c *fiber.Ctx) error {

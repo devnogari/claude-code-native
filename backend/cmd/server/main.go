@@ -5,8 +5,11 @@ package main
 import (
 	"github.com/devnogari/claude-code-native/backend/internal/auth"
 	"github.com/devnogari/claude-code-native/backend/internal/config"
+	"github.com/devnogari/claude-code-native/backend/internal/conversation"
 	"github.com/devnogari/claude-code-native/backend/internal/database"
 	"github.com/devnogari/claude-code-native/backend/internal/logger"
+	"github.com/devnogari/claude-code-native/backend/internal/middleware"
+	"github.com/devnogari/claude-code-native/backend/internal/project"
 	"github.com/devnogari/claude-code-native/backend/internal/server"
 	"github.com/devnogari/claude-code-native/backend/internal/user"
 	"go.uber.org/fx"
@@ -22,6 +25,9 @@ func main() {
 		// Domain modules
 		user.Module,
 		auth.Module,
+		middleware.Module,
+		project.Module,
+		conversation.Module,
 
 		// Server (starts on OnStart, stops on OnStop)
 		server.Module,
