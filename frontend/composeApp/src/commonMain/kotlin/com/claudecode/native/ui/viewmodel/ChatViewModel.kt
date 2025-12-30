@@ -6,6 +6,7 @@ import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.data.websocket.IncomingMessage
 import com.claudecode.native.data.websocket.MessageType
 import com.claudecode.native.data.websocket.WebSocketClient
+import com.claudecode.native.util.toUserMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -107,13 +108,14 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Connection failed"
+                _error.value = e.toUserMessage()
             }
         }
     }
 
     /**
      * Disconnects from the current WebSocket connection.
+     * This is a manual disconnect - auto-reconnection will NOT occur.
      */
     fun disconnect() {
         scope.launch {
@@ -124,6 +126,22 @@ class ChatViewModel(
                 throw e
             } catch (e: Exception) {
                 // Ignore disconnect errors
+            }
+        }
+    }
+
+    /**
+     * Retries the connection after reconnection attempts have been exhausted.
+     * Resets the reconnection state and attempts to connect again.
+     */
+    fun retryConnection() {
+        scope.launch {
+            try {
+                webSocketClient.resetAndReconnect()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _error.value = e.message ?: "Retry failed"
             }
         }
     }
