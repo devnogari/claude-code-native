@@ -21,16 +21,20 @@ type Client struct {
 
 	// Send is a buffered channel for outgoing messages
 	Send chan []byte
+
+	// Done is closed when the client is unregistered, signaling goroutines to stop
+	Done chan struct{}
 }
 
 // NewClient creates a new WebSocket client
 func NewClient(userID, conversationID uuid.UUID, conn *websocket.Conn) *Client {
-	clientID, _ := uuid.NewV7()
+	clientID := uuid.Must(uuid.NewV7())
 	return &Client{
 		ID:             clientID,
 		UserID:         userID,
 		ConversationID: conversationID,
 		Conn:           conn,
 		Send:           make(chan []byte, 256),
+		Done:           make(chan struct{}),
 	}
 }

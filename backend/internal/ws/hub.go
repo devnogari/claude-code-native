@@ -76,7 +76,7 @@ func (h *Hub) registerClient(client *Client) {
 	h.conversations[client.ConversationID][client.ID] = client
 }
 
-// unregisterClient removes a client from the hub and closes its Send channel
+// unregisterClient removes a client from the hub and closes its channels
 func (h *Hub) unregisterClient(client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -98,6 +98,9 @@ func (h *Hub) unregisterClient(client *Client) {
 			delete(h.conversations, client.ConversationID)
 		}
 	}
+
+	// Close the client's Done channel to signal goroutines to stop
+	close(client.Done)
 
 	// Close the client's Send channel
 	close(client.Send)
