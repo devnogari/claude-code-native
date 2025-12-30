@@ -10,6 +10,7 @@ data class Message(
     @SerialName("conversation_id") val conversationId: String,
     val role: MessageRole,
     val content: String,
+    @SerialName("sequence_num") val sequenceNum: Int,
     @SerialName("token_count") val tokenCount: Int? = null,
     @SerialName("created_at") val createdAt: Instant
 )

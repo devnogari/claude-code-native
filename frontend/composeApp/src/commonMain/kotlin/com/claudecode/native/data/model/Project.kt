@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class Project(
     val id: String,
-    @SerialName("user_id") val userId: String,
+    @SerialName("user_id") val userId: String? = null,
     val name: String,
     val path: String,
     @SerialName("claude_id") val claudeId: String? = null,
@@ -24,6 +24,5 @@ data class CreateProjectRequest(
 
 @Serializable
 data class UpdateProjectRequest(
-    val name: String? = null,
-    val path: String? = null
+    val name: String? = null
 )

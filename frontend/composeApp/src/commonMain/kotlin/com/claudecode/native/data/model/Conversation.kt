@@ -18,6 +18,7 @@ data class Conversation(
 
 @Serializable
 data class CreateConversationRequest(
+    @SerialName("project_id") val projectId: String,
     val title: String? = null
 )
 
