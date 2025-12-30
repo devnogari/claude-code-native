@@ -48,7 +48,7 @@ class AuthApi(private val client: ApiClient) {
     /**
      * Logs out the current user by clearing the auth token.
      */
-    fun logout() {
+    suspend fun logout() {
         client.setAuthToken(null)
     }
 
@@ -57,5 +57,5 @@ class AuthApi(private val client: ApiClient) {
      *
      * @return true if an auth token is present, false otherwise
      */
-    fun isLoggedIn(): Boolean = client.getAuthToken() != null
+    suspend fun isLoggedIn(): Boolean = client.getAuthToken() != null
 }

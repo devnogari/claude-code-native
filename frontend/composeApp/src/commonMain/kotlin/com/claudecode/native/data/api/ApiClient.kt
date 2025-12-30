@@ -7,15 +7,20 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 
 /**
  * Base API client for HTTP communication with the backend server.
  * Provides common HTTP methods with automatic JSON serialization and authentication.
+ *
+ * Thread-safety: Auth token access is protected by a mutex for safe concurrent access.
  */
 class ApiClient(
     @PublishedApi internal val baseUrl: String = "http://localhost:8080/api/v1"
 ) {
+    private val tokenMutex = Mutex()
     @PublishedApi internal var currentAuthToken: String? = null
 
     @PublishedApi internal val httpClient = HttpClient {
@@ -31,24 +36,53 @@ class ApiClient(
             contentType(ContentType.Application.Json)
         }
 
+        install(HttpTimeout) {
+            requestTimeoutMillis = 30_000
+            connectTimeoutMillis = 10_000
+            socketTimeoutMillis = 30_000
+        }
+
         HttpResponseValidator {
+            validateResponse { response ->
+                when (response.status.value) {
+                    in 200..299 -> {} // Success - no action needed
+                    401 -> throw ApiException("Unauthorized: Please login again", response.status.value)
+                    403 -> throw ApiException("Forbidden: Access denied", response.status.value)
+                    404 -> throw ApiException("Not found", response.status.value)
+                    in 400..499 -> throw ApiException("Client error: ${response.status.description}", response.status.value)
+                    in 500..599 -> throw ApiException("Server error: ${response.status.description}", response.status.value)
+                }
+            }
             handleResponseExceptionWithRequest { exception, _ ->
-                throw ApiException(exception.message ?: "Unknown error")
+                if (exception is ApiException) throw exception
+                throw ApiException(exception.message ?: "Network error")
             }
         }
     }
 
     /**
      * Sets the authentication token for subsequent API requests.
+     * Thread-safe: Uses mutex for safe concurrent access.
      */
-    fun setAuthToken(token: String?) {
-        currentAuthToken = token
+    suspend fun setAuthToken(token: String?) {
+        tokenMutex.withLock {
+            currentAuthToken = token
+        }
     }
 
     /**
      * Returns the current authentication token.
+     * Thread-safe: Uses mutex for safe concurrent access.
      */
-    fun getAuthToken(): String? = currentAuthToken
+    suspend fun getAuthToken(): String? = tokenMutex.withLock { currentAuthToken }
+
+    /**
+     * Closes the HTTP client and releases resources.
+     * Should be called when the API client is no longer needed.
+     */
+    fun close() {
+        httpClient.close()
+    }
 
     /**
      * Performs a GET request to the specified endpoint.
@@ -91,5 +125,37 @@ class ApiClient(
 
 /**
  * Exception thrown when an API request fails.
+ *
+ * @param message Human-readable error message
+ * @param statusCode HTTP status code (null for network errors)
  */
-class ApiException(message: String) : Exception(message)
+class ApiException(
+    message: String,
+    val statusCode: Int? = null
+) : Exception(message) {
+
+    /**
+     * Returns true if this is an authentication error (401).
+     */
+    fun isUnauthorized(): Boolean = statusCode == 401
+
+    /**
+     * Returns true if this is an authorization error (403).
+     */
+    fun isForbidden(): Boolean = statusCode == 403
+
+    /**
+     * Returns true if the resource was not found (404).
+     */
+    fun isNotFound(): Boolean = statusCode == 404
+
+    /**
+     * Returns true if this is a server error (5xx).
+     */
+    fun isServerError(): Boolean = statusCode != null && statusCode in 500..599
+
+    /**
+     * Returns true if this is a client error (4xx).
+     */
+    fun isClientError(): Boolean = statusCode != null && statusCode in 400..499
+}
