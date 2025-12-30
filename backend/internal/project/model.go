@@ -34,5 +34,8 @@ func (p *Project) Validate() error {
 	if p.Path == "" {
 		return fmt.Errorf("path is required")
 	}
+	if len(p.Path) > 1024 {
+		return fmt.Errorf("path must be 1024 characters or less")
+	}
 	return nil
 }

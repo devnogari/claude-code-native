@@ -74,6 +74,25 @@ func TestProject_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "path too long fails validation",
+			project: Project{
+				UserID: validUserID,
+				Name:   "My Project",
+				Path:   strings.Repeat("a", 1025),
+			},
+			wantErr: true,
+			errMsg:  "1024",
+		},
+		{
+			name: "path exactly 1024 chars passes validation",
+			project: Project{
+				UserID: validUserID,
+				Name:   "My Project",
+				Path:   strings.Repeat("a", 1024),
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
