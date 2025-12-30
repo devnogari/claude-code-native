@@ -12,8 +12,10 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.serialization.json.Json
 import org.koin.dsl.module
+import org.koin.dsl.onClose
 
 /**
  * Main Koin dependency injection module for the application.
@@ -25,11 +27,17 @@ import org.koin.dsl.module
  */
 val appModule = module {
     // Application-wide coroutine scope with SupervisorJob for independent child failure
-    single { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
+    single {
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    } onClose {
+        it?.cancel()
+    }
 
     // HTTP Client for REST API operations
     single {
         ApiClient(baseUrl = "http://localhost:8080/api/v1")
+    } onClose {
+        it?.close()
     }
 
     // HTTP Client for WebSocket connections (separate instance with WebSocket plugin)
@@ -43,6 +51,8 @@ val appModule = module {
                 })
             }
         }
+    } onClose {
+        it?.close()
     }
 
     // API Services
