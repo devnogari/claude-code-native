@@ -1,0 +1,103 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/devnogari/claude-code-native/backend/internal/auth"
+	"github.com/devnogari/claude-code-native/backend/internal/config"
+	"github.com/devnogari/claude-code-native/backend/internal/user"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"go.uber.org/fx"
+	"go.uber.org/zap"
+)
+
+type Server struct {
+	app      *fiber.App
+	config   *config.Config
+	logger   *zap.Logger
+	auth     *auth.Service
+	userRepo *user.Repository
+}
+
+type ServerParams struct {
+	fx.In
+	Config   *config.Config
+	Logger   *zap.Logger
+	Auth     *auth.Service
+	UserRepo *user.Repository
+}
+
+func New(p ServerParams) *Server {
+	app := fiber.New(fiber.Config{
+		AppName:      "Claude Code Native",
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+		ErrorHandler: customErrorHandler(p.Logger),
+	})
+
+	// Middleware
+	app.Use(recover.New())
+	app.Use(requestLogger(p.Logger))
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
+		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
+	}))
+
+	s := &Server{
+		app:      app,
+		config:   p.Config,
+		logger:   p.Logger,
+		auth:     p.Auth,
+		userRepo: p.UserRepo,
+	}
+
+	s.setupRoutes()
+
+	return s
+}
+
+func customErrorHandler(logger *zap.Logger) fiber.ErrorHandler {
+	return func(c *fiber.Ctx, err error) error {
+		code := fiber.StatusInternalServerError
+		if e, ok := err.(*fiber.Error); ok {
+			code = e.Code
+		}
+		logger.Error("HTTP error", zap.Error(err), zap.Int("status", code))
+		return c.Status(code).JSON(fiber.Map{"error": err.Error()})
+	}
+}
+
+func requestLogger(logger *zap.Logger) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		start := time.Now()
+		err := c.Next()
+		logger.Info("request",
+			zap.String("method", c.Method()),
+			zap.String("path", c.Path()),
+			zap.Int("status", c.Response().StatusCode()),
+			zap.Duration("latency", time.Since(start)),
+		)
+		return err
+	}
+}
+
+func (s *Server) App() *fiber.App {
+	return s.app
+}
+
+func (s *Server) Start() error {
+	addr := fmt.Sprintf(":%s", s.config.Server.Port)
+	s.logger.Info("Starting server", zap.String("addr", addr))
+	return s.app.Listen(addr)
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.logger.Info("Shutting down server")
+	return s.app.ShutdownWithContext(ctx)
+}
