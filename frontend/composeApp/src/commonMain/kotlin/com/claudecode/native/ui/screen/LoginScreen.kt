@@ -11,7 +11,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.claudecode.native.ui.viewmodel.LoginUiState
 import com.claudecode.native.ui.viewmodel.LoginViewModel
-import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 @Composable
@@ -25,11 +24,11 @@ fun LoginScreen(
     var isRegisterMode by remember { mutableStateOf(false) }
 
     val uiState by viewModel.uiState.collectAsState()
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(uiState) {
         if (uiState is LoginUiState.Success) {
             onLoginSuccess()
+            viewModel.resetState()
         }
     }
 
@@ -97,12 +96,10 @@ fun LoginScreen(
 
         Button(
             onClick = {
-                scope.launch {
-                    if (isRegisterMode) {
-                        viewModel.register(username, password, confirmPassword)
-                    } else {
-                        viewModel.login(username, password)
-                    }
+                if (isRegisterMode) {
+                    viewModel.register(username, password, confirmPassword)
+                } else {
+                    viewModel.login(username, password)
                 }
             },
             modifier = Modifier.fillMaxWidth(),

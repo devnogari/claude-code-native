@@ -62,7 +62,7 @@ val appModule = module {
     single { ConversationApi(get()) }
 
     // ViewModels
-    factory { LoginViewModel(get()) }
+    factory { LoginViewModel(get(), get()) }
 
     // WebSocket Client for real-time communication
     single {

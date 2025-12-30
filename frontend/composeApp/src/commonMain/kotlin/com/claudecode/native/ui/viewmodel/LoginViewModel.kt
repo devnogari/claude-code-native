@@ -2,36 +2,60 @@ package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.AuthApi
 import com.claudecode.native.data.model.TokenResponse
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
-class LoginViewModel(private val authApi: AuthApi) {
+class LoginViewModel(
+    private val authApi: AuthApi,
+    private val scope: CoroutineScope
+) {
     private val _uiState = MutableStateFlow<LoginUiState>(LoginUiState.Idle)
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
 
-    suspend fun login(username: String, password: String) {
-        _uiState.value = LoginUiState.Loading
-        try {
-            val response = authApi.login(username, password)
-            _uiState.value = LoginUiState.Success(response)
-        } catch (e: Exception) {
-            _uiState.value = LoginUiState.Error(e.message ?: "Login failed")
+    fun login(username: String, password: String) {
+        if (username.isBlank() || password.isBlank()) {
+            _uiState.value = LoginUiState.Error("Username and password are required")
+            return
+        }
+
+        scope.launch {
+            _uiState.value = LoginUiState.Loading
+            try {
+                val response = authApi.login(username, password)
+                _uiState.value = LoginUiState.Success(response)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = LoginUiState.Error(e.message ?: "Login failed")
+            }
         }
     }
 
-    suspend fun register(username: String, password: String, confirmPassword: String) {
+    fun register(username: String, password: String, confirmPassword: String) {
+        if (username.isBlank() || password.isBlank()) {
+            _uiState.value = LoginUiState.Error("Username and password are required")
+            return
+        }
+
         if (password != confirmPassword) {
             _uiState.value = LoginUiState.Error("Passwords do not match")
             return
         }
 
-        _uiState.value = LoginUiState.Loading
-        try {
-            val response = authApi.register(username, password, confirmPassword)
-            _uiState.value = LoginUiState.Success(response)
-        } catch (e: Exception) {
-            _uiState.value = LoginUiState.Error(e.message ?: "Registration failed")
+        scope.launch {
+            _uiState.value = LoginUiState.Loading
+            try {
+                val response = authApi.register(username, password, confirmPassword)
+                _uiState.value = LoginUiState.Success(response)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = LoginUiState.Error(e.message ?: "Registration failed")
+            }
         }
     }
 
@@ -39,6 +63,10 @@ class LoginViewModel(private val authApi: AuthApi) {
         if (_uiState.value is LoginUiState.Error) {
             _uiState.value = LoginUiState.Idle
         }
+    }
+
+    fun resetState() {
+        _uiState.value = LoginUiState.Idle
     }
 }
 
