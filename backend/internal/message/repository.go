@@ -58,7 +58,7 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*Message, erro
 	return message, nil
 }
 
-// FindByConversationID retrieves all messages for a conversation, ordered by sequence
+// FindByConversationID retrieves all messages for a conversation, ordered by created_at
 func (r *Repository) FindByConversationID(ctx context.Context, conversationID uuid.UUID) ([]*Message, error) {
 	if r.db == nil {
 		return nil, fmt.Errorf("database not initialized")
@@ -68,7 +68,7 @@ func (r *Repository) FindByConversationID(ctx context.Context, conversationID uu
 	err := r.db.NewSelect().
 		Model(&messages).
 		Where("conversation_id = ?", conversationID).
-		Order("sequence_num ASC").
+		Order("created_at ASC").
 		Scan(ctx)
 
 	if err != nil {

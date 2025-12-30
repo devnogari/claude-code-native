@@ -35,6 +35,15 @@ func TestMessage_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid message with system role passes validation",
+			message: Message{
+				ConversationID: validConversationID,
+				Role:           RoleSystem,
+				Content:        "You are a helpful assistant.",
+			},
+			wantErr: false,
+		},
+		{
 			name: "valid message with all fields passes validation",
 			message: Message{
 				ConversationID: validConversationID,
@@ -146,13 +155,15 @@ func TestIsValidRole(t *testing.T) {
 	}{
 		{RoleUser, true},
 		{RoleAssistant, true},
+		{RoleSystem, true},
 		{"user", true},
 		{"assistant", true},
+		{"system", true},
 		{"admin", false},
-		{"system", false},
 		{"", false},
 		{"USER", false}, // case-sensitive
 		{"Assistant", false},
+		{"System", false}, // case-sensitive
 	}
 
 	for _, tt := range tests {

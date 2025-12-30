@@ -13,6 +13,7 @@ import (
 const (
 	RoleUser      = "user"
 	RoleAssistant = "assistant"
+	RoleSystem    = "system"
 )
 
 // Message represents a chat message in a conversation
@@ -30,7 +31,7 @@ type Message struct {
 
 // IsValidRole checks if the given role is a valid message role
 func IsValidRole(role string) bool {
-	return role == RoleUser || role == RoleAssistant
+	return role == RoleUser || role == RoleAssistant || role == RoleSystem
 }
 
 // Validate checks if the message has all required fields with valid values
@@ -44,7 +45,7 @@ func (m *Message) Validate() error {
 	}
 
 	if !IsValidRole(m.Role) {
-		return fmt.Errorf("role must be one of: %s, %s", RoleUser, RoleAssistant)
+		return fmt.Errorf("role must be one of: %s, %s, %s", RoleUser, RoleAssistant, RoleSystem)
 	}
 
 	if strings.TrimSpace(m.Content) == "" {

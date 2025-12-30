@@ -43,7 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project
 CREATE TABLE IF NOT EXISTS messages (
     id              UUID PRIMARY KEY DEFAULT uuidv7(),
     conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    role            VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
+    role            VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content         TEXT NOT NULL,
     token_count     INTEGER,
     sequence_num    INTEGER NOT NULL,
