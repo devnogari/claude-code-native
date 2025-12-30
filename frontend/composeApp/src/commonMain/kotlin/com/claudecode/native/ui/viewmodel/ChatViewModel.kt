@@ -9,6 +9,8 @@ import com.claudecode.native.data.websocket.WebSocketClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.datetime.Clock
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -206,9 +208,9 @@ class ChatViewModel(
     private suspend fun handleIncomingMessage(message: IncomingMessage) {
         when (message.type) {
             MessageType.STREAM -> {
-                // Append streaming content
+                // Append streaming content atomically to avoid race conditions
                 message.content?.let { chunk ->
-                    _streamingContent.value = _streamingContent.value + chunk
+                    _streamingContent.update { current -> current + chunk }
                 }
             }
 
@@ -258,6 +260,6 @@ class ChatViewModel(
     }
 
     private fun generateMessageId(): String {
-        return "msg_${System.currentTimeMillis()}_${(0..9999).random()}"
+        return "msg_${Clock.System.now().toEpochMilliseconds()}_${(0..9999).random()}"
     }
 }
