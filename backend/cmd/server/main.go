@@ -3,12 +3,27 @@
 package main
 
 import (
+	"github.com/devnogari/claude-code-native/backend/internal/auth"
+	"github.com/devnogari/claude-code-native/backend/internal/config"
+	"github.com/devnogari/claude-code-native/backend/internal/database"
+	"github.com/devnogari/claude-code-native/backend/internal/logger"
+	"github.com/devnogari/claude-code-native/backend/internal/server"
+	"github.com/devnogari/claude-code-native/backend/internal/user"
 	"go.uber.org/fx"
 )
 
 func main() {
 	fx.New(
-		// Modules will be added here as the application grows
-		fx.NopLogger, // Disable fx logging for now
+		// Core modules
+		config.Module,
+		logger.Module,
+		database.Module,
+
+		// Domain modules
+		user.Module,
+		auth.Module,
+
+		// Server (starts on OnStart, stops on OnStop)
+		server.Module,
 	).Run()
 }
