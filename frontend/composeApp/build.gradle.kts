@@ -6,7 +6,7 @@ import org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.android.application)
+    alias(libs.plugins.android.library)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
 }
@@ -131,15 +131,11 @@ kotlin {
 }
 
 android {
-    namespace = "com.claudecode.app"
+    namespace = "com.claudecode.shared"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.devnogari.claudecodenative"
         minSdk = libs.versions.android.minSdk.get().toInt()
-        targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0.0"
     }
 
     compileOptions {
