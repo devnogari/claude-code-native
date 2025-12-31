@@ -272,16 +272,20 @@ class ClaudeHistoryViewModel(
             try {
                 val response = claudeHistoryApi.toggleSessionFavorite(session.id, project.path)
 
-                // Update local state
+                // Update local state and re-sort sessions
                 val updatedProjects = _uiState.value.projects.map { p ->
                     if (p.id == project.id) {
-                        p.copy(
-                            sessions = p.sessions.map { s ->
-                                if (s.id == session.id) {
-                                    s.copy(isFavorite = response.isFavorite)
-                                } else s
-                            }
+                        val updatedSessions = p.sessions.map { s ->
+                            if (s.id == session.id) {
+                                s.copy(isFavorite = response.isFavorite)
+                            } else s
+                        }
+                        // Re-sort: favorites first, then by updatedAt
+                        val sortedSessions = updatedSessions.sortedWith(
+                            compareByDescending<ClaudeSession> { it.isFavorite }
+                                .thenByDescending { it.updatedAt?.toEpochMilliseconds() ?: 0L }
                         )
+                        p.copy(sessions = sortedSessions)
                     } else p
                 }
                 _uiState.value = _uiState.value.copy(projects = updatedProjects)
@@ -300,22 +304,19 @@ class ClaudeHistoryViewModel(
 
     /**
      * Returns sorted sessions for a project based on current sort option.
-     * DEFAULT uses backend order (favorites first, then by recent).
+     * DEFAULT and FAVORITES both sort: favorites first, then by recent.
      */
     fun getSortedSessions(sessions: List<ClaudeSession>): List<ClaudeSession> {
         return when (_uiState.value.sortOption) {
-            SessionSortOption.DEFAULT -> {
-                // Use backend sorting order (already sorted: favorites first, then by recent)
-                sessions
-            }
-            SessionSortOption.RECENT -> {
-                sessions.sortedByDescending { it.updatedAt?.toEpochMilliseconds() ?: 0L }
-            }
-            SessionSortOption.FAVORITES -> {
+            SessionSortOption.DEFAULT, SessionSortOption.FAVORITES -> {
+                // Sort: favorites first, then by updatedAt DESC
                 sessions.sortedWith(
                     compareByDescending<ClaudeSession> { it.isFavorite }
                         .thenByDescending { it.updatedAt?.toEpochMilliseconds() ?: 0L }
                 )
+            }
+            SessionSortOption.RECENT -> {
+                sessions.sortedByDescending { it.updatedAt?.toEpochMilliseconds() ?: 0L }
             }
         }
     }

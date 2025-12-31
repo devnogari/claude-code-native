@@ -86,11 +86,16 @@ class ProjectListViewModel(
                         } catch (e: Exception) {
                             emptyList()
                         }
-                        ProjectWithConversations(project, conversations)
+                        // Sort conversations: favorites first, then by updatedAt
+                        val sortedConversations = conversations.sortedWith(
+                            compareByDescending<Conversation> { it.isFavorite }
+                                .thenByDescending { it.updatedAt }
+                        )
+                        ProjectWithConversations(project, sortedConversations)
                     }
                 }.awaitAll()
 
-                // Sort by most recent conversation or project update
+                // Sort projects by most recent conversation or project update
                 val sortedProjects = projectsWithConversations.sortedByDescending { pwc ->
                     pwc.conversations.maxOfOrNull { it.updatedAt } ?: pwc.project.updatedAt
                 }
@@ -125,7 +130,12 @@ class ProjectListViewModel(
                         } catch (e: Exception) {
                             emptyList()
                         }
-                        ProjectWithConversations(project, conversations)
+                        // Sort conversations: favorites first, then by updatedAt
+                        val sortedConversations = conversations.sortedWith(
+                            compareByDescending<Conversation> { it.isFavorite }
+                                .thenByDescending { it.updatedAt }
+                        )
+                        ProjectWithConversations(project, sortedConversations)
                     }
                 }.awaitAll()
 
