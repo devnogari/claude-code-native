@@ -15,6 +15,12 @@ build/
 # Kotlin
 *.class
 kotlin-js-store/
+.kotlin/
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xcworkspacedata
 
 # Local configuration
 local.properties
