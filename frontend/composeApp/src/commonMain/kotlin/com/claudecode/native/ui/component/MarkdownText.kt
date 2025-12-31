@@ -5,7 +5,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -13,7 +12,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -50,8 +48,6 @@ fun MarkdownText(
     val codeTextColor = MaterialTheme.colorScheme.onSurfaceVariant
     val linkColor = MaterialTheme.colorScheme.primary
 
-    val uriHandler = LocalUriHandler.current
-
     // Parse the markdown into blocks (code blocks vs regular text)
     val blocks = remember(text) { parseMarkdownBlocks(text) }
 
@@ -72,27 +68,10 @@ fun MarkdownText(
                             parseInlineMarkdown(block.content, color, linkColor, codeBackgroundColor, style)
                         }
 
-                        if (annotatedString.getStringAnnotations("URL", 0, annotatedString.length).isNotEmpty()) {
-                            ClickableText(
-                                text = annotatedString,
-                                style = style.copy(color = color),
-                                onClick = { offset ->
-                                    annotatedString.getStringAnnotations("URL", offset, offset)
-                                        .firstOrNull()?.let { annotation ->
-                                            try {
-                                                uriHandler.openUri(annotation.item)
-                                            } catch (_: Exception) {
-                                                // Ignore invalid URLs
-                                            }
-                                        }
-                                }
-                            )
-                        } else {
-                            Text(
-                                text = annotatedString,
-                                style = style.copy(color = color)
-                            )
-                        }
+                        Text(
+                            text = annotatedString,
+                            style = style.copy(color = color)
+                        )
                     }
                 }
             }
@@ -352,16 +331,16 @@ private fun AnnotatedString.Builder.appendInlineFormatting(
                     append(remaining.substring(0, i))
                     val linkText = linkMatch.groupValues[1]
                     val url = linkMatch.groupValues[2]
-                    pushStringAnnotation("URL", url)
-                    withStyle(
-                        SpanStyle(
-                            color = linkColor,
-                            textDecoration = TextDecoration.Underline
-                        )
-                    ) {
-                        append(linkText)
+                    withLink(LinkAnnotation.Url(url)) {
+                        withStyle(
+                            SpanStyle(
+                                color = linkColor,
+                                textDecoration = TextDecoration.Underline
+                            )
+                        ) {
+                            append(linkText)
+                        }
                     }
-                    pop()
                     remaining = remaining.substring(i + linkMatch.value.length)
                     i = 0
                 } else {

@@ -45,6 +45,30 @@ fun ProjectListScreen(
     onConversationSelected: (String) -> Unit,
     onSettingsClick: () -> Unit = {}
 ) {
+    ProjectListScreenContent(
+        viewModel = viewModel,
+        onConversationSelected = onConversationSelected,
+        onSettingsClick = onSettingsClick
+    )
+}
+
+/**
+ * Content composable for the project list screen.
+ *
+ * This is the main implementation used by both the standalone screen
+ * and the adaptive layout. Extracted to allow reuse in split-screen mode.
+ *
+ * @param viewModel ViewModel injected via Koin
+ * @param onConversationSelected Callback when a conversation is ready
+ * @param onSettingsClick Callback when settings is clicked
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProjectListScreenContent(
+    viewModel: ProjectListViewModel = koinInject(),
+    onConversationSelected: (String) -> Unit,
+    onSettingsClick: () -> Unit = {}
+) {
     val uiState by viewModel.uiState.collectAsState()
 
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -75,6 +99,7 @@ fun ProjectListScreen(
                             projectPath = path,
                             onSuccess = {
                                 deleteResultMessage = "Session deleted"
+                                viewModel.refresh() // Refresh list to reflect deletion
                             },
                             onError = { error ->
                                 deleteResultMessage = error

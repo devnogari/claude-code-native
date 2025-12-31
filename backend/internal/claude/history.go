@@ -215,13 +215,78 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 }
 
 // decodeProjectPath converts encoded project name back to actual path
+// Claude CLI encodes paths by replacing / with -
+// Problem: can't distinguish original dashes from path separators
+// Solution: try decoding and verify path exists using recursive search
 func decodeProjectPath(encoded string) string {
 	// Replace leading dash with /
 	if strings.HasPrefix(encoded, "-") {
 		encoded = "/" + encoded[1:]
 	}
-	// Replace remaining dashes with /
-	return strings.ReplaceAll(encoded, "-", "/")
+
+	// Simple case: replace all dashes with /
+	simplePath := strings.ReplaceAll(encoded, "-", "/")
+
+	// Check if simple decoded path exists
+	if _, err := os.Stat(simplePath); err == nil {
+		return simplePath
+	}
+
+	// Path doesn't exist - try smart decoding
+	// Split by - and try to find valid path by checking filesystem
+	parts := strings.Split(encoded, "-")
+	if result := findValidPath("", parts); result != "" {
+		return result
+	}
+
+	// Fallback to simple replacement
+	return simplePath
+}
+
+// findValidPath recursively tries to find a valid path by combining segments
+func findValidPath(base string, remaining []string) string {
+	if len(remaining) == 0 {
+		if base != "" && dirExists(base) {
+			return base
+		}
+		return ""
+	}
+
+	// Try combining different numbers of segments with dashes
+	for numSegments := 1; numSegments <= len(remaining); numSegments++ {
+		// Join numSegments parts with dashes (preserving original dashes in names)
+		segment := strings.Join(remaining[:numSegments], "-")
+
+		var nextPath string
+		if base == "" {
+			nextPath = segment
+		} else {
+			nextPath = base + "/" + segment
+		}
+
+		// If this is the last segment, check if path exists
+		if numSegments == len(remaining) {
+			if dirExists(nextPath) {
+				return nextPath
+			}
+		} else {
+			// Check if current path exists as directory
+			if dirExists(nextPath) {
+				// Recursively try remaining segments
+				if result := findValidPath(nextPath, remaining[numSegments:]); result != "" {
+					return result
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// dirExists checks if a directory exists
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // encodeProjectPath converts a path to encoded project name

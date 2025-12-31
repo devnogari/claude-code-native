@@ -292,6 +292,14 @@ class ChatViewModel(
     private suspend fun handleIncomingMessage(message: IncomingMessage) {
         when (message.type) {
             MessageType.STREAM -> {
+                // If we receive stream chunks, ensure streaming state is active
+                // This handles reconnection scenarios where ViewModel was recreated
+                if (!_isStreaming.value) {
+                    _isStreaming.value = true
+                    if (streamingMessageId == null) {
+                        streamingMessageId = generateMessageId()
+                    }
+                }
                 // Append streaming content atomically to avoid race conditions
                 message.content?.let { chunk ->
                     _streamingContent.update { current -> current + chunk }

@@ -1,16 +1,17 @@
 package com.claudecode.native.data.repository
 
+import com.claudecode.native.data.storage.FavoriteStorage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Repository for managing favorite projects.
- * Currently stores favorites in memory.
- * TODO: Persist to server or local storage for cross-session persistence.
+ * Uses platform-specific FavoriteStorage for cross-session persistence.
  */
 class FavoriteRepository {
-    private val _favorites = MutableStateFlow<Set<String>>(emptySet())
+    // Load favorites from storage on initialization
+    private val _favorites = MutableStateFlow<Set<String>>(FavoriteStorage.getFavorites())
     /** Flow of favorite project paths. */
     val favorites: StateFlow<Set<String>> = _favorites.asStateFlow()
 
@@ -21,6 +22,7 @@ class FavoriteRepository {
      */
     fun addFavorite(projectPath: String) {
         _favorites.value = _favorites.value + projectPath
+        FavoriteStorage.saveFavorites(_favorites.value)
     }
 
     /**
@@ -30,6 +32,7 @@ class FavoriteRepository {
      */
     fun removeFavorite(projectPath: String) {
         _favorites.value = _favorites.value - projectPath
+        FavoriteStorage.saveFavorites(_favorites.value)
     }
 
     /**
