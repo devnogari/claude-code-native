@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/devnogari/claude-code-native/backend/internal/auth"
+	"github.com/devnogari/claude-code-native/backend/internal/claude"
 	"github.com/devnogari/claude-code-native/backend/internal/config"
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
+	"github.com/devnogari/claude-code-native/backend/internal/message"
 	"github.com/devnogari/claude-code-native/backend/internal/middleware"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
 	"github.com/devnogari/claude-code-native/backend/internal/user"
@@ -33,7 +35,10 @@ type Server struct {
 	authHandler    *auth.Handler
 	projectHandler *project.Handler
 	convHandler    *conversation.Handler
+	msgHandler     *message.Handler
 	wsHandler      *ws.Handler
+	historyHandler *claude.HistoryHandler
+	syncHandler    *claude.SyncHandler
 }
 
 type ServerParams struct {
@@ -45,7 +50,9 @@ type ServerParams struct {
 	UserRepo       *user.Repository
 	ProjectRepo    *project.Repository
 	ConvRepo       *conversation.Repository
+	MsgRepo        *message.Repository
 	WSHandler      *ws.Handler
+	SyncHandler    *claude.SyncHandler
 }
 
 func New(p ServerParams) *Server {
@@ -70,6 +77,8 @@ func New(p ServerParams) *Server {
 	authHandler := auth.NewHandler(p.AuthService, p.UserRepo)
 	projectHandler := project.NewHandler(p.ProjectRepo)
 	convHandler := conversation.NewHandler(p.ConvRepo, p.ProjectRepo)
+	msgHandler := message.NewHandler(p.MsgRepo)
+	historyHandler := claude.NewHistoryHandler()
 
 	s := &Server{
 		app:            app,
@@ -83,7 +92,10 @@ func New(p ServerParams) *Server {
 		authHandler:    authHandler,
 		projectHandler: projectHandler,
 		convHandler:    convHandler,
+		msgHandler:     msgHandler,
 		wsHandler:      p.WSHandler,
+		historyHandler: historyHandler,
+		syncHandler:    p.SyncHandler,
 	}
 
 	s.setupRoutes()

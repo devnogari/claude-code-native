@@ -35,9 +35,21 @@ func (s *Server) setupRoutes() {
 	protected.Put("/conversations/:id", s.convHandler.Update)
 	protected.Delete("/conversations/:id", s.convHandler.Delete)
 
+	// Message routes
+	protected.Get("/conversations/:conversationId/messages", s.msgHandler.ListByConversation)
+
 	// WebSocket route for real-time conversation streaming
 	// Auth is handled via query params within the handler for WebSocket connections
 	protected.Get("/ws/:conversationID", s.wsHandler.Upgrade, websocket.New(s.wsHandler.HandleConnection))
+
+	// Claude Code History routes (local ~/.claude/projects/)
+	historyGroup := protected.Group("/claude-history")
+	historyGroup.Get("/projects", s.historyHandler.ListProjects)
+	historyGroup.Get("/projects/:encodedPath", s.historyHandler.GetProject)
+	historyGroup.Get("/projects/:encodedPath/sessions/:sessionId", s.historyHandler.GetSessionMessages)
+
+	// Sync route - imports Claude CLI history to database
+	protected.Post("/sync", s.syncHandler.Sync)
 }
 
 func (s *Server) healthCheck(c *fiber.Ctx) error {

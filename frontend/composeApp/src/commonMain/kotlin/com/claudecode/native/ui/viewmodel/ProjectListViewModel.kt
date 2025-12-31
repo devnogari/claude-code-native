@@ -4,79 +4,108 @@ import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.ProjectApi
 import com.claudecode.native.data.model.Conversation
 import com.claudecode.native.data.model.Project
+import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.util.toUserMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
+ * Project with its conversations for display.
+ */
+data class ProjectWithConversations(
+    val project: Project,
+    val conversations: List<Conversation> = emptyList()
+)
+
+/**
+ * UI state for the project list screen.
+ */
+data class ProjectListUiState(
+    val projects: List<ProjectWithConversations> = emptyList(),
+    val favorites: Set<String> = emptySet(),
+    val expandedProjects: Set<String> = emptySet(),
+    val searchQuery: String = "",
+    val isLoading: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val error: String? = null
+)
+
+/**
  * ViewModel for the project list screen.
  *
- * Handles:
- * - Loading and displaying projects
- * - Creating new projects
- * - Deleting projects
- * - Loading conversations for a selected project
+ * Displays projects from database (synced from Claude CLI history on login).
+ * Supports:
+ * - Loading projects from database
+ * - Expanding projects to show conversations
+ * - Favoriting projects (star icon)
+ * - Search/filter projects
  *
  * @param projectApi API client for project operations
  * @param conversationApi API client for conversation operations
+ * @param favoriteRepository Repository for managing favorites
  * @param scope Injected coroutine scope for lifecycle management
  */
 class ProjectListViewModel(
     private val projectApi: ProjectApi,
     private val conversationApi: ConversationApi,
+    private val favoriteRepository: FavoriteRepository,
     private val scope: CoroutineScope
 ) {
-    private val _projects = MutableStateFlow<List<Project>>(emptyList())
-    /** Flow of projects available to the user. */
-    val projects: StateFlow<List<Project>> = _projects.asStateFlow()
-
-    private val _isLoading = MutableStateFlow(false)
-    /** True when loading projects or performing an operation. */
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    private val _isRefreshing = MutableStateFlow(false)
-    /** True when performing pull-to-refresh. */
-    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
-
-    private val _error = MutableStateFlow<String?>(null)
-    /** Current error message, if any. */
-    val error: StateFlow<String?> = _error.asStateFlow()
-
-    private val _selectedProject = MutableStateFlow<Project?>(null)
-    /** Currently selected project. */
-    val selectedProject: StateFlow<Project?> = _selectedProject.asStateFlow()
-
-    private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
-    /** Conversations for the selected project. */
-    val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
-
-    private val _isLoadingConversations = MutableStateFlow(false)
-    /** True when loading conversations. */
-    val isLoadingConversations: StateFlow<Boolean> = _isLoadingConversations.asStateFlow()
+    private val _uiState = MutableStateFlow(ProjectListUiState())
+    val uiState: StateFlow<ProjectListUiState> = _uiState.asStateFlow()
 
     init {
+        // Observe favorites changes
+        scope.launch {
+            favoriteRepository.favorites.collect { favorites ->
+                _uiState.value = _uiState.value.copy(favorites = favorites)
+            }
+        }
         loadProjects()
     }
 
     /**
-     * Loads all projects for the authenticated user.
+     * Loads all projects from database.
      */
     fun loadProjects() {
         scope.launch {
-            _isLoading.value = true
-            _error.value = null
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                _projects.value = projectApi.getProjects()
+                val projects = projectApi.getProjects()
+                // Fetch conversations for each project in parallel
+                val projectsWithConversations = projects.map { project ->
+                    async {
+                        val conversations = try {
+                            conversationApi.getConversations(project.id)
+                        } catch (e: Exception) {
+                            emptyList()
+                        }
+                        ProjectWithConversations(project, conversations)
+                    }
+                }.awaitAll()
+
+                // Sort by most recent conversation or project update
+                val sortedProjects = projectsWithConversations.sortedByDescending { pwc ->
+                    pwc.conversations.maxOfOrNull { it.updatedAt } ?: pwc.project.updatedAt
+                }
+
+                _uiState.value = _uiState.value.copy(
+                    projects = sortedProjects,
+                    isLoading = false
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.toUserMessage()
-            } finally {
-                _isLoading.value = false
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = e.toUserMessage()
+                )
             }
         }
     }
@@ -86,136 +115,144 @@ class ProjectListViewModel(
      */
     fun refresh() {
         scope.launch {
-            _isRefreshing.value = true
-            _error.value = null
+            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
             try {
-                _projects.value = projectApi.getProjects()
+                val projects = projectApi.getProjects()
+                val projectsWithConversations = projects.map { project ->
+                    async {
+                        val conversations = try {
+                            conversationApi.getConversations(project.id)
+                        } catch (e: Exception) {
+                            emptyList()
+                        }
+                        ProjectWithConversations(project, conversations)
+                    }
+                }.awaitAll()
+
+                val sortedProjects = projectsWithConversations.sortedByDescending { pwc ->
+                    pwc.conversations.maxOfOrNull { it.updatedAt } ?: pwc.project.updatedAt
+                }
+
+                _uiState.value = _uiState.value.copy(
+                    projects = sortedProjects,
+                    isRefreshing = false
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.toUserMessage()
-            } finally {
-                _isRefreshing.value = false
+                _uiState.value = _uiState.value.copy(
+                    isRefreshing = false,
+                    error = e.toUserMessage()
+                )
             }
         }
     }
 
     /**
-     * Creates a new project.
+     * Toggles the expanded state of a project.
+     */
+    fun toggleProjectExpanded(projectId: String) {
+        val currentExpanded = _uiState.value.expandedProjects
+        val newExpanded = if (projectId in currentExpanded) {
+            currentExpanded - projectId
+        } else {
+            currentExpanded + projectId
+        }
+        _uiState.value = _uiState.value.copy(expandedProjects = newExpanded)
+    }
+
+    /**
+     * Toggles favorite status for a project.
+     *
+     * @param projectPath The project path to toggle
+     */
+    fun toggleFavorite(projectPath: String) {
+        favoriteRepository.toggleFavorite(projectPath)
+    }
+
+    /**
+     * Updates the search query and filters projects.
+     */
+    fun updateSearchQuery(query: String) {
+        _uiState.value = _uiState.value.copy(searchQuery = query)
+    }
+
+    /**
+     * Returns filtered projects based on search query.
+     */
+    fun getFilteredProjects(): List<ProjectWithConversations> {
+        val query = _uiState.value.searchQuery.lowercase()
+        val projects = _uiState.value.projects
+
+        if (query.isEmpty()) return projects
+
+        return projects.filter { pwc ->
+            pwc.project.name.lowercase().contains(query) ||
+            pwc.project.path.lowercase().contains(query) ||
+            pwc.conversations.any { it.title?.lowercase()?.contains(query) == true }
+        }
+    }
+
+    /**
+     * Handles conversation click - navigates to chat screen.
+     *
+     * @param conversationId The conversation ID to navigate to
+     * @param onNavigate Callback with conversation ID for navigation
+     */
+    fun onConversationClick(conversationId: String, onNavigate: (String) -> Unit) {
+        onNavigate(conversationId)
+    }
+
+    /**
+     * Creates a new project manually (for FAB action).
      *
      * @param name The project name
-     * @param path The local filesystem path for the project
+     * @param path The local filesystem path
      */
     fun createProject(name: String, path: String) {
-        if (name.isBlank()) {
-            _error.value = "Project name is required"
-            return
-        }
-        if (path.isBlank()) {
-            _error.value = "Project path is required"
+        if (name.isBlank() || path.isBlank()) {
+            _uiState.value = _uiState.value.copy(error = "Name and path are required")
             return
         }
 
         scope.launch {
-            _isLoading.value = true
-            _error.value = null
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                val newProject = projectApi.createProject(name, path)
-                _projects.value = _projects.value + newProject
+                projectApi.createProject(name, path)
+                // Refresh to show the new project
+                refresh()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.toUserMessage()
-            } finally {
-                _isLoading.value = false
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = e.toUserMessage()
+                )
             }
         }
     }
 
     /**
-     * Deletes a project by ID.
+     * Creates a new conversation in a project.
      *
-     * @param id The project ID to delete
+     * @param projectId The project ID
+     * @param title The conversation title
+     * @param onCreated Callback with conversation ID when created
      */
-    fun deleteProject(id: String) {
+    fun createConversation(projectId: String, title: String, onCreated: (String) -> Unit) {
         scope.launch {
-            _isLoading.value = true
-            _error.value = null
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                projectApi.deleteProject(id)
-                _projects.value = _projects.value.filter { it.id != id }
-                // Clear selection if deleted project was selected
-                if (_selectedProject.value?.id == id) {
-                    _selectedProject.value = null
-                    _conversations.value = emptyList()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _error.value = e.toUserMessage()
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
-
-    /**
-     * Selects a project and loads its conversations.
-     *
-     * @param project The project to select
-     */
-    fun selectProject(project: Project) {
-        _selectedProject.value = project
-        loadConversations(project.id)
-    }
-
-    /**
-     * Loads conversations for a project.
-     *
-     * @param projectId The project ID to load conversations for
-     */
-    fun loadConversations(projectId: String) {
-        scope.launch {
-            _isLoadingConversations.value = true
-            _error.value = null
-            try {
-                _conversations.value = conversationApi.getConversations(projectId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _error.value = e.toUserMessage()
-            } finally {
-                _isLoadingConversations.value = false
-            }
-        }
-    }
-
-    /**
-     * Creates a new conversation in the selected project.
-     *
-     * @param title Optional title for the conversation
-     * @return The created conversation ID via callback
-     */
-    fun createConversation(title: String? = null, onCreated: (String) -> Unit) {
-        val project = _selectedProject.value
-        if (project == null) {
-            _error.value = "No project selected"
-            return
-        }
-
-        scope.launch {
-            _isLoadingConversations.value = true
-            _error.value = null
-            try {
-                val conversation = conversationApi.createConversation(project.id, title)
-                _conversations.value = _conversations.value + conversation
+                val conversation = conversationApi.createConversation(projectId, title)
+                _uiState.value = _uiState.value.copy(isLoading = false)
                 onCreated(conversation.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.toUserMessage()
-            } finally {
-                _isLoadingConversations.value = false
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = e.toUserMessage()
+                )
             }
         }
     }
@@ -224,14 +261,6 @@ class ProjectListViewModel(
      * Clears the current error message.
      */
     fun clearError() {
-        _error.value = null
-    }
-
-    /**
-     * Clears the selected project and conversations.
-     */
-    fun clearSelection() {
-        _selectedProject.value = null
-        _conversations.value = emptyList()
+        _uiState.value = _uiState.value.copy(error = null)
     }
 }

@@ -9,6 +9,9 @@ import (
 // Module provides Claude CLI process management dependencies
 var Module = fx.Module("claude",
 	fx.Provide(NewManager),
+	fx.Provide(NewHistoryHandler),
+	fx.Provide(NewSyncService),
+	fx.Provide(NewSyncHandler),
 	fx.Invoke(registerShutdownHook),
 )
 

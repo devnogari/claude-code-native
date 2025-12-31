@@ -107,10 +107,17 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 		return
 	}
 
-	userID, ok := userIDStr.(uuid.UUID)
+	userIDString, ok := userIDStr.(string)
 	if !ok {
 		h.logger.Error("invalid user ID type", zap.Any("userID", userIDStr))
 		h.sendError(c, "invalid user ID")
+		return
+	}
+
+	userID, err := uuid.FromString(userIDString)
+	if err != nil {
+		h.logger.Error("invalid user ID format", zap.String("userID", userIDString), zap.Error(err))
+		h.sendError(c, "invalid user ID format")
 		return
 	}
 

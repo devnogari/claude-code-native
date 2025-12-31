@@ -1,5 +1,6 @@
 package com.claudecode.native.data.api
 
+import com.claudecode.native.data.storage.TokenStorage
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
@@ -16,6 +17,7 @@ import kotlinx.serialization.json.Json
  * Provides common HTTP methods with automatic JSON serialization and authentication.
  *
  * Thread-safety: Auth token access is protected by a mutex for safe concurrent access.
+ * Token persistence: Uses TokenStorage for platform-specific persistence (localStorage on WASM).
  */
 class ApiClient(
     baseUrl: String = "http://localhost:8080/api/v1"
@@ -23,7 +25,8 @@ class ApiClient(
     @PublishedApi internal var baseUrl: String = baseUrl
         private set
     private val tokenMutex = Mutex()
-    @PublishedApi internal var currentAuthToken: String? = null
+    // Load token from storage on initialization
+    @PublishedApi internal var currentAuthToken: String? = TokenStorage.getToken()
 
     @PublishedApi internal val httpClient = HttpClient {
         install(ContentNegotiation) {
@@ -65,10 +68,16 @@ class ApiClient(
     /**
      * Sets the authentication token for subsequent API requests.
      * Thread-safe: Uses mutex for safe concurrent access.
+     * Also persists to TokenStorage for WASM page refresh support.
      */
     suspend fun setAuthToken(token: String?) {
         tokenMutex.withLock {
             currentAuthToken = token
+            if (token != null) {
+                TokenStorage.saveToken(token)
+            } else {
+                TokenStorage.clearToken()
+            }
         }
     }
 
@@ -81,10 +90,12 @@ class ApiClient(
     /**
      * Clears the authentication token (for logout).
      * Thread-safe: Uses mutex for safe concurrent access.
+     * Also clears from TokenStorage.
      */
     suspend fun clearAuthToken() {
         tokenMutex.withLock {
             currentAuthToken = null
+            TokenStorage.clearToken()
         }
     }
 
@@ -122,6 +133,15 @@ class ApiClient(
         return httpClient.post("$baseUrl$endpoint") {
             currentAuthToken?.let { header(HttpHeaders.Authorization, "Bearer $it") }
             setBody(body)
+        }.body()
+    }
+
+    /**
+     * Performs a POST request to the specified endpoint without a body.
+     */
+    suspend inline fun <reified R> postEmpty(endpoint: String): R {
+        return httpClient.post("$baseUrl$endpoint") {
+            currentAuthToken?.let { header(HttpHeaders.Authorization, "Bearer $it") }
         }.body()
     }
 

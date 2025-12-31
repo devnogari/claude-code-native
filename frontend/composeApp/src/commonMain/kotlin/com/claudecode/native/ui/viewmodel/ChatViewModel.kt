@@ -1,6 +1,7 @@
 package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.ApiClient
+import com.claudecode.native.data.api.MessageApi
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.data.websocket.IncomingMessage
@@ -49,6 +50,7 @@ data class ChatMessage(
 class ChatViewModel(
     private val webSocketClient: WebSocketClient,
     private val apiClient: ApiClient,
+    private val messageApi: MessageApi,
     private val scope: CoroutineScope
 ) {
     private val mutex = Mutex()
@@ -87,6 +89,7 @@ class ChatViewModel(
     /**
      * Connects to the WebSocket for the given conversation.
      * Safe to call multiple times - will disconnect first if already connected.
+     * Also loads existing messages from the database.
      *
      * @param conversationId The conversation to connect to
      */
@@ -96,6 +99,10 @@ class ChatViewModel(
                 // Disconnect from previous conversation if any
                 if (currentConversationId != null && currentConversationId != conversationId) {
                     webSocketClient.disconnect()
+                    // Clear previous messages
+                    mutex.withLock {
+                        _messages.value = emptyList()
+                    }
                 }
 
                 currentConversationId = conversationId
@@ -104,12 +111,40 @@ class ChatViewModel(
                     return@launch
                 }
 
+                // Load existing messages from database
+                loadMessagesFromDb(conversationId)
+
+                // Connect to WebSocket for real-time updates
                 webSocketClient.connect(conversationId, token)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _error.value = e.toUserMessage()
             }
+        }
+    }
+
+    /**
+     * Loads existing messages from the database.
+     */
+    private suspend fun loadMessagesFromDb(conversationId: String) {
+        try {
+            val dbMessages = messageApi.getMessages(conversationId)
+            val chatMessages = dbMessages.map { msg ->
+                ChatMessage(
+                    id = msg.id,
+                    role = msg.role,
+                    content = msg.content,
+                    isStreaming = false
+                )
+            }
+            mutex.withLock {
+                _messages.value = chatMessages
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Ignore errors loading messages - may be empty conversation
         }
     }
 

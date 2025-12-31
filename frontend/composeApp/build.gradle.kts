@@ -25,7 +25,13 @@ kotlin {
                         add(rootDirPath)
                         add(projectDirPath)
                     }
+                    // Enable SPA routing - redirect all routes to index.html
+                    open = false
                 }
+            }
+            // For SPA routing support, create custom webpack config
+            webpackTask {
+                mainOutputFileName.set("composeApp.js")
             }
         }
         binaries.executable()

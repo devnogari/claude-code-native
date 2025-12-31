@@ -2,6 +2,8 @@ package user
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/gofrs/uuid/v5"
@@ -62,6 +64,9 @@ func (r *Repository) FindByUsername(ctx context.Context, username string) (*User
 		Scan(ctx)
 
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // User not found is not an error
+		}
 		return nil, err
 	}
 	return user, nil

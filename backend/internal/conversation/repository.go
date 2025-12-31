@@ -103,6 +103,23 @@ func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+func (r *Repository) FindByClaudeSession(ctx context.Context, projectID uuid.UUID, sessionID string) (*Conversation, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	conversation := new(Conversation)
+	err := r.db.NewSelect().
+		Model(conversation).
+		Where("project_id = ? AND claude_session = ?", projectID, sessionID).
+		Scan(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+	return conversation, nil
+}
+
 func (r *Repository) IncrementMessageCount(ctx context.Context, id uuid.UUID) error {
 	if r.db == nil {
 		return fmt.Errorf("database not initialized")

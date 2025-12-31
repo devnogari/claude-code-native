@@ -103,6 +103,23 @@ func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+func (r *Repository) FindByPath(ctx context.Context, userID uuid.UUID, path string) (*Project, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	project := new(Project)
+	err := r.db.NewSelect().
+		Model(project).
+		Where("user_id = ? AND path = ?", userID, path).
+		Scan(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+	return project, nil
+}
+
 func (r *Repository) UpdateLastAccessed(ctx context.Context, id uuid.UUID) error {
 	if r.db == nil {
 		return fmt.Errorf("database not initialized")

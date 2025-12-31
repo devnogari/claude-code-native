@@ -2,10 +2,14 @@ package com.claudecode.native.di
 
 import com.claudecode.native.data.api.ApiClient
 import com.claudecode.native.data.api.AuthApi
+import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.api.ConversationApi
+import com.claudecode.native.data.api.MessageApi
 import com.claudecode.native.data.api.ProjectApi
+import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.ui.viewmodel.ChatViewModel
+import com.claudecode.native.ui.viewmodel.ClaudeHistoryViewModel
 import com.claudecode.native.ui.viewmodel.LoginViewModel
 import com.claudecode.native.ui.viewmodel.ProjectListViewModel
 import com.claudecode.native.ui.viewmodel.SettingsViewModel
@@ -39,7 +43,7 @@ val appModule = module {
 
     // HTTP Client for REST API operations
     single {
-        ApiClient(baseUrl = "http://localhost:8080/api/v1")
+        ApiClient(baseUrl = "http://localhost:8083/api/v1")
     } onClose {
         it?.close()
     }
@@ -63,19 +67,25 @@ val appModule = module {
     single { AuthApi(get()) }
     single { ProjectApi(get()) }
     single { ConversationApi(get()) }
+    single { MessageApi(get()) }
+    single { ClaudeHistoryApi(get()) }
+
+    // Repositories
+    single { FavoriteRepository() }
 
     // ViewModels
-    factory { LoginViewModel(get(), get()) }
-    factory { ChatViewModel(get(), get(), get()) }  // WebSocketClient, ApiClient, CoroutineScope
-    factory { ProjectListViewModel(get(), get(), get()) }  // ProjectApi, ConversationApi, CoroutineScope
+    factory { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
+    factory { ChatViewModel(get(), get(), get(), get()) }  // WebSocketClient, ApiClient, MessageApi, CoroutineScope
+    factory { ProjectListViewModel(get(), get(), get(), get()) }  // ProjectApi, ConversationApi, FavoriteRepository, CoroutineScope
     factory { SettingsViewModel(get(), get()) }  // ApiClient, CoroutineScope
+    factory { ClaudeHistoryViewModel(get(), get()) }  // ClaudeHistoryApi, CoroutineScope
 
     // WebSocket Client for real-time communication
     single {
         WebSocketClient(
             httpClient = get(),
             scope = get(),
-            baseUrl = "ws://localhost:8080/api/v1"
+            baseUrl = "ws://localhost:8083/api/v1"
         )
     }
 }

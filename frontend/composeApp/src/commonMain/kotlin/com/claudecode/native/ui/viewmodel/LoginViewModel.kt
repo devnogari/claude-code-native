@@ -1,6 +1,7 @@
 package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.AuthApi
+import com.claudecode.native.data.api.ProjectApi
 import com.claudecode.native.data.model.TokenResponse
 import com.claudecode.native.util.toUserMessage
 import kotlinx.coroutines.CancellationException
@@ -12,6 +13,7 @@ import kotlinx.coroutines.launch
 
 class LoginViewModel(
     private val authApi: AuthApi,
+    private val projectApi: ProjectApi,
     private val scope: CoroutineScope
 ) {
     private val _uiState = MutableStateFlow<LoginUiState>(LoginUiState.Idle)
@@ -28,10 +30,28 @@ class LoginViewModel(
             try {
                 val response = authApi.login(username, password)
                 _uiState.value = LoginUiState.Success(response)
+                // Sync Claude history in background after login
+                syncClaudeHistory()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _uiState.value = LoginUiState.Error(e.toUserMessage())
+            }
+        }
+    }
+
+    /**
+     * Syncs Claude CLI history to database in the background.
+     * Failures are silently ignored as this is a convenience feature.
+     */
+    private fun syncClaudeHistory() {
+        scope.launch {
+            try {
+                projectApi.sync()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Ignore sync errors - it's a background convenience feature
             }
         }
     }

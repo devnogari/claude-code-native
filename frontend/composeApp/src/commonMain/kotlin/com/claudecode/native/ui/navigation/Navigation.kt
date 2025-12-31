@@ -27,4 +27,9 @@ sealed class Screen(val route: String) {
      * Settings screen - app configuration and preferences.
      */
     data object Settings : Screen("settings")
+
+    /**
+     * Claude Code history screen - browse local Claude Code conversations.
+     */
+    data object ClaudeHistory : Screen("claude-history")
 }

@@ -1,20 +1,53 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Claude Code Native</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💬</text></svg>">
+    <base href="/">
+
+    <!-- Preload fonts to prevent FOUT (Flash of Unstyled Text) -->
+    <link rel="preload"
+          href="/composeResources/claude_code_native.composeapp.generated.resources/font/noto_sans_kr_regular.ttf"
+          as="font"
+          type="font/ttf"
+          crossorigin>
+    <link rel="preload"
+          href="/composeResources/claude_code_native.composeapp.generated.resources/font/noto_sans_regular.ttf"
+          as="font"
+          type="font/ttf"
+          crossorigin>
+
     <style>
+        /* Define fonts with @font-face for WASM Skia canvas */
+        @font-face {
+            font-family: 'Noto Sans KR';
+            font-style: normal;
+            font-weight: 400;
+            src: url('/composeResources/claude_code_native.composeapp.generated.resources/font/noto_sans_kr_regular.ttf') format('truetype');
+            font-display: swap;
+        }
+
+        @font-face {
+            font-family: 'Noto Sans';
+            font-style: normal;
+            font-weight: 400;
+            src: url('/composeResources/claude_code_native.composeapp.generated.resources/font/noto_sans_regular.ttf') format('truetype');
+            font-display: swap;
+        }
+
         html, body {
             margin: 0;
             padding: 0;
             width: 100%;
             height: 100%;
             overflow: hidden;
+            font-family: 'Noto Sans KR', 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
     </style>
 </head>
 <body>
-<script src="composeApp.js"></script>
+<script src="/composeApp.js"></script>
 </body>
 </html>

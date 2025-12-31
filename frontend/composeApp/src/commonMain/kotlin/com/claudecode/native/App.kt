@@ -4,17 +4,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.claudecode.native.di.appModule
+import com.claudecode.native.ui.navigation.BrowserHistory
 import com.claudecode.native.ui.navigation.Screen
 import com.claudecode.native.ui.screen.ChatScreen
 import com.claudecode.native.ui.screen.LoginScreen
 import com.claudecode.native.ui.screen.ProjectListScreen
 import com.claudecode.native.ui.screen.SettingsScreen
+import com.claudecode.native.ui.theme.AppTheme
 import org.koin.compose.KoinApplication
 
 @Composable
@@ -22,7 +26,7 @@ fun App() {
     KoinApplication(application = {
         modules(appModule)
     }) {
-        MaterialTheme {
+        AppTheme {
             Surface(
                 modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.background
@@ -34,14 +38,45 @@ fun App() {
 }
 
 /**
+ * Parse URL path to Screen.
+ */
+private fun parsePathToScreen(path: String): Screen {
+    return when {
+        path == "/" || path == "/login" -> Screen.Login
+        path == "/projects" -> Screen.ProjectList
+        path == "/settings" -> Screen.Settings
+        path.startsWith("/chat/") -> {
+            val conversationId = path.removePrefix("/chat/")
+            if (conversationId.isNotEmpty()) Screen.Chat(conversationId) else Screen.ProjectList
+        }
+        else -> Screen.Login
+    }
+}
+
+/**
  * Main navigation composable that handles screen routing.
  *
  * Uses state-based navigation with [Screen] sealed class.
+ * Syncs with browser URL on WASM platform.
  */
 @Composable
 fun AppNavigation() {
-    var currentScreen: Screen by remember { mutableStateOf(Screen.Login) }
-    var selectedConversationId: String? by remember { mutableStateOf(null) }
+    // Initialize from current browser path
+    val initialPath = BrowserHistory.getCurrentPath()
+    var currentScreen: Screen by remember { mutableStateOf(parsePathToScreen(initialPath)) }
+
+    // Handle browser back/forward
+    DisposableEffect(Unit) {
+        BrowserHistory.setOnPopState { path ->
+            currentScreen = parsePathToScreen(path)
+        }
+        onDispose { }
+    }
+
+    // Update URL when screen changes
+    LaunchedEffect(currentScreen) {
+        BrowserHistory.pushState("/${currentScreen.route}")
+    }
 
     when (val screen = currentScreen) {
         is Screen.Login -> {
@@ -55,7 +90,6 @@ fun AppNavigation() {
         is Screen.ProjectList -> {
             ProjectListScreen(
                 onConversationSelected = { conversationId ->
-                    selectedConversationId = conversationId
                     currentScreen = Screen.Chat(conversationId)
                 },
                 onSettingsClick = {
@@ -82,6 +116,11 @@ fun AppNavigation() {
                     currentScreen = Screen.Login
                 }
             )
+        }
+
+        is Screen.ClaudeHistory -> {
+            // History is now integrated into ProjectListScreen
+            currentScreen = Screen.ProjectList
         }
     }
 }

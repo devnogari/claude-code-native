@@ -59,4 +59,25 @@ class ProjectApi(private val client: ApiClient) {
     suspend fun deleteProject(id: String) {
         client.delete("/projects/$id")
     }
+
+    /**
+     * Syncs Claude CLI history to database.
+     * Imports projects, conversations, and messages from ~/.claude/projects/
+     *
+     * @return Sync result with counts of created/updated items
+     */
+    suspend fun sync(): SyncResult {
+        return client.postEmpty("/sync")
+    }
 }
+
+/**
+ * Result of a sync operation.
+ */
+@kotlinx.serialization.Serializable
+data class SyncResult(
+    val projects_created: Int = 0,
+    val projects_updated: Int = 0,
+    val conversations_created: Int = 0,
+    val messages_created: Int = 0
+)

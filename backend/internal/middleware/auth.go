@@ -22,26 +22,29 @@ func NewAuthMiddleware(cfg *config.Config) *AuthMiddleware {
 
 // Authenticate validates JWT tokens and extracts user information
 func (m *AuthMiddleware) Authenticate(c *fiber.Ctx) error {
-	// Extract Authorization header
+	var tokenString string
+
+	// First, try to extract token from Authorization header
 	authHeader := c.Get("Authorization")
-	if authHeader == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "missing authorization header",
-		})
+	if authHeader != "" {
+		// Validate "Bearer " prefix
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "invalid authorization format",
+			})
+		}
+		tokenString = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
-	// Validate "Bearer " prefix
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "invalid authorization format",
-		})
+	// If no header, try query parameter (for WebSocket connections)
+	if tokenString == "" {
+		tokenString = c.Query("token")
 	}
 
-	// Extract token string
-	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	// If still no token, return error
 	if tokenString == "" {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "empty token",
+			"error": "missing authorization token",
 		})
 	}
 

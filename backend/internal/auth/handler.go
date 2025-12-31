@@ -49,7 +49,8 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 	existingUser, err := h.userRepo.FindByUsername(ctx, req.Username)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
-			Error: "internal server error",
+			Error:   "internal server error",
+			Details: err.Error(),
 		})
 	}
 	if existingUser != nil {

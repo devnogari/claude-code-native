@@ -1,0 +1,33 @@
+# Local development infrastructure only
+# Backend runs via CLI, not in container
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: ccn-postgres-local
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=ccn
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-localdev}
+      - POSTGRES_DB=claude_code_native
+    volumes:
+      - postgres-local-data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ccn -d claude_code_native"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5438:5432"  # Host:Container - avoid conflict with local postgres
+    networks:
+      - ccn-local
+
+volumes:
+  postgres-local-data:
+    name: ccn-postgres-local-data
+
+networks:
+  ccn-local:
+    name: ccn-local
+    driver: bridge
