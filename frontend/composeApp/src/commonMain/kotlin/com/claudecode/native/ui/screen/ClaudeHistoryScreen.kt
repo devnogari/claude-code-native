@@ -53,7 +53,6 @@ fun ClaudeHistoryScreen(
     onBack: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val focusManager = LocalFocusManager.current
 
     LaunchedEffect(Unit) {
         viewModel.loadProjects()
@@ -102,6 +101,8 @@ private fun ClaudeHistoryProjectListScreen(
     uiState: com.claudecode.native.ui.viewmodel.ClaudeHistoryUiState,
     onBack: () -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
+
     Scaffold(
         topBar = {
             TopAppBar(

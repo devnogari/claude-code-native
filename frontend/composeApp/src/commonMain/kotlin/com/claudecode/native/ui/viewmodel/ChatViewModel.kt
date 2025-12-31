@@ -6,6 +6,8 @@ import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.ProjectApi
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.data.websocket.ConnectionState
+import com.claudecode.native.data.websocket.HistoryWatchClient
+import com.claudecode.native.data.websocket.HistoryWatchEvent
 import com.claudecode.native.data.websocket.IncomingMessage
 import com.claudecode.native.data.websocket.MessageType
 import com.claudecode.native.data.websocket.WebSocketClient
@@ -63,6 +65,7 @@ class ChatViewModel(
     private val conversationApi: ConversationApi,
     private val projectApi: ProjectApi,
     private val claudeHistoryApi: ClaudeHistoryApi,
+    private val historyWatchClient: HistoryWatchClient,
     private val scope: CoroutineScope
 ) {
     private val mutex = Mutex()
@@ -88,12 +91,21 @@ class ChatViewModel(
 
     private var currentConversationId: String? = null
     private var streamingMessageId: String? = null
+    private var currentEncodedPath: String? = null
+    private var currentClaudeSession: String? = null
 
     init {
         // Collect incoming WebSocket messages
         scope.launch {
             webSocketClient.messages.collect { message ->
                 handleIncomingMessage(message)
+            }
+        }
+
+        // Collect history watch events for real-time file changes
+        scope.launch {
+            historyWatchClient.events.collect { event ->
+                handleHistoryWatchEvent(event)
             }
         }
     }
@@ -111,6 +123,7 @@ class ChatViewModel(
                 // Disconnect from previous conversation if any
                 if (currentConversationId != null && currentConversationId != conversationId) {
                     webSocketClient.disconnect()
+                    historyWatchClient.disconnect()
                     // Clear previous messages
                     mutex.withLock {
                         _messages.value = emptyList()
@@ -126,13 +139,48 @@ class ChatViewModel(
                 // Load existing messages from file-based Claude history
                 loadMessages(conversationId)
 
-                // Connect to WebSocket for real-time updates
+                // Connect to WebSocket for real-time updates (used for sending messages)
                 webSocketClient.connect(conversationId, token)
+
+                // Connect to history watch for real-time file changes (used for receiving updates)
+                // This allows seeing messages from Claude running in terminal or other sources
+                connectHistoryWatch(conversationId, token)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _error.value = e.toUserMessage()
             }
+        }
+    }
+
+    /**
+     * Connects to the history watch WebSocket for real-time file change notifications.
+     */
+    private suspend fun connectHistoryWatch(conversationId: String, token: String) {
+        try {
+            // Get conversation details to find claudeSession and project
+            val conversation = conversationApi.getConversation(conversationId)
+            val claudeSession = conversation.claudeSession
+            if (claudeSession.isNullOrBlank()) {
+                println("ChatViewModel: No claudeSession for history watch")
+                return
+            }
+
+            // Get project to find the path
+            val project = projectApi.getProject(conversation.projectId)
+            val encodedPath = encodeProjectPath(project.path)
+
+            // Store for later use
+            currentEncodedPath = encodedPath
+            currentClaudeSession = claudeSession
+
+            println("ChatViewModel: Connecting history watch for $encodedPath / $claudeSession")
+            historyWatchClient.connect(encodedPath, claudeSession, token)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("ChatViewModel: Failed to connect history watch: ${e.message}")
+            // Don't fail the main connection if history watch fails
         }
     }
 
@@ -288,7 +336,10 @@ class ChatViewModel(
         scope.launch {
             try {
                 webSocketClient.disconnect()
+                historyWatchClient.disconnect()
                 currentConversationId = null
+                currentEncodedPath = null
+                currentClaudeSession = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -455,6 +506,65 @@ class ChatViewModel(
 
             MessageType.PONG -> {
                 // Pong response to keep-alive ping
+            }
+        }
+    }
+
+    /**
+     * Handles events from the history watch WebSocket.
+     * This allows receiving real-time updates when Claude session files change,
+     * enabling the app to show messages from Claude running in terminal or other sources.
+     */
+    private suspend fun handleHistoryWatchEvent(event: HistoryWatchEvent) {
+        when (event) {
+            is HistoryWatchEvent.Connected -> {
+                println("ChatViewModel: History watch connected for ${event.sessionId}")
+            }
+
+            is HistoryWatchEvent.NewMessages -> {
+                println("ChatViewModel: Received ${event.messages.size} new messages from history watch")
+                // Convert ClaudeMessages to ChatMessages and add them
+                val newChatMessages = event.messages.mapNotNull { claudeMsg ->
+                    val msg = claudeMsg.message ?: return@mapNotNull null
+                    val role = msg.role
+                    val content = extractTextContent(msg.content)
+                    if (content.isBlank()) return@mapNotNull null
+
+                    ChatMessage(
+                        id = "watch_${claudeMsg.timestamp?.toEpochMilliseconds() ?: Clock.System.now().toEpochMilliseconds()}_${(0..9999).random()}",
+                        role = when (role) {
+                            "user" -> MessageRole.USER
+                            "assistant" -> MessageRole.ASSISTANT
+                            else -> return@mapNotNull null
+                        },
+                        content = content,
+                        isStreaming = false
+                    )
+                }
+
+                if (newChatMessages.isNotEmpty()) {
+                    mutex.withLock {
+                        // Avoid duplicates by checking if last message content matches
+                        val currentMessages = _messages.value
+                        val filteredNew = newChatMessages.filter { newMsg ->
+                            currentMessages.none { existing ->
+                                existing.content == newMsg.content && existing.role == newMsg.role
+                            }
+                        }
+                        if (filteredNew.isNotEmpty()) {
+                            _messages.value = currentMessages + filteredNew
+                            println("ChatViewModel: Added ${filteredNew.size} new messages to chat")
+                        }
+                    }
+                }
+            }
+
+            is HistoryWatchEvent.Error -> {
+                println("ChatViewModel: History watch error: ${event.message}")
+            }
+
+            is HistoryWatchEvent.Disconnected -> {
+                println("ChatViewModel: History watch disconnected")
             }
         }
     }

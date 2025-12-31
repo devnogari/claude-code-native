@@ -82,7 +82,7 @@ val appModule = module {
 
     // ViewModels - use single to maintain state across recomposition (e.g., theme changes)
     single { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
-    single { ChatViewModel(get(), get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, CoroutineScope
+    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, HistoryWatchClient, CoroutineScope
     single { ProjectListViewModel(get(), get(), get(), get()) }  // ProjectApi, ConversationApi, FavoriteRepository, CoroutineScope
     single { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
     single { ClaudeHistoryViewModel(get(), get(), get()) }  // ClaudeHistoryApi, HistoryWatchClient, CoroutineScope
