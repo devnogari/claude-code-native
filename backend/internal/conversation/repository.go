@@ -33,6 +33,26 @@ func (r *Repository) Create(ctx context.Context, conversation *Conversation) err
 		conversation.ID = id
 	}
 
+	// If timestamps are provided (from sync), use raw SQL to preserve them
+	// Otherwise use ORM defaults
+	if !conversation.CreatedAt.IsZero() && !conversation.UpdatedAt.IsZero() {
+		_, err := r.db.NewRaw(`
+			INSERT INTO conversations (id, project_id, claude_session, title, message_count, jsonl_path, is_favorite, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			conversation.ID,
+			conversation.ProjectID,
+			conversation.ClaudeSession,
+			conversation.Title,
+			conversation.MessageCount,
+			conversation.JsonlPath,
+			conversation.IsFavorite,
+			conversation.CreatedAt,
+			conversation.UpdatedAt,
+		).Exec(ctx)
+		return err
+	}
+
 	_, err := r.db.NewInsert().Model(conversation).Exec(ctx)
 	return err
 }
