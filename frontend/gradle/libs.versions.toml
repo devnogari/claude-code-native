@@ -14,7 +14,7 @@ kotlinx-serialization = "1.7.3"
 kotlinx-datetime = "0.6.1"
 slf4j = "2.0.17"
 androidx-activityCompose = "1.9.3"
-androidx-lifecycle = "2.8.7"
+androidx-lifecycle = "2.10.0"
 
 [libraries]
 # Ktor Client
