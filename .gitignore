@@ -32,3 +32,9 @@ postgres-data/
 
 # Node
 node_modules/
+
+# Build binaries
+backend/bin/
+
+# Kotlin compiler artifacts
+.kotlin/
