@@ -71,22 +71,23 @@ server-watch:
 # Start frontend desktop app
 frontend:
 	@echo "Starting desktop app..."
-	cd frontend && ./gradlew run
+	cd frontend && ./gradlew composeApp:hotRunDesktop --mainClass=com.claudecode.native.MainKt
 
 # Start frontend with hot reload (watches for changes)
 frontend-watch:
-	@echo "Starting desktop app with hot reload..."
-	cd frontend && ./gradlew run --continuous
+	@echo "Starting desktop app with hot reload (experimental)..."
+	@echo "Hot reload: Modify code and rebuild will happen automatically"
+	cd frontend && ./gradlew composeApp:hotRunDesktop --mainClass=com.claudecode.native.MainKt
 
 # Start frontend web app (wasm)
 frontend-web:
 	@echo "Starting web app..."
-	cd frontend && ./gradlew composeApp:wasmJsBrowserRun
+	cd frontend && ./gradlew composeApp:wasmJsBrowserDevelopmentRun --continuous
 
 # Start frontend web app with hot reload
 frontend-web-watch:
 	@echo "Starting web app with hot reload..."
-	cd frontend && ./gradlew composeApp:wasmJsBrowserRun --continuous
+	cd frontend && ./gradlew composeApp:wasmJsBrowserDevelopmentRun --continuous
 
 # Start DB + Server (no frontend)
 dev: db
@@ -104,7 +105,7 @@ all: db
 	@cd backend && \
 	env $$(grep -v '^#' .env.local | xargs) go run ./cmd/server &
 	@sleep 2
-	@$(MAKE) frontend
+	cd frontend && ./gradlew composeApp:hotRunDesktop --mainClass=com.claudecode.native.MainKt
 
 # =============================================================================
 # Docker (Full Stack)

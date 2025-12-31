@@ -39,6 +39,7 @@ func (s *Server) setupRoutes() {
 	protected.Get("/conversations/:id", s.convHandler.Get)
 	protected.Put("/conversations/:id", s.convHandler.Update)
 	protected.Delete("/conversations/:id", s.convHandler.Delete)
+	protected.Post("/conversations/:id/favorite", s.convHandler.ToggleFavorite)
 
 	// Message routes
 	protected.Get("/conversations/:conversationId/messages", s.msgHandler.ListByConversation)
@@ -52,6 +53,10 @@ func (s *Server) setupRoutes() {
 	historyGroup.Get("/projects", s.historyHandler.ListProjects)
 	historyGroup.Get("/projects/:encodedPath", s.historyHandler.GetProject)
 	historyGroup.Get("/projects/:encodedPath/sessions/:sessionId", s.historyHandler.GetSessionMessages)
+	historyGroup.Post("/sessions/:sessionId/favorite", s.historyHandler.ToggleSessionFavorite)
+
+	// WebSocket route for watching session file changes in real-time
+	historyGroup.Get("/ws/:encodedPath/:sessionId", s.historyWatchHandler.Upgrade, websocket.New(s.historyWatchHandler.HandleConnection))
 
 	// Sync route - imports Claude CLI history to database
 	protected.Post("/sync", s.syncHandler.Sync)
@@ -120,14 +125,24 @@ func (s *Server) deleteSession(c *fiber.Ctx) error {
 	}
 
 	// Delete the Claude CLI session
-	if err := s.claudeMgr.DeleteSession(convID, proj.Path); err != nil {
+	// Use ClaudeSession if available, otherwise use database conversation ID
+	sessionIDToDelete := convID
+	if conv.ClaudeSession != nil && *conv.ClaudeSession != "" {
+		if parsedSessionID, err := uuid.FromString(*conv.ClaudeSession); err == nil {
+			sessionIDToDelete = parsedSessionID
+		}
+	}
+
+	if err := s.claudeMgr.DeleteSession(sessionIDToDelete, proj.Path); err != nil {
 		s.logger.Warn("failed to delete claude session",
+			zap.String("sessionID", sessionIDToDelete.String()),
 			zap.String("conversationID", convID.String()),
 			zap.Error(err))
 		// Don't return error - session might already be deleted or not exist
 	}
 
 	s.logger.Info("claude session deleted",
+		zap.String("sessionID", sessionIDToDelete.String()),
 		zap.String("conversationID", convID.String()),
 		zap.String("projectPath", proj.Path))
 
@@ -155,11 +170,44 @@ func (s *Server) deleteSessionDirect(c *fiber.Ctx) error {
 		})
 	}
 
-	// Delete the Claude CLI session
+	// Get user ID from context (set by auth middleware)
+	userIDStr, ok := c.Locals("userID").(string)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "user not authenticated",
+		})
+	}
+	userID, err := uuid.FromString(userIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "invalid user ID",
+		})
+	}
+
+	// Delete the Claude CLI session files
 	if err := s.claudeMgr.DeleteSession(sessionID, projectPath); err != nil {
-		s.logger.Warn("failed to delete claude session",
+		s.logger.Warn("failed to delete claude session files",
 			zap.String("sessionID", sessionID.String()),
 			zap.Error(err))
+	}
+
+	// Also delete the conversation from database if it exists
+	// First find the project by path
+	proj, err := s.projectRepo.FindByPath(c.Context(), userID, projectPath)
+	if err == nil && proj != nil {
+		// Find conversation by claude_session
+		conv, err := s.convRepo.FindByClaudeSession(c.Context(), proj.ID, sessionIDStr)
+		if err == nil && conv != nil {
+			// Delete the conversation from database
+			if err := s.convRepo.Delete(c.Context(), conv.ID); err != nil {
+				s.logger.Warn("failed to delete conversation from database",
+					zap.String("conversationID", conv.ID.String()),
+					zap.Error(err))
+			} else {
+				s.logger.Info("conversation deleted from database",
+					zap.String("conversationID", conv.ID.String()))
+			}
+		}
 	}
 
 	s.logger.Info("claude session deleted directly",

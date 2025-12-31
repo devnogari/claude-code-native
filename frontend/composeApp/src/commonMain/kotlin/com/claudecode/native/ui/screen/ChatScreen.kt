@@ -116,7 +116,13 @@ fun ChatScreenContent(
         if (messages.isNotEmpty() || streamingContent.isNotEmpty()) {
             val targetIndex = if (isStreaming) messages.size else messages.size - 1
             if (targetIndex >= 0) {
-                listState.animateScrollToItem(targetIndex.coerceAtLeast(0))
+                try {
+                    // Use scrollToItem for initial load to avoid layout conflicts on iOS
+                    // animateScrollToItem can cause "layout state is not idle" crashes
+                    listState.scrollToItem(targetIndex.coerceAtLeast(0))
+                } catch (e: Exception) {
+                    // Ignore layout exceptions during scroll
+                }
             }
         }
     }

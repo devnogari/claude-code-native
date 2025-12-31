@@ -40,7 +40,7 @@ class ApiClient(
 
         install(Logging) {
             logger = Logger.DEFAULT
-            level = LogLevel.ALL
+            level = LogLevel.HEADERS
             sanitizeHeader { header -> header == HttpHeaders.Authorization }
         }
 

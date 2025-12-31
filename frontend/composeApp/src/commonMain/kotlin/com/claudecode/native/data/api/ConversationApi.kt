@@ -83,4 +83,14 @@ class ConversationApi(private val client: ApiClient) {
         val encodedPath = projectPath.encodeURLParameter()
         client.delete("/sessions/$sessionId?path=$encodedPath")
     }
+
+    /**
+     * Toggles the favorite status of a conversation.
+     *
+     * @param id The conversation ID
+     * @return The updated conversation with toggled favorite status
+     */
+    suspend fun toggleFavorite(id: String): Conversation {
+        return client.post("/conversations/$id/favorite", Unit)
+    }
 }

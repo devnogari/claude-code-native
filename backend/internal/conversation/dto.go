@@ -19,6 +19,7 @@ type ConversationResponse struct {
 	Title         *string `json:"title,omitempty"`
 	MessageCount  int     `json:"message_count"`
 	JsonlPath     *string `json:"jsonl_path,omitempty"`
+	IsFavorite    bool    `json:"is_favorite"`
 	CreatedAt     string  `json:"created_at"`
 	UpdatedAt     string  `json:"updated_at"`
 }
@@ -35,6 +36,7 @@ func ToResponse(c *Conversation) ConversationResponse {
 		ID:           c.ID.String(),
 		ProjectID:    c.ProjectID.String(),
 		MessageCount: c.MessageCount,
+		IsFavorite:   c.IsFavorite,
 		CreatedAt:    c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:    c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}

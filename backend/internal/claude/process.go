@@ -36,12 +36,16 @@ type ContentBlock struct {
 func ParseStreamJSON(line string) (text string, isDisplayable bool) {
 	var msg StreamMessage
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		fmt.Printf("[DEBUG] ParseStreamJSON: failed to unmarshal: %v, line: %s\n", err, line[:min(len(line), 200)])
 		return "", false
 	}
+
+	fmt.Printf("[DEBUG] ParseStreamJSON: type=%s, subtype=%s, hasMessage=%v\n", msg.Type, msg.Subtype, msg.Message != nil)
 
 	// Only extract text from assistant messages
 	if msg.Type == "assistant" && msg.Message != nil {
 		for _, block := range msg.Message.Content {
+			fmt.Printf("[DEBUG] ParseStreamJSON: block type=%s, hasText=%v\n", block.Type, block.Text != "")
 			if block.Type == "text" && block.Text != "" {
 				return block.Text, true
 			}
@@ -49,6 +53,13 @@ func ParseStreamJSON(line string) (text string, isDisplayable bool) {
 	}
 
 	return "", false
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // Process status constants

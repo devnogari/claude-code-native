@@ -33,29 +33,31 @@ type Server struct {
 	claudeMgr      *claude.Manager
 
 	// Handlers
-	authHandler    *auth.Handler
-	projectHandler *project.Handler
-	convHandler    *conversation.Handler
-	msgHandler     *message.Handler
-	wsHandler      *ws.Handler
-	historyHandler *claude.HistoryHandler
-	syncHandler    *claude.SyncHandler
+	authHandler         *auth.Handler
+	projectHandler      *project.Handler
+	convHandler         *conversation.Handler
+	msgHandler          *message.Handler
+	wsHandler           *ws.Handler
+	historyHandler      *claude.HistoryHandler
+	historyWatchHandler *claude.HistoryWatchHandler
+	syncHandler         *claude.SyncHandler
 }
 
 type ServerParams struct {
 	fx.In
-	Config         *config.Config
-	Logger         *zap.Logger
-	AuthService    *auth.Service
-	AuthMiddleware *middleware.AuthMiddleware
-	UserRepo       *user.Repository
-	ProjectRepo    *project.Repository
-	ConvRepo       *conversation.Repository
-	MsgRepo        *message.Repository
-	WSHandler      *ws.Handler
-	SyncHandler    *claude.SyncHandler
-	HistoryHandler *claude.HistoryHandler
-	ClaudeMgr      *claude.Manager
+	Config              *config.Config
+	Logger              *zap.Logger
+	AuthService         *auth.Service
+	AuthMiddleware      *middleware.AuthMiddleware
+	UserRepo            *user.Repository
+	ProjectRepo         *project.Repository
+	ConvRepo            *conversation.Repository
+	MsgRepo             *message.Repository
+	WSHandler           *ws.Handler
+	SyncHandler         *claude.SyncHandler
+	HistoryHandler      *claude.HistoryHandler
+	HistoryWatchHandler *claude.HistoryWatchHandler
+	ClaudeMgr           *claude.Manager
 }
 
 func New(p ServerParams) *Server {
@@ -83,22 +85,23 @@ func New(p ServerParams) *Server {
 	msgHandler := message.NewHandler(p.MsgRepo)
 
 	s := &Server{
-		app:            app,
-		config:         p.Config,
-		logger:         p.Logger,
-		authService:    p.AuthService,
-		authMiddleware: p.AuthMiddleware,
-		userRepo:       p.UserRepo,
-		projectRepo:    p.ProjectRepo,
-		convRepo:       p.ConvRepo,
-		claudeMgr:      p.ClaudeMgr,
-		authHandler:    authHandler,
-		projectHandler: projectHandler,
-		convHandler:    convHandler,
-		msgHandler:     msgHandler,
-		wsHandler:      p.WSHandler,
-		historyHandler: p.HistoryHandler,
-		syncHandler:    p.SyncHandler,
+		app:                 app,
+		config:              p.Config,
+		logger:              p.Logger,
+		authService:         p.AuthService,
+		authMiddleware:      p.AuthMiddleware,
+		userRepo:            p.UserRepo,
+		projectRepo:         p.ProjectRepo,
+		convRepo:            p.ConvRepo,
+		claudeMgr:           p.ClaudeMgr,
+		authHandler:         authHandler,
+		projectHandler:      projectHandler,
+		convHandler:         convHandler,
+		msgHandler:          msgHandler,
+		wsHandler:           p.WSHandler,
+		historyHandler:      p.HistoryHandler,
+		historyWatchHandler: p.HistoryWatchHandler,
+		syncHandler:         p.SyncHandler,
 	}
 
 	s.setupRoutes()

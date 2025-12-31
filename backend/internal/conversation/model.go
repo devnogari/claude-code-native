@@ -17,6 +17,7 @@ type Conversation struct {
 	Title         *string    `bun:"title"                             json:"title,omitempty"`
 	MessageCount  int        `bun:"message_count,default:0"           json:"message_count"`
 	JsonlPath     *string    `bun:"jsonl_path"                        json:"jsonl_path,omitempty"`
+	IsFavorite    bool       `bun:"is_favorite,default:false"         json:"is_favorite"`
 	CreatedAt     time.Time  `bun:"created_at,default:now()"          json:"created_at"`
 	UpdatedAt     time.Time  `bun:"updated_at,default:now()"          json:"updated_at"`
 }

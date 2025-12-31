@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"time"
 
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
 	"github.com/devnogari/claude-code-native/backend/internal/message"
@@ -75,12 +76,17 @@ func (s *SyncService) SyncForUser(ctx context.Context, userID uuid.UUID) (*SyncR
 			}
 			result.ProjectsCreated++
 		} else {
-			// Update existing project
+			// Update existing project with original timestamps
 			proj = existingProj
 			proj.Name = cp.Name
 			proj.ClaudeID = &cp.ID
 			proj.LastAccessed = &cp.LastAccessed
-			if err := s.projRepo.Update(ctx, proj); err != nil {
+			proj.UpdatedAt = cp.LastAccessed // Use file modification time as UpdatedAt
+			s.logger.Info("updating project timestamp",
+				zap.String("project_path", cp.Path),
+				zap.String("last_accessed", cp.LastAccessed.Format(time.RFC3339)),
+				zap.String("updated_at", proj.UpdatedAt.Format(time.RFC3339)))
+			if err := s.projRepo.UpdateWithTimestamp(ctx, proj); err != nil {
 				s.logger.Error("failed to update project", zap.String("path", cp.Path), zap.Error(err))
 			} else {
 				result.ProjectsUpdated++
@@ -138,19 +144,44 @@ func (s *SyncService) syncSession(ctx context.Context, projectID uuid.UUID, enco
 		convCreated = 1
 
 		// Import messages for new conversation
-		msgsCreated = s.importMessages(ctx, conv.ID, encodedPath, session.ID)
+		msgsCreated = s.importMessages(ctx, conv.ID, encodedPath, session.ID, 0)
 	} else {
-		// Update existing conversation message count
+		// Update existing conversation
 		conv = existingConv
+
+		// Get current max sequence number in DB
+		maxSeqNum, err := s.msgRepo.GetMaxSequenceNum(ctx, conv.ID)
+		if err != nil {
+			s.logger.Error("failed to get max sequence num",
+				zap.String("session_id", session.ID),
+				zap.Error(err))
+			maxSeqNum = 0
+		}
+
+		// Always import new messages (incremental sync)
+		msgsCreated = s.importMessages(ctx, conv.ID, encodedPath, session.ID, maxSeqNum)
+
+		// Update message count and timestamp from file
 		conv.MessageCount = session.MessageCount
-		_ = s.convRepo.Update(ctx, conv)
+		conv.UpdatedAt = session.UpdatedAt
+		s.logger.Info("updating conversation timestamp",
+			zap.String("session_id", session.ID[:8]),
+			zap.Time("session_updated_at", session.UpdatedAt),
+			zap.Time("conv_updated_at", conv.UpdatedAt),
+			zap.String("conv_id", conv.ID.String()))
+		if err := s.convRepo.UpdateWithTimestamp(ctx, conv); err != nil {
+			s.logger.Error("failed to update conversation timestamp",
+				zap.String("session_id", session.ID[:8]),
+				zap.Error(err))
+		}
 	}
 
 	return convCreated, msgsCreated
 }
 
 // importMessages imports messages from a Claude session file
-func (s *SyncService) importMessages(ctx context.Context, convID uuid.UUID, encodedPath, sessionID string) int {
+// startSeqNum: skip messages with sequence number <= startSeqNum (for incremental sync)
+func (s *SyncService) importMessages(ctx context.Context, convID uuid.UUID, encodedPath, sessionID string, startSeqNum int) int {
 	messages, err := s.reader.GetSessionMessages(encodedPath, sessionID)
 	if err != nil {
 		s.logger.Error("failed to read session messages",
@@ -160,7 +191,7 @@ func (s *SyncService) importMessages(ctx context.Context, convID uuid.UUID, enco
 	}
 
 	count := 0
-	seqNum := 1
+	seqNum := 0
 
 	for _, msg := range messages {
 		if msg.Message == nil {
@@ -178,6 +209,13 @@ func (s *SyncService) importMessages(ctx context.Context, convID uuid.UUID, enco
 			continue
 		}
 
+		seqNum++
+
+		// Skip already imported messages (incremental sync)
+		if seqNum <= startSeqNum {
+			continue
+		}
+
 		dbMsg := &message.Message{
 			ConversationID: convID,
 			Role:           role,
@@ -191,7 +229,6 @@ func (s *SyncService) importMessages(ctx context.Context, convID uuid.UUID, enco
 		}
 
 		count++
-		seqNum++
 	}
 
 	return count

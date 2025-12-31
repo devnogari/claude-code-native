@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 
+	"github.com/uptrace/bun"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 )
@@ -11,11 +12,23 @@ import (
 var Module = fx.Module("claude",
 	fx.Provide(NewManager),
 	fx.Provide(provideHistoryCache),
-	fx.Provide(NewHistoryHandlerWithCache),
+	fx.Provide(NewSessionFavoriteRepository),
+	fx.Provide(NewHistoryHandler),
+	fx.Provide(NewHistoryWatchHandler),
 	fx.Provide(NewSyncService),
 	fx.Provide(NewSyncHandler),
 	fx.Invoke(registerShutdownHook),
 )
+
+// HistoryHandlerParams defines dependencies for the history handler
+type HistoryHandlerParams struct {
+	fx.In
+
+	Cache   *HistoryCache
+	FavRepo *SessionFavoriteRepository
+	DB      *bun.DB
+	Logger  *zap.Logger
+}
 
 // provideHistoryCache creates a new history cache for fx
 func provideHistoryCache(logger *zap.Logger) (*HistoryCache, error) {

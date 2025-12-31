@@ -8,6 +8,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.claudecode.native.data.api.ApiClient
 import com.claudecode.native.data.api.ProjectApi
+import com.claudecode.native.data.repository.ThemeRepository
 import com.claudecode.native.di.appModule
 import com.claudecode.native.ui.layout.AdaptiveProjectLayout
 import com.claudecode.native.ui.navigation.BrowserHistory
@@ -35,7 +37,10 @@ fun App() {
     KoinApplication(application = {
         modules(appModule)
     }) {
-        AppTheme {
+        val themeRepository: ThemeRepository = koinInject()
+        val isDarkMode by themeRepository.isDarkMode.collectAsState()
+
+        AppTheme(darkTheme = isDarkMode) {
             Surface(
                 modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.background

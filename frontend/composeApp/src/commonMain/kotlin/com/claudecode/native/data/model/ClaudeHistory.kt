@@ -1,6 +1,6 @@
 package com.claudecode.native.data.model
 
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -26,6 +26,7 @@ data class ClaudeSession(
     val filename: String,
     @SerialName("message_count") val messageCount: Int = 0,
     @SerialName("first_message") val firstMessage: String = "",
+    @SerialName("is_favorite") val isFavorite: Boolean = false,
     @SerialName("created_at") val createdAt: Instant? = null,
     @SerialName("updated_at") val updatedAt: Instant? = null
 )
@@ -47,4 +48,16 @@ data class ClaudeMessage(
 data class MessageContent(
     val role: String,
     val content: kotlinx.serialization.json.JsonElement
+)
+
+/**
+ * Paginated response for Claude session messages
+ */
+@Serializable
+data class PaginatedClaudeMessagesResponse(
+    val messages: List<ClaudeMessage>,
+    val total: Int,
+    val limit: Int,
+    val offset: Int,
+    @SerialName("has_more") val hasMore: Boolean
 )

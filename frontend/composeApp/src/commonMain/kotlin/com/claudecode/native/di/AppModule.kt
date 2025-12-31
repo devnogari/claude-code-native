@@ -8,6 +8,9 @@ import com.claudecode.native.data.api.MessageApi
 import com.claudecode.native.data.api.ProjectApi
 import com.claudecode.native.data.config.UrlConfig
 import com.claudecode.native.data.repository.FavoriteRepository
+import com.claudecode.native.data.repository.PreferencesRepository
+import com.claudecode.native.data.repository.ThemeRepository
+import com.claudecode.native.data.websocket.HistoryWatchClient
 import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.ClaudeHistoryViewModel
@@ -73,19 +76,30 @@ val appModule = module {
     single { ClaudeHistoryApi(get()) }
 
     // Repositories
+    single { PreferencesRepository() }
     single { FavoriteRepository() }
+    single { ThemeRepository(get()) }  // PreferencesRepository
 
     // ViewModels
     factory { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
-    factory { ChatViewModel(get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, MessageApi, ConversationApi, CoroutineScope
+    factory { ChatViewModel(get(), get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, CoroutineScope
     factory { ProjectListViewModel(get(), get(), get(), get()) }  // ProjectApi, ConversationApi, FavoriteRepository, CoroutineScope
-    factory { SettingsViewModel(get(), get()) }  // ApiClient, CoroutineScope
-    factory { ClaudeHistoryViewModel(get(), get()) }  // ClaudeHistoryApi, CoroutineScope
+    factory { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
+    factory { ClaudeHistoryViewModel(get(), get(), get()) }  // ClaudeHistoryApi, HistoryWatchClient, CoroutineScope
 
     // WebSocket Client for real-time communication
     // URL is determined by platform-specific UrlConfig
     single {
         WebSocketClient(
+            httpClient = get(),
+            scope = get(),
+            baseUrl = UrlConfig.wsBaseUrl
+        )
+    }
+
+    // History Watch WebSocket Client for real-time session file changes
+    single {
+        HistoryWatchClient(
             httpClient = get(),
             scope = get(),
             baseUrl = UrlConfig.wsBaseUrl

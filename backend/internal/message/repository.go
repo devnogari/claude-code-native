@@ -77,6 +77,58 @@ func (r *Repository) FindByConversationID(ctx context.Context, conversationID uu
 	return messages, nil
 }
 
+// PaginatedResult contains messages with pagination info
+type PaginatedResult struct {
+	Messages   []*Message `json:"messages"`
+	Total      int        `json:"total"`
+	Limit      int        `json:"limit"`
+	Offset     int        `json:"offset"`
+	HasMore    bool       `json:"has_more"`
+}
+
+// FindByConversationIDPaginated retrieves messages with pagination (most recent first)
+func (r *Repository) FindByConversationIDPaginated(ctx context.Context, conversationID uuid.UUID, limit, offset int) (*PaginatedResult, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	// Get total count
+	total, err := r.db.NewSelect().
+		Model((*Message)(nil)).
+		Where("conversation_id = ?", conversationID).
+		Count(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get paginated messages (most recent first, then reverse for display)
+	var messages []*Message
+	err = r.db.NewSelect().
+		Model(&messages).
+		Where("conversation_id = ?", conversationID).
+		Order("sequence_num DESC").
+		Limit(limit).
+		Offset(offset).
+		Scan(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Reverse to show oldest first within the page
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return &PaginatedResult{
+		Messages: messages,
+		Total:    total,
+		Limit:    limit,
+		Offset:   offset,
+		HasMore:  offset+len(messages) < total,
+	}, nil
+}
+
 // Delete removes a message by its ID
 func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 	if r.db == nil {
