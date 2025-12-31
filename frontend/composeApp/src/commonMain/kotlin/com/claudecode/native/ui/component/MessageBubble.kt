@@ -17,8 +17,8 @@ import com.claudecode.native.ui.viewmodel.ChatMessage
 /**
  * Displays a chat message bubble with appropriate styling based on the sender.
  *
- * User messages are right-aligned with primary color background.
- * Assistant messages are left-aligned with surface variant background.
+ * User messages are right-aligned with primary color background (plain text).
+ * Assistant messages are left-aligned with surface variant background (markdown rendered).
  *
  * @param message The chat message to display
  * @param modifier Optional modifier for the component
@@ -47,15 +47,21 @@ fun MessageBubble(
                 )
                 .padding(12.dp)
         ) {
-            Text(
-                text = message.content,
-                color = if (isUser) {
-                    MaterialTheme.colorScheme.onPrimary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                style = MaterialTheme.typography.bodyMedium
-            )
+            if (isUser) {
+                // User messages: plain text
+                Text(
+                    text = message.content,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            } else {
+                // Assistant messages: render markdown
+                MarkdownText(
+                    text = message.content,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
     }
 }
@@ -63,7 +69,7 @@ fun MessageBubble(
 /**
  * Displays a streaming message bubble for assistant responses in progress.
  *
- * Shows the current streaming content or a loading indicator if empty.
+ * Shows the current streaming content with markdown rendering or a loading indicator if empty.
  * Always left-aligned like regular assistant messages.
  *
  * @param content Current streaming content (may be empty during initial load)
@@ -102,7 +108,8 @@ fun StreamingBubble(
                     )
                 }
             } else {
-                Text(
+                // Render streaming content with markdown
+                MarkdownText(
                     text = content,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium

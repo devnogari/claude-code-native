@@ -263,4 +263,31 @@ class ProjectListViewModel(
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
     }
+
+    /**
+     * Deletes the Claude CLI session for a conversation.
+     * Uses the direct deletion endpoint that works with project path.
+     *
+     * @param conversationId The conversation/session ID
+     * @param projectPath The project path
+     * @param onSuccess Callback when deletion succeeds
+     * @param onError Callback when deletion fails
+     */
+    fun deleteSession(
+        conversationId: String,
+        projectPath: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        scope.launch {
+            try {
+                conversationApi.deleteSessionDirect(conversationId, projectPath)
+                onSuccess()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onError(e.toUserMessage())
+            }
+        }
+    }
 }

@@ -5,18 +5,24 @@ import (
 	"sync"
 
 	"github.com/gofrs/uuid/v5"
+	"go.uber.org/zap"
 )
 
 // Manager manages Claude CLI process sessions for conversations
 type Manager struct {
 	processes map[uuid.UUID]*Process
+	logger    *zap.Logger
 	mu        sync.RWMutex
 }
 
 // NewManager creates a new Manager with initialized process map
-func NewManager() *Manager {
+func NewManager(logger *zap.Logger) *Manager {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &Manager{
 		processes: make(map[uuid.UUID]*Process),
+		logger:    logger,
 	}
 }
 
@@ -31,7 +37,7 @@ func (m *Manager) CreateProcess(convID uuid.UUID, workDir string, env []string) 
 	}
 
 	// Create new process
-	process := NewProcess(convID, workDir)
+	process := NewProcess(convID, workDir, m.logger)
 	process.Env = env
 	m.processes[convID] = process
 
@@ -100,4 +106,15 @@ func (m *Manager) ListProcesses() []*Process {
 	}
 
 	return processes
+}
+
+// DeleteSession deletes the Claude CLI session files for a conversation
+// This allows starting fresh without previous conversation context
+func (m *Manager) DeleteSession(convID uuid.UUID, workDir string) error {
+	// First stop the process if running
+	_ = m.StopProcess(convID)
+
+	// Create a temporary process just for deletion
+	process := NewProcess(convID, workDir, m.logger)
+	return process.DeleteSession()
 }
