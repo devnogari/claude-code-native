@@ -33,6 +33,25 @@ func (r *Repository) Create(ctx context.Context, project *Project) error {
 		project.ID = id
 	}
 
+	// If UpdatedAt is provided (from sync), use raw SQL to preserve it
+	// Otherwise use ORM defaults
+	if !project.UpdatedAt.IsZero() {
+		_, err := r.db.NewRaw(`
+			INSERT INTO projects (id, user_id, name, path, claude_id, last_accessed, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			project.ID,
+			project.UserID,
+			project.Name,
+			project.Path,
+			project.ClaudeID,
+			project.LastAccessed,
+			project.UpdatedAt, // Use UpdatedAt as CreatedAt for sync
+			project.UpdatedAt,
+		).Exec(ctx)
+		return err
+	}
+
 	_, err := r.db.NewInsert().Model(project).Exec(ctx)
 	return err
 }

@@ -80,12 +80,12 @@ val appModule = module {
     single { FavoriteRepository() }
     single { ThemeRepository(get()) }  // PreferencesRepository
 
-    // ViewModels
-    factory { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
-    factory { ChatViewModel(get(), get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, CoroutineScope
-    factory { ProjectListViewModel(get(), get(), get(), get()) }  // ProjectApi, ConversationApi, FavoriteRepository, CoroutineScope
-    factory { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
-    factory { ClaudeHistoryViewModel(get(), get(), get()) }  // ClaudeHistoryApi, HistoryWatchClient, CoroutineScope
+    // ViewModels - use single to maintain state across recomposition (e.g., theme changes)
+    single { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
+    single { ChatViewModel(get(), get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, CoroutineScope
+    single { ProjectListViewModel(get(), get(), get(), get()) }  // ProjectApi, ConversationApi, FavoriteRepository, CoroutineScope
+    single { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
+    single { ClaudeHistoryViewModel(get(), get(), get()) }  // ClaudeHistoryApi, HistoryWatchClient, CoroutineScope
 
     // WebSocket Client for real-time communication
     // URL is determined by platform-specific UrlConfig
