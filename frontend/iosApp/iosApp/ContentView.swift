@@ -4,7 +4,6 @@ import ComposeApp
 
 struct ComposeView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
-        MainViewControllerKt.doInitKoin()
         return MainViewControllerKt.MainViewController()
     }
 
