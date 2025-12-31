@@ -1,0 +1,161 @@
+package com.claudecode.native.data.websocket
+
+import com.claudecode.native.data.model.ClaudeMessage
+import io.ktor.client.*
+import io.ktor.client.plugins.websocket.*
+import io.ktor.websocket.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+/**
+ * WebSocket message types for history watching
+ */
+object HistoryWatchMessageType {
+    const val NEW_MESSAGES = "new_messages"
+    const val ERROR = "error"
+    const val PING = "ping"
+    const val PONG = "pong"
+    const val SUBSCRIBED = "subscribed"
+}
+
+/**
+ * Incoming message from history watch WebSocket
+ */
+@Serializable
+data class HistoryWatchMessage(
+    val type: String,
+    @SerialName("session_id") val sessionId: String? = null,
+    @SerialName("encoded_path") val encodedPath: String? = null,
+    val messages: List<ClaudeMessage>? = null,
+    val error: String? = null
+)
+
+/**
+ * Sealed class representing history watch events
+ */
+sealed class HistoryWatchEvent {
+    data class Connected(val sessionId: String, val encodedPath: String) : HistoryWatchEvent()
+    data class NewMessages(val messages: List<ClaudeMessage>) : HistoryWatchEvent()
+    data class Error(val message: String) : HistoryWatchEvent()
+    data object Disconnected : HistoryWatchEvent()
+}
+
+/**
+ * WebSocket client for watching Claude history session file changes in real-time
+ */
+class HistoryWatchClient(
+    private val httpClient: HttpClient,
+    private val scope: CoroutineScope,
+    private val baseUrl: String
+) {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
+
+    private var session: DefaultClientWebSocketSession? = null
+    private var watchJob: Job? = null
+
+    private val _events = MutableSharedFlow<HistoryWatchEvent>(replay = 0)
+    val events: SharedFlow<HistoryWatchEvent> = _events.asSharedFlow()
+
+    private val _isConnected = MutableStateFlow(false)
+    val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+    /**
+     * Connect to watch a specific session for file changes
+     *
+     * @param encodedPath The encoded project path
+     * @param sessionId The session ID to watch
+     * @param token JWT token for authentication
+     */
+    fun connect(encodedPath: String, sessionId: String, token: String) {
+        disconnect()
+
+        watchJob = scope.launch {
+            try {
+                val wsUrl = "$baseUrl/claude-history/ws/$encodedPath/$sessionId"
+
+                httpClient.webSocket(urlString = wsUrl, request = {
+                    headers.append("Authorization", "Bearer $token")
+                }) {
+                    session = this
+                    _isConnected.value = true
+
+                    // Listen for messages
+                    for (frame in incoming) {
+                        when (frame) {
+                            is Frame.Text -> {
+                                val text = frame.readText()
+                                handleMessage(text)
+                            }
+                            is Frame.Close -> {
+                                _events.emit(HistoryWatchEvent.Disconnected)
+                                break
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                _events.emit(HistoryWatchEvent.Error(e.message ?: "Connection failed"))
+            } finally {
+                _isConnected.value = false
+                session = null
+            }
+        }
+    }
+
+    /**
+     * Disconnect from the watch session
+     */
+    fun disconnect() {
+        watchJob?.cancel()
+        watchJob = null
+        scope.launch {
+            session?.close()
+        }
+        session = null
+        _isConnected.value = false
+    }
+
+    /**
+     * Send a ping message
+     */
+    suspend fun sendPing() {
+        session?.send("""{"type":"ping"}""")
+    }
+
+    private suspend fun handleMessage(text: String) {
+        try {
+            val message = json.decodeFromString<HistoryWatchMessage>(text)
+
+            when (message.type) {
+                HistoryWatchMessageType.SUBSCRIBED -> {
+                    _events.emit(
+                        HistoryWatchEvent.Connected(
+                            sessionId = message.sessionId ?: "",
+                            encodedPath = message.encodedPath ?: ""
+                        )
+                    )
+                }
+                HistoryWatchMessageType.NEW_MESSAGES -> {
+                    message.messages?.let { messages ->
+                        _events.emit(HistoryWatchEvent.NewMessages(messages))
+                    }
+                }
+                HistoryWatchMessageType.ERROR -> {
+                    _events.emit(HistoryWatchEvent.Error(message.error ?: "Unknown error"))
+                }
+                HistoryWatchMessageType.PONG -> {
+                    // Pong received, connection is alive
+                }
+            }
+        } catch (e: Exception) {
+            _events.emit(HistoryWatchEvent.Error("Failed to parse message: ${e.message}"))
+        }
+    }
+}

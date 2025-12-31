@@ -18,7 +18,8 @@ import com.claudecode.native.data.model.Conversation
 import com.claudecode.native.ui.viewmodel.ProjectListViewModel
 import com.claudecode.native.ui.viewmodel.ProjectWithConversations
 import com.claudecode.native.util.showFolderChooser
-import kotlinx.datetime.Instant
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import org.koin.compose.koinInject
@@ -274,8 +275,13 @@ fun ProjectListScreenContent(
                                             onConversationSelected(conversationId)
                                         }
                                     },
+                                    onToggleConversationFavorite = { conversation ->
+                                        viewModel.toggleConversationFavorite(conversation.id)
+                                    },
                                     onDeleteSession = { conversation ->
-                                        deleteSessionTarget = conversation.id to pwc.project.path
+                                        // Use claudeSession if available, otherwise fall back to id
+                                        val sessionId = conversation.claudeSession ?: conversation.id
+                                        deleteSessionTarget = sessionId to pwc.project.path
                                     }
                                 )
                             }
@@ -350,6 +356,7 @@ private fun ProjectItem(
     onToggleExpand: () -> Unit,
     onToggleFavorite: () -> Unit,
     onConversationClick: (Conversation) -> Unit,
+    onToggleConversationFavorite: (Conversation) -> Unit,
     onDeleteSession: (Conversation) -> Unit
 ) {
     val project = projectWithConversations.project
@@ -439,6 +446,7 @@ private fun ProjectItem(
                         conversation = conversation,
                         isLoading = isLoading,
                         onClick = { onConversationClick(conversation) },
+                        onToggleFavorite = { onToggleConversationFavorite(conversation) },
                         onDeleteSession = { onDeleteSession(conversation) }
                     )
                 }
@@ -455,6 +463,7 @@ private fun ConversationItem(
     conversation: Conversation,
     isLoading: Boolean,
     onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onDeleteSession: () -> Unit
 ) {
     Surface(
@@ -497,6 +506,19 @@ private fun ConversationItem(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            // Favorite button
+            IconButton(
+                onClick = onToggleFavorite,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = if (conversation.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = if (conversation.isFavorite) "Remove from favorites" else "Add to favorites",
+                    tint = if (conversation.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
             }
 
             // Delete session button
@@ -593,7 +615,7 @@ private fun CreateProjectDialog(
  * Formats an Instant to a human-readable "time ago" string.
  */
 private fun formatTimeAgo(instant: Instant): String {
-    val now = kotlinx.datetime.Clock.System.now()
+    val now = Clock.System.now()
     val duration = now - instant
 
     return when {
@@ -604,7 +626,7 @@ private fun formatTimeAgo(instant: Instant): String {
         duration.inWholeDays < 30 -> "${duration.inWholeDays / 7}w ago"
         else -> {
             val localDateTime = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-            "${localDateTime.monthNumber}/${localDateTime.dayOfMonth}/${localDateTime.year}"
+            "${localDateTime.month.ordinal + 1}/${localDateTime.day}/${localDateTime.year}"
         }
     }
 }

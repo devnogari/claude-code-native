@@ -1,6 +1,7 @@
 [versions]
 kotlin = "2.3.0"
 compose-multiplatform = "1.9.3"
+compose-hot-reload = "1.0.0"
 material3-adaptive = "1.2.0"
 agp = "8.13.2"
 android-compileSdk = "35"
@@ -11,7 +12,7 @@ koin = "4.1.1"
 koin-android = "4.1.1"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.9.0"
-kotlinx-datetime = "0.6.1"
+kotlinx-datetime = "0.7.1"
 slf4j = "2.0.17"
 androidx-activityCompose = "1.12.2"
 androidx-lifecycle = "2.10.0"
@@ -57,6 +58,7 @@ kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref 
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+compose-hot-reload = { id = "org.jetbrains.compose.hot-reload", version.ref = "compose-hot-reload" }
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }

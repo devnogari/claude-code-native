@@ -1,6 +1,7 @@
 package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.ApiClient
+import com.claudecode.native.data.repository.ThemeRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,19 +19,20 @@ import kotlinx.coroutines.launch
  * - Cache clearing
  *
  * @param apiClient API client for server operations
+ * @param themeRepository Repository for managing theme settings
  * @param scope Injected coroutine scope for lifecycle management
  */
 class SettingsViewModel(
     private val apiClient: ApiClient,
+    private val themeRepository: ThemeRepository,
     private val scope: CoroutineScope
 ) {
     private val _serverUrl = MutableStateFlow(apiClient.baseUrl)
     /** Current server URL. */
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 
-    private val _isDarkMode = MutableStateFlow(false)
-    /** Whether dark mode is enabled. */
-    val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
+    /** Whether dark mode is enabled. Delegates to ThemeRepository. */
+    val isDarkMode: StateFlow<Boolean> = themeRepository.isDarkMode
 
     private val _isLoading = MutableStateFlow(false)
     /** True when performing an operation. */
@@ -87,7 +89,7 @@ class SettingsViewModel(
      * Toggles dark mode on/off.
      */
     fun toggleDarkMode() {
-        _isDarkMode.value = !_isDarkMode.value
+        themeRepository.toggleDarkMode()
     }
 
     /**
@@ -96,7 +98,7 @@ class SettingsViewModel(
      * @param enabled Whether dark mode should be enabled
      */
     fun setDarkMode(enabled: Boolean) {
-        _isDarkMode.value = enabled
+        themeRepository.setDarkMode(enabled)
     }
 
     /**

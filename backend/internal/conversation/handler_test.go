@@ -91,6 +91,16 @@ func (m *MockConversationRepository) Delete(ctx context.Context, id uuid.UUID) e
 	return nil
 }
 
+func (m *MockConversationRepository) ToggleFavorite(ctx context.Context, id uuid.UUID) (*conversation.Conversation, error) {
+	if c, ok := m.conversations[id]; ok {
+		c.IsFavorite = !c.IsFavorite
+		c.UpdatedAt = time.Now()
+		m.conversations[id] = c
+		return c, nil
+	}
+	return nil, errors.New("sql: no rows in result set")
+}
+
 func (m *MockConversationRepository) AddConversation(c *conversation.Conversation) {
 	m.conversations[c.ID] = c
 }

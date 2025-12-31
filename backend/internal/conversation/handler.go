@@ -16,6 +16,7 @@ type ConversationRepository interface {
 	FindByProjectID(ctx context.Context, projectID uuid.UUID) ([]*Conversation, error)
 	Update(ctx context.Context, c *Conversation) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	ToggleFavorite(ctx context.Context, id uuid.UUID) (*Conversation, error)
 }
 
 // ProjectRepository defines the interface for project lookup (used for authorization)
@@ -341,4 +342,60 @@ func (h *Handler) Delete(c *fiber.Ctx) error {
 	}
 
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// ToggleFavorite handles POST /api/v1/conversations/:id/favorite
+func (h *Handler) ToggleFavorite(c *fiber.Ctx) error {
+	userID, err := getUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{
+			Error: "unauthorized",
+		})
+	}
+
+	convIDStr := c.Params("id")
+	convID, err := uuid.FromString(convIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "invalid conversation ID",
+		})
+	}
+
+	ctx := c.Context()
+
+	// Find the conversation first to check ownership
+	conv, err := h.convRepo.FindByID(ctx, convID)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
+				Error: "conversation not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+			Error: "failed to get conversation",
+		})
+	}
+
+	// Verify project ownership
+	_, err = h.verifyProjectOwnership(ctx, conv.ProjectID, userID)
+	if err != nil {
+		if fiberErr, ok := err.(*fiber.Error); ok {
+			return c.Status(fiberErr.Code).JSON(ErrorResponse{
+				Error: fiberErr.Message,
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+			Error: "failed to verify project ownership",
+		})
+	}
+
+	// Toggle favorite status
+	updatedConv, err := h.convRepo.ToggleFavorite(ctx, convID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+			Error: "failed to toggle favorite",
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(ToResponse(updatedConv))
 }

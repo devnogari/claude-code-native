@@ -3,6 +3,7 @@ package claude
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,6 +28,7 @@ type ClaudeSession struct {
 	Messages     []ClaudeMessage `json:"messages,omitempty"`
 	MessageCount int             `json:"message_count"`
 	FirstMessage string          `json:"first_message"`
+	IsFavorite   bool            `json:"is_favorite"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
 }
@@ -108,6 +110,13 @@ func (h *HistoryReader) GetProjects() ([]ClaudeProject, error) {
 	sort.Slice(projects, func(i, j int) bool {
 		return projects[i].LastAccessed.After(projects[j].LastAccessed)
 	})
+
+	// Debug: print project order
+	fmt.Println("[DEBUG] Projects sorted by LastAccessed:")
+	for i, p := range projects {
+		fmt.Printf("[DEBUG] Project %d: %s - LastAccessed: %s\n",
+			i, p.Name, p.LastAccessed.Format(time.RFC3339))
+	}
 
 	return projects, nil
 }
@@ -210,6 +219,12 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
 	})
+
+	// Debug: print session order
+	for i, s := range sessions {
+		fmt.Printf("[DEBUG] Session %d: %s - UpdatedAt: %s - FirstMsg: %s\n",
+			i, s.ID[:8], s.UpdatedAt.Format(time.RFC3339), truncateString(s.FirstMessage, 30))
+	}
 
 	return sessions, lastAccessed, nil
 }
@@ -388,4 +403,63 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// truncateMessageContent truncates the content of a message for summary mode
+func truncateMessageContent(msg *ClaudeMessage, maxLen int) {
+	if msg.Message == nil || msg.Message.Content == nil {
+		return
+	}
+
+	switch content := msg.Message.Content.(type) {
+	case string:
+		if len(content) > maxLen {
+			msg.Message.Content = content[:maxLen-3] + "..."
+		}
+	case []interface{}:
+		// Handle array content (like images + text blocks)
+		for i, item := range content {
+			if m, ok := item.(map[string]interface{}); ok {
+				if text, ok := m["text"].(string); ok && len(text) > maxLen {
+					m["text"] = text[:maxLen-3] + "..."
+					content[i] = m
+				}
+				// For tool_use, truncate input if too large
+				if input, ok := m["input"]; ok {
+					if inputStr, ok := input.(string); ok && len(inputStr) > maxLen {
+						m["input"] = inputStr[:maxLen-3] + "..."
+						content[i] = m
+					} else if inputMap, ok := input.(map[string]interface{}); ok {
+						// Just mark as truncated for complex inputs
+						if len(inputMap) > 0 {
+							truncateMapValues(inputMap, maxLen)
+						}
+					}
+				}
+			}
+		}
+		msg.Message.Content = content
+	}
+}
+
+// truncateMapValues truncates string values in a map recursively
+func truncateMapValues(m map[string]interface{}, maxLen int) {
+	for k, v := range m {
+		switch val := v.(type) {
+		case string:
+			if len(val) > maxLen {
+				m[k] = val[:maxLen-3] + "..."
+			}
+		case map[string]interface{}:
+			truncateMapValues(val, maxLen)
+		case []interface{}:
+			for i, item := range val {
+				if s, ok := item.(string); ok && len(s) > maxLen {
+					val[i] = s[:maxLen-3] + "..."
+				} else if itemMap, ok := item.(map[string]interface{}); ok {
+					truncateMapValues(itemMap, maxLen)
+				}
+			}
+		}
+	}
 }

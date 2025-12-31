@@ -1,6 +1,6 @@
 package com.claudecode.native.data.model
 
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -21,3 +21,15 @@ enum class MessageRole {
     @SerialName("assistant") ASSISTANT,
     @SerialName("system") SYSTEM
 }
+
+/**
+ * Paginated response for messages API.
+ */
+@Serializable
+data class PaginatedMessagesResponse(
+    val messages: List<Message>,
+    val total: Int,
+    val limit: Int,
+    val offset: Int,
+    @SerialName("has_more") val hasMore: Boolean
+)

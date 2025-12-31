@@ -120,6 +120,39 @@ func (r *Repository) FindByPath(ctx context.Context, userID uuid.UUID, path stri
 	return project, nil
 }
 
+// UpdateWithTimestamp updates a project preserving its UpdatedAt value
+// Used for sync operations where the timestamp should reflect the source file's modification time
+func (r *Repository) UpdateWithTimestamp(ctx context.Context, project *Project) error {
+	if r.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	if err := project.Validate(); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Use raw table name to avoid any ORM hooks or automatic timestamp handling
+	result, err := r.db.NewUpdate().
+		TableExpr("projects").
+		Set("name = ?", project.Name).
+		Set("claude_id = ?", project.ClaudeID).
+		Set("last_accessed = ?", project.LastAccessed).
+		Set("updated_at = ?", project.UpdatedAt).
+		Where("id = ?", project.ID).
+		Exec(ctx)
+
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows affected for project id=%s", project.ID)
+	}
+
+	return nil
+}
+
 func (r *Repository) UpdateLastAccessed(ctx context.Context, id uuid.UUID) error {
 	if r.db == nil {
 		return fmt.Errorf("database not initialized")

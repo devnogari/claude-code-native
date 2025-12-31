@@ -12,6 +12,18 @@ import (
 	"go.uber.org/zap"
 )
 
+// SessionChangeCallback is called when a session file changes
+type SessionChangeCallback func(encodedPath, sessionID string, newMessages []ClaudeMessage)
+
+// PaginatedMessages contains messages with pagination info
+type PaginatedMessages struct {
+	Messages []ClaudeMessage `json:"messages"`
+	Total    int             `json:"total"`
+	Limit    int             `json:"limit"`
+	Offset   int             `json:"offset"`
+	HasMore  bool            `json:"has_more"`
+}
+
 // HistoryCache provides in-memory caching of Claude history with file watching
 type HistoryCache struct {
 	basePath string
@@ -21,6 +33,14 @@ type HistoryCache struct {
 	mu       sync.RWMutex
 	projects map[string]*ClaudeProject // keyed by encoded path
 	ready    bool
+
+	// Session change subscribers
+	subscribersMu sync.RWMutex
+	subscribers   map[string][]SessionChangeCallback // keyed by "encodedPath/sessionID"
+
+	// Track last known message count per session for detecting new messages
+	lastMessageCount   map[string]int // keyed by "encodedPath/sessionID"
+	lastMessageCountMu sync.RWMutex
 }
 
 // NewHistoryCache creates a new cache with file watching
@@ -34,10 +54,12 @@ func NewHistoryCache(logger *zap.Logger) (*HistoryCache, error) {
 	}
 
 	cache := &HistoryCache{
-		basePath: basePath,
-		logger:   logger,
-		watcher:  watcher,
-		projects: make(map[string]*ClaudeProject),
+		basePath:         basePath,
+		logger:           logger,
+		watcher:          watcher,
+		projects:         make(map[string]*ClaudeProject),
+		subscribers:      make(map[string][]SessionChangeCallback),
+		lastMessageCount: make(map[string]int),
 	}
 
 	// Initial load
@@ -71,6 +93,15 @@ func (c *HistoryCache) GetProjects() []ClaudeProject {
 	sort.Slice(projects, func(i, j int) bool {
 		return projects[i].LastAccessed.After(projects[j].LastAccessed)
 	})
+
+	// Debug: print project order after sorting
+	c.logger.Info("GetProjects sorted order")
+	for i, p := range projects {
+		c.logger.Info("project order",
+			zap.Int("index", i),
+			zap.String("name", p.Name),
+			zap.Time("lastAccessed", p.LastAccessed))
+	}
 
 	return projects
 }
@@ -210,6 +241,17 @@ func (c *HistoryCache) loadSessions(projectDir string) ([]ClaudeSession, time.Ti
 		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
 	})
 
+	// Debug: print session order for this project
+	c.logger.Info("loadSessions sorted order",
+		zap.String("projectDir", projectDir))
+	for i, s := range sessions {
+		c.logger.Info("session order",
+			zap.Int("index", i),
+			zap.String("sessionID", s.ID[:8]),
+			zap.Time("updatedAt", s.UpdatedAt),
+			zap.String("firstMsg", truncateString(s.FirstMessage, 30)))
+	}
+
 	return sessions, lastAccessed, nil
 }
 
@@ -269,7 +311,10 @@ func (c *HistoryCache) watchLoop() {
 				continue
 			}
 
-			// Add to pending reloads
+			// Notify subscribers immediately for real-time updates
+			go c.notifySessionSubscribers(encodedPath, event.Name)
+
+			// Add to pending reloads for cache update
 			pendingMu.Lock()
 			pendingReloads[encodedPath] = true
 
@@ -371,5 +416,149 @@ func (c *HistoryCache) reloadProject(encodedPath string) {
 func (c *HistoryCache) Refresh() {
 	if err := c.loadAll(); err != nil {
 		c.logger.Error("failed to refresh cache", zap.Error(err))
+	}
+}
+
+// GetSessionMessagesPaginated returns messages with pagination (most recent first)
+func (c *HistoryCache) GetSessionMessagesPaginated(encodedPath, sessionID string, limit, offset int) (*PaginatedMessages, error) {
+	sessionFile := filepath.Join(c.basePath, encodedPath, sessionID+".jsonl")
+	allMessages, err := parseJsonlFile(sessionFile)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter only user/assistant messages
+	var filtered []ClaudeMessage
+	for _, msg := range allMessages {
+		if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
+			filtered = append(filtered, msg)
+		}
+	}
+
+	total := len(filtered)
+
+	// Calculate pagination (offset from end for most recent first)
+	// offset=0 means most recent messages
+	startIdx := total - offset - limit
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	endIdx := total - offset
+	if endIdx < 0 {
+		endIdx = 0
+	}
+	if endIdx > total {
+		endIdx = total
+	}
+
+	var result []ClaudeMessage
+	if startIdx < endIdx {
+		result = filtered[startIdx:endIdx]
+	}
+
+	return &PaginatedMessages{
+		Messages: result,
+		Total:    total,
+		Limit:    limit,
+		Offset:   offset,
+		HasMore:  startIdx > 0,
+	}, nil
+}
+
+// Subscribe registers a callback for session file changes
+func (c *HistoryCache) Subscribe(encodedPath, sessionID string, callback SessionChangeCallback) {
+	key := encodedPath + "/" + sessionID
+	c.subscribersMu.Lock()
+	defer c.subscribersMu.Unlock()
+	c.subscribers[key] = append(c.subscribers[key], callback)
+
+	// Initialize last message count
+	c.lastMessageCountMu.Lock()
+	if _, exists := c.lastMessageCount[key]; !exists {
+		messages, _ := c.GetSessionMessages(encodedPath, sessionID)
+		count := 0
+		for _, msg := range messages {
+			if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
+				count++
+			}
+		}
+		c.lastMessageCount[key] = count
+	}
+	c.lastMessageCountMu.Unlock()
+
+	c.logger.Debug("subscribed to session changes",
+		zap.String("encodedPath", encodedPath),
+		zap.String("sessionID", sessionID))
+}
+
+// Unsubscribe removes all callbacks for a session
+func (c *HistoryCache) Unsubscribe(encodedPath, sessionID string) {
+	key := encodedPath + "/" + sessionID
+	c.subscribersMu.Lock()
+	defer c.subscribersMu.Unlock()
+	delete(c.subscribers, key)
+
+	c.logger.Debug("unsubscribed from session changes",
+		zap.String("encodedPath", encodedPath),
+		zap.String("sessionID", sessionID))
+}
+
+// notifySessionSubscribers notifies subscribers when a session file changes
+func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath string) {
+	// Extract session ID from file path
+	filename := filepath.Base(filePath)
+	if !strings.HasSuffix(filename, ".jsonl") || strings.HasPrefix(filename, "agent-") {
+		return
+	}
+	sessionID := strings.TrimSuffix(filename, ".jsonl")
+	key := encodedPath + "/" + sessionID
+
+	// Check if there are subscribers
+	c.subscribersMu.RLock()
+	callbacks := c.subscribers[key]
+	c.subscribersMu.RUnlock()
+
+	if len(callbacks) == 0 {
+		return
+	}
+
+	// Read current messages
+	messages, err := c.GetSessionMessages(encodedPath, sessionID)
+	if err != nil {
+		c.logger.Error("failed to read session for notification",
+			zap.String("sessionID", sessionID),
+			zap.Error(err))
+		return
+	}
+
+	// Filter user/assistant messages
+	var filtered []ClaudeMessage
+	for _, msg := range messages {
+		if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
+			filtered = append(filtered, msg)
+		}
+	}
+
+	// Check for new messages
+	c.lastMessageCountMu.Lock()
+	lastCount := c.lastMessageCount[key]
+	currentCount := len(filtered)
+	c.lastMessageCount[key] = currentCount
+	c.lastMessageCountMu.Unlock()
+
+	if currentCount <= lastCount {
+		return // No new messages
+	}
+
+	// Get only new messages
+	newMessages := filtered[lastCount:]
+
+	c.logger.Debug("notifying session subscribers",
+		zap.String("sessionID", sessionID),
+		zap.Int("newMessages", len(newMessages)))
+
+	// Notify all subscribers
+	for _, callback := range callbacks {
+		go callback(encodedPath, sessionID, newMessages)
 	}
 }

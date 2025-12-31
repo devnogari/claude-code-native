@@ -1,8 +1,9 @@
 package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.ApiClient
+import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.api.ConversationApi
-import com.claudecode.native.data.api.MessageApi
+import com.claudecode.native.data.api.ProjectApi
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.data.websocket.IncomingMessage
@@ -13,12 +14,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Chat message displayed in the UI.
@@ -43,16 +48,21 @@ data class ChatMessage(
  * - Message sending and receiving
  * - Streaming response accumulation
  * - Connection state exposure for UI updates
+ * - Loading messages from file-based Claude history
  *
  * @param webSocketClient Client for WebSocket communication
  * @param apiClient API client for auth token retrieval
+ * @param conversationApi API client for conversation operations
+ * @param projectApi API client for project operations
+ * @param claudeHistoryApi API client for file-based Claude history
  * @param scope Injected coroutine scope for lifecycle management
  */
 class ChatViewModel(
     private val webSocketClient: WebSocketClient,
     private val apiClient: ApiClient,
-    private val messageApi: MessageApi,
     private val conversationApi: ConversationApi,
+    private val projectApi: ProjectApi,
+    private val claudeHistoryApi: ClaudeHistoryApi,
     private val scope: CoroutineScope
 ) {
     private val mutex = Mutex()
@@ -113,8 +123,8 @@ class ChatViewModel(
                     return@launch
                 }
 
-                // Load existing messages from database
-                loadMessagesFromDb(conversationId)
+                // Load existing messages from file-based Claude history
+                loadMessages(conversationId)
 
                 // Connect to WebSocket for real-time updates
                 webSocketClient.connect(conversationId, token)
@@ -127,27 +137,147 @@ class ChatViewModel(
     }
 
     /**
-     * Loads existing messages from the database.
+     * Loads messages from file-based Claude history API.
      */
-    private suspend fun loadMessagesFromDb(conversationId: String) {
+    private suspend fun loadMessages(conversationId: String) {
         try {
-            val dbMessages = messageApi.getMessages(conversationId)
-            val chatMessages = dbMessages.map { msg ->
+            // Get conversation details to find claudeSession and project
+            val conversation = conversationApi.getConversation(conversationId)
+            val claudeSession = conversation.claudeSession
+            if (claudeSession.isNullOrBlank()) {
+                // No Claude session linked - this is a new conversation
+                println("ChatViewModel: No claudeSession for conversation $conversationId")
+                return
+            }
+
+            // Get project to find the path
+            val project = projectApi.getProject(conversation.projectId)
+            val encodedPath = encodeProjectPath(project.path)
+            println("ChatViewModel: Loading messages from $encodedPath / $claudeSession")
+
+            // Load messages from file-based API (with summary=false for full content)
+            val response = claudeHistoryApi.getSessionMessages(
+                encodedPath = encodedPath,
+                sessionId = claudeSession,
+                limit = 100,
+                offset = 0,
+                summary = false
+            )
+            println("ChatViewModel: Got ${response.messages.size} messages from API")
+
+            val chatMessages = response.messages.mapIndexedNotNull { index, msg ->
+                val message = msg.message ?: return@mapIndexedNotNull null
+                val role = message.role
+                val content = extractTextContent(message.content)
+                if (content.isBlank()) return@mapIndexedNotNull null
+
                 ChatMessage(
-                    id = msg.id,
-                    role = msg.role,
-                    content = msg.content,
+                    // Use timestamp + index for unique ID (sessionId is same for all messages in session)
+                    id = "msg_${msg.timestamp?.toEpochMilliseconds() ?: index}_$index",
+                    role = when (role) {
+                        "user" -> MessageRole.USER
+                        "assistant" -> MessageRole.ASSISTANT
+                        else -> return@mapIndexedNotNull null
+                    },
+                    content = content,
                     isStreaming = false
                 )
             }
+            println("ChatViewModel: Converted to ${chatMessages.size} chat messages")
+
             mutex.withLock {
                 _messages.value = chatMessages
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Ignore errors loading messages - may be empty conversation
+            // 404 Not Found is expected for new conversations without history
+            val isNotFound = e.message?.contains("Not found", ignoreCase = true) == true ||
+                    e.message?.contains("404", ignoreCase = true) == true
+            if (isNotFound) {
+                println("ChatViewModel: No history found for conversation (this is normal for new chats)")
+            } else {
+                println("ChatViewModel: Failed to load messages: ${e.message}")
+                e.printStackTrace()
+                _error.value = "Failed to load messages: ${e.message}"
+            }
         }
+    }
+
+    /**
+     * Encodes a project path for Claude history API.
+     * Claude CLI encodes /Users/name/project as -Users-name-project (keeps leading dash from root /)
+     */
+    private fun encodeProjectPath(path: String): String {
+        // /Users/name/project -> -Users-name-project
+        return path.replace("/", "-")
+    }
+
+    /**
+     * Extracts text content from message content (handles string or array).
+     */
+    private fun extractTextContent(content: Any?): String {
+        if (content == null) return ""
+
+        return when (content) {
+            is String -> cleanThinkingTags(content)
+            is JsonPrimitive -> cleanThinkingTags(content.content)
+            is JsonArray -> {
+                content.mapNotNull { element ->
+                    when (element) {
+                        is JsonPrimitive -> element.content
+                        is JsonObject -> {
+                            val type = element["type"]?.jsonPrimitive?.content
+                            when (type) {
+                                "text" -> element["text"]?.jsonPrimitive?.content
+                                // Filter out tool_use and tool_result - don't show them
+                                "tool_use", "tool_result" -> null
+                                else -> null
+                            }
+                        }
+                        else -> null
+                    }
+                }.joinToString("\n").let { cleanThinkingTags(it) }
+            }
+            is JsonObject -> {
+                val type = content["type"]?.jsonPrimitive?.content
+                when (type) {
+                    "text" -> cleanThinkingTags(content["text"]?.jsonPrimitive?.content ?: "")
+                    // Filter out tool_use and tool_result
+                    "tool_use", "tool_result" -> ""
+                    else -> ""
+                }
+            }
+            is List<*> -> {
+                content.mapNotNull { item ->
+                    when (item) {
+                        is String -> item
+                        is Map<*, *> -> {
+                            val type = item["type"] as? String
+                            when (type) {
+                                "text" -> item["text"] as? String
+                                // Filter out tool_use and tool_result
+                                "tool_use", "tool_result" -> null
+                                else -> null
+                            }
+                        }
+                        else -> null
+                    }
+                }.joinToString("\n").let { cleanThinkingTags(it) }
+            }
+            else -> cleanThinkingTags(content.toString())
+        }
+    }
+
+    /**
+     * Removes thinking tags from content.
+     */
+    private fun cleanThinkingTags(text: String): String {
+        return text
+            .replace(Regex("<thinking>.*?</thinking>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace("</thinking>", "")
+            .replace("<thinking>", "")
+            .trim()
     }
 
     /**

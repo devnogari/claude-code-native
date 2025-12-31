@@ -265,6 +265,37 @@ class ProjectListViewModel(
     }
 
     /**
+     * Toggles the favorite status of a conversation.
+     *
+     * @param conversationId The conversation ID
+     */
+    fun toggleConversationFavorite(conversationId: String) {
+        scope.launch {
+            try {
+                val updatedConversation = conversationApi.toggleFavorite(conversationId)
+
+                // Update local state and re-sort conversations
+                val updatedProjects = _uiState.value.projects.map { pwc ->
+                    val updatedConversations = pwc.conversations.map { conv ->
+                        if (conv.id == conversationId) {
+                            conv.copy(isFavorite = updatedConversation.isFavorite)
+                        } else conv
+                    }.sortedWith(
+                        compareByDescending<Conversation> { it.isFavorite }
+                            .thenByDescending { it.updatedAt }
+                    )
+                    pwc.copy(conversations = updatedConversations)
+                }
+                _uiState.value = _uiState.value.copy(projects = updatedProjects)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.toUserMessage())
+            }
+        }
+    }
+
+    /**
      * Deletes the Claude CLI session for a conversation.
      * Uses the direct deletion endpoint that works with project path.
      *

@@ -63,7 +63,7 @@ func (r *Repository) FindByProjectID(ctx context.Context, projectID uuid.UUID) (
 	err := r.db.NewSelect().
 		Model(&conversations).
 		Where("project_id = ?", projectID).
-		Order("created_at DESC").
+		Order("is_favorite DESC", "updated_at DESC").
 		Scan(ctx)
 
 	if err != nil {
@@ -88,6 +88,37 @@ func (r *Repository) Update(ctx context.Context, conversation *Conversation) err
 		Exec(ctx)
 
 	return err
+}
+
+// UpdateWithTimestamp updates a conversation preserving its UpdatedAt value
+// Used for sync operations where the timestamp should reflect the source file's modification time
+func (r *Repository) UpdateWithTimestamp(ctx context.Context, conversation *Conversation) error {
+	if r.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	if err := conversation.Validate(); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Use raw table name to avoid any ORM hooks or automatic timestamp handling
+	result, err := r.db.NewUpdate().
+		TableExpr("conversations").
+		Set("message_count = ?", conversation.MessageCount).
+		Set("updated_at = ?", conversation.UpdatedAt).
+		Where("id = ?", conversation.ID).
+		Exec(ctx)
+
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows affected for conversation id=%s", conversation.ID)
+	}
+
+	return nil
 }
 
 func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
@@ -128,6 +159,41 @@ func (r *Repository) IncrementMessageCount(ctx context.Context, id uuid.UUID) er
 	_, err := r.db.NewUpdate().
 		Model((*Conversation)(nil)).
 		Set("message_count = message_count + 1").
+		Set("updated_at = NOW()").
+		Where("id = ?", id).
+		Exec(ctx)
+
+	return err
+}
+
+func (r *Repository) ToggleFavorite(ctx context.Context, id uuid.UUID) (*Conversation, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	conversation := new(Conversation)
+	_, err := r.db.NewUpdate().
+		Model(conversation).
+		Set("is_favorite = NOT is_favorite").
+		Set("updated_at = NOW()").
+		Where("id = ?", id).
+		Returning("*").
+		Exec(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+	return conversation, nil
+}
+
+func (r *Repository) SetFavorite(ctx context.Context, id uuid.UUID, isFavorite bool) error {
+	if r.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	_, err := r.db.NewUpdate().
+		Model((*Conversation)(nil)).
+		Set("is_favorite = ?", isFavorite).
 		Set("updated_at = NOW()").
 		Where("id = ?", id).
 		Exec(ctx)

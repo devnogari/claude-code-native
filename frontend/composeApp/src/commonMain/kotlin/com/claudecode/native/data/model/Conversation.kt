@@ -1,6 +1,6 @@
 package com.claudecode.native.data.model
 
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -12,6 +12,7 @@ data class Conversation(
     val title: String? = null,
     @SerialName("message_count") val messageCount: Int = 0,
     @SerialName("jsonl_path") val jsonlPath: String? = null,
+    @SerialName("is_favorite") val isFavorite: Boolean = false,
     @SerialName("created_at") val createdAt: Instant,
     @SerialName("updated_at") val updatedAt: Instant
 )
