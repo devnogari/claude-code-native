@@ -244,7 +244,7 @@ func TestNewHandler(t *testing.T) {
 		hub := NewHub()
 		cfg := &config.Config{}
 		logger := zap.NewNop()
-		claudeMgr := claude.NewManager()
+		claudeMgr := claude.NewManager(logger)
 		convRepo := &mockConversationRepository{}
 		projRepo := &mockProjectRepository{}
 		msgRepo := &mockMessageRepository{}
@@ -265,7 +265,7 @@ func TestNewHandler(t *testing.T) {
 		hub := NewHub()
 		cfg := &config.Config{}
 		logger := zap.NewNop()
-		claudeMgr := claude.NewManager()
+		claudeMgr := claude.NewManager(logger)
 		convRepo := &mockConversationRepository{}
 		projRepo := &mockProjectRepository{}
 		msgRepo := &mockMessageRepository{}
