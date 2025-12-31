@@ -6,13 +6,13 @@ import (
 
 // HistoryHandler handles Claude Code history HTTP requests
 type HistoryHandler struct {
-	reader *HistoryReader
+	cache *HistoryCache
 }
 
-// NewHistoryHandler creates a new history handler
-func NewHistoryHandler() *HistoryHandler {
+// NewHistoryHandlerWithCache creates a new history handler with cache
+func NewHistoryHandlerWithCache(cache *HistoryCache) *HistoryHandler {
 	return &HistoryHandler{
-		reader: NewHistoryReader(""),
+		cache: cache,
 	}
 }
 
@@ -23,12 +23,7 @@ type ErrorResponse struct {
 
 // ListProjects handles GET /api/v1/claude-history/projects
 func (h *HistoryHandler) ListProjects(c *fiber.Ctx) error {
-	projects, err := h.reader.GetProjects()
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
-			Error: "failed to list Claude Code projects",
-		})
-	}
+	projects := h.cache.GetProjects()
 
 	// Return empty array if no projects found
 	if projects == nil {
@@ -47,8 +42,8 @@ func (h *HistoryHandler) GetProject(c *fiber.Ctx) error {
 		})
 	}
 
-	project, err := h.reader.GetProject(encodedPath)
-	if err != nil {
+	project, ok := h.cache.GetProject(encodedPath)
+	if !ok {
 		return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
 			Error: "project not found",
 		})
@@ -68,7 +63,7 @@ func (h *HistoryHandler) GetSessionMessages(c *fiber.Ctx) error {
 		})
 	}
 
-	messages, err := h.reader.GetSessionMessages(encodedPath, sessionID)
+	messages, err := h.cache.GetSessionMessages(encodedPath, sessionID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
 			Error: "session not found",
@@ -81,4 +76,12 @@ func (h *HistoryHandler) GetSessionMessages(c *fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(messages)
+}
+
+// Refresh handles POST /api/v1/claude-history/refresh - force refresh cache
+func (h *HistoryHandler) Refresh(c *fiber.Ctx) error {
+	h.cache.Refresh()
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"message": "cache refreshed",
+	})
 }

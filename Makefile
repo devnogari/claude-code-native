@@ -59,18 +59,14 @@ db-reset:
 # Start backend server (requires db to be running)
 server:
 	@echo "Starting backend server on :8083..."
-	cd backend && \
-	source .env.local 2>/dev/null || true && \
-	export $$(cat .env.local | grep -v '^#' | xargs) && \
-	go run ./cmd/server
+	@cd backend && \
+	env $$(grep -v '^#' .env.local | xargs) go run ./cmd/server
 
 # Start backend with hot reload (requires air: go install github.com/air-verse/air@latest)
 server-watch:
 	@echo "Starting backend with hot reload..."
-	cd backend && \
-	source .env.local 2>/dev/null || true && \
-	export $$(cat .env.local | grep -v '^#' | xargs) && \
-	air
+	@cd backend && \
+	env $$(grep -v '^#' .env.local | xargs) air
 
 # Start frontend desktop app
 frontend:
@@ -94,16 +90,19 @@ frontend-web-watch:
 
 # Start DB + Server (no frontend)
 dev: db
-	@sleep 2
-	@$(MAKE) server
+	@echo "Building backend (cleaning cache)..."
+	cd backend && go clean -cache
+	cd backend && rm -f bin/server
+	cd backend && go build -v -o bin/server ./cmd/server
+	@echo "Starting backend server on :8083..."
+	cd backend && env $$(grep -v '^#' .env.local | xargs) ./bin/server
 
 # Start everything (DB + Server in background + Frontend)
 all: db
 	@sleep 2
 	@echo "Starting server in background..."
 	@cd backend && \
-	export $$(cat .env.local | grep -v '^#' | xargs) && \
-	go run ./cmd/server &
+	env $$(grep -v '^#' .env.local | xargs) go run ./cmd/server &
 	@sleep 2
 	@$(MAKE) frontend
 

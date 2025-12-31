@@ -13,11 +13,27 @@ func New(cfg *config.Config) (*zap.Logger, error) {
 		level = zapcore.InfoLevel
 	}
 
+	// Use console encoding unless LOG_FORMAT=json is explicitly set
+	// Default to human-readable console format for development
+	logFormat := cfg.Server.LogFormat
+	useConsole := logFormat != "json"
+
+	encoding := "json"
+	var encoderConfig zapcore.EncoderConfig
+	if useConsole {
+		encoding = "console"
+		encoderConfig = zap.NewDevelopmentEncoderConfig()
+		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		encoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("15:04:05")
+	} else {
+		encoderConfig = zap.NewProductionEncoderConfig()
+	}
+
 	zapConfig := zap.Config{
 		Level:            zap.NewAtomicLevelAt(level),
-		Development:      cfg.Server.LogLevel == "debug",
-		Encoding:         "json",
-		EncoderConfig:    zap.NewProductionEncoderConfig(),
+		Development:      useConsole,
+		Encoding:         encoding,
+		EncoderConfig:    encoderConfig,
 		OutputPaths:      []string{"stdout"},
 		ErrorOutputPaths: []string{"stderr"},
 	}

@@ -6,6 +6,7 @@ import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.MessageApi
 import com.claudecode.native.data.api.ProjectApi
+import com.claudecode.native.data.config.UrlConfig
 import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.ui.viewmodel.ChatViewModel
@@ -42,8 +43,9 @@ val appModule = module {
     }
 
     // HTTP Client for REST API operations
+    // URL is determined by platform-specific UrlConfig
     single {
-        ApiClient(baseUrl = "http://localhost:8083/api/v1")
+        ApiClient(baseUrl = UrlConfig.apiBaseUrl)
     } onClose {
         it?.close()
     }
@@ -75,17 +77,18 @@ val appModule = module {
 
     // ViewModels
     factory { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
-    factory { ChatViewModel(get(), get(), get(), get()) }  // WebSocketClient, ApiClient, MessageApi, CoroutineScope
+    factory { ChatViewModel(get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, MessageApi, ConversationApi, CoroutineScope
     factory { ProjectListViewModel(get(), get(), get(), get()) }  // ProjectApi, ConversationApi, FavoriteRepository, CoroutineScope
     factory { SettingsViewModel(get(), get()) }  // ApiClient, CoroutineScope
     factory { ClaudeHistoryViewModel(get(), get()) }  // ClaudeHistoryApi, CoroutineScope
 
     // WebSocket Client for real-time communication
+    // URL is determined by platform-specific UrlConfig
     single {
         WebSocketClient(
             httpClient = get(),
             scope = get(),
-            baseUrl = "ws://localhost:8083/api/v1"
+            baseUrl = UrlConfig.wsBaseUrl
         )
     }
 }

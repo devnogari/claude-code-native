@@ -30,6 +30,7 @@ type Server struct {
 	userRepo       *user.Repository
 	projectRepo    *project.Repository
 	convRepo       *conversation.Repository
+	claudeMgr      *claude.Manager
 
 	// Handlers
 	authHandler    *auth.Handler
@@ -53,6 +54,8 @@ type ServerParams struct {
 	MsgRepo        *message.Repository
 	WSHandler      *ws.Handler
 	SyncHandler    *claude.SyncHandler
+	HistoryHandler *claude.HistoryHandler
+	ClaudeMgr      *claude.Manager
 }
 
 func New(p ServerParams) *Server {
@@ -78,7 +81,6 @@ func New(p ServerParams) *Server {
 	projectHandler := project.NewHandler(p.ProjectRepo)
 	convHandler := conversation.NewHandler(p.ConvRepo, p.ProjectRepo)
 	msgHandler := message.NewHandler(p.MsgRepo)
-	historyHandler := claude.NewHistoryHandler()
 
 	s := &Server{
 		app:            app,
@@ -89,12 +91,13 @@ func New(p ServerParams) *Server {
 		userRepo:       p.UserRepo,
 		projectRepo:    p.ProjectRepo,
 		convRepo:       p.ConvRepo,
+		claudeMgr:      p.ClaudeMgr,
 		authHandler:    authHandler,
 		projectHandler: projectHandler,
 		convHandler:    convHandler,
 		msgHandler:     msgHandler,
 		wsHandler:      p.WSHandler,
-		historyHandler: historyHandler,
+		historyHandler: p.HistoryHandler,
 		syncHandler:    p.SyncHandler,
 	}
 

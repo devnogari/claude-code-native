@@ -80,10 +80,16 @@ kotlin {
             implementation(compose.components.resources)
             implementation(compose.components.uiToolingPreview)
 
+            // Material3 Adaptive for split screen
+            implementation(libs.compose.material3.adaptive)
+            implementation(libs.compose.material3.adaptive.layout)
+            implementation(libs.compose.material3.adaptive.navigation)
+
             // Ktor Client
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.client.websockets)
+            implementation(libs.ktor.client.logging)
             implementation(libs.ktor.serialization.kotlinx.json)
 
             // Koin DI
@@ -100,6 +106,8 @@ kotlin {
             implementation(compose.desktop.currentOs)
             implementation(libs.ktor.client.cio)
             implementation(libs.kotlinx.coroutines.swing)
+            // SLF4J logging implementation for Ktor/CIO
+            implementation(libs.slf4j.simple)
         }
 
         val wasmJsMain by getting {

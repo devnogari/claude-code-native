@@ -3,7 +3,6 @@ package claude
 import (
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
@@ -11,14 +10,14 @@ import (
 )
 
 func TestNewManager(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 
 	require.NotNil(t, manager, "expected non-nil manager")
 	assert.NotNil(t, manager.processes, "expected processes map to be initialized")
 }
 
 func TestManager_CreateProcess(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 	convID, _ := uuid.NewV7()
 	workDir := "/tmp/test"
 	env := []string{"TEST_VAR=1"}
@@ -33,7 +32,7 @@ func TestManager_CreateProcess(t *testing.T) {
 }
 
 func TestManager_CreateProcess_ReturnsExisting(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 	convID, _ := uuid.NewV7()
 	workDir := "/tmp/test"
 
@@ -51,7 +50,7 @@ func TestManager_CreateProcess_ReturnsExisting(t *testing.T) {
 }
 
 func TestManager_GetProcess_NonExistent(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 	convID, _ := uuid.NewV7()
 
 	process := manager.GetProcess(convID)
@@ -60,7 +59,7 @@ func TestManager_GetProcess_NonExistent(t *testing.T) {
 }
 
 func TestManager_GetProcess_AfterCreation(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 	convID, _ := uuid.NewV7()
 	workDir := "/tmp/test"
 
@@ -74,7 +73,7 @@ func TestManager_GetProcess_AfterCreation(t *testing.T) {
 }
 
 func TestManager_StopProcess(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 	convID, _ := uuid.NewV7()
 
 	// Create a process
@@ -98,7 +97,7 @@ func TestManager_StopProcess(t *testing.T) {
 }
 
 func TestManager_StopProcess_NonExistent(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 	convID, _ := uuid.NewV7()
 
 	err := manager.StopProcess(convID)
@@ -107,7 +106,7 @@ func TestManager_StopProcess_NonExistent(t *testing.T) {
 }
 
 func TestManager_StopAll(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 
 	// Create multiple processes
 	convIDs := make([]uuid.UUID, 3)
@@ -139,7 +138,7 @@ func TestManager_StopAll(t *testing.T) {
 }
 
 func TestManager_ListProcesses(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 
 	// Create multiple processes
 	convIDs := make([]uuid.UUID, 3)
@@ -165,7 +164,7 @@ func TestManager_ListProcesses(t *testing.T) {
 }
 
 func TestManager_ConcurrentAccess(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager(nil)
 	numOps := 50
 	var wg sync.WaitGroup
 
@@ -222,13 +221,12 @@ func TestNewProcess(t *testing.T) {
 	convID, _ := uuid.NewV7()
 	workDir := "/tmp/test"
 
-	process := NewProcess(convID, workDir)
+	process := NewProcess(convID, workDir, nil)
 
 	require.NotNil(t, process)
 	assert.Equal(t, convID, process.ConversationID)
 	assert.Equal(t, workDir, process.WorkDir)
 	assert.Equal(t, ProcessStatusIdle, process.Status)
-	assert.NotNil(t, process.Input, "expected Input channel to be initialized")
 	assert.NotNil(t, process.Output, "expected Output channel to be initialized")
 	assert.NotNil(t, process.Error, "expected Error channel to be initialized")
 	assert.NotNil(t, process.Done, "expected Done channel to be initialized")
@@ -238,7 +236,7 @@ func TestNewProcess(t *testing.T) {
 
 func TestProcess_SetStatus(t *testing.T) {
 	convID, _ := uuid.NewV7()
-	process := NewProcess(convID, "/tmp/test")
+	process := NewProcess(convID, "/tmp/test", nil)
 
 	process.SetStatus(ProcessStatusRunning)
 
@@ -247,7 +245,7 @@ func TestProcess_SetStatus(t *testing.T) {
 
 func TestProcess_GetStatus_ThreadSafe(t *testing.T) {
 	convID, _ := uuid.NewV7()
-	process := NewProcess(convID, "/tmp/test")
+	process := NewProcess(convID, "/tmp/test", nil)
 
 	var wg sync.WaitGroup
 	statuses := []string{ProcessStatusIdle, ProcessStatusRunning, ProcessStatusStopped, ProcessStatusError}
@@ -277,45 +275,9 @@ func TestProcess_GetStatus_ThreadSafe(t *testing.T) {
 	assert.True(t, validStatuses[status], "expected valid status, got %s", status)
 }
 
-func TestProcess_SendInput(t *testing.T) {
-	convID, _ := uuid.NewV7()
-	process := NewProcess(convID, "/tmp/test")
-
-	testMsg := "test message"
-	process.SendInput(testMsg)
-
-	select {
-	case msg := <-process.Input:
-		assert.Equal(t, testMsg, msg)
-	case <-time.After(100 * time.Millisecond):
-		t.Error("expected message on Input channel")
-	}
-}
-
-func TestProcess_SendInput_Buffered(t *testing.T) {
-	convID, _ := uuid.NewV7()
-	process := NewProcess(convID, "/tmp/test")
-
-	// Should not block for buffered sends (buffer size 10)
-	for i := 0; i < 10; i++ {
-		done := make(chan bool)
-		go func() {
-			process.SendInput("test")
-			done <- true
-		}()
-
-		select {
-		case <-done:
-			// Non-blocking - good
-		case <-time.After(50 * time.Millisecond):
-			t.Fatalf("SendInput blocked on message %d", i)
-		}
-	}
-}
-
 func TestProcess_Close(t *testing.T) {
 	convID, _ := uuid.NewV7()
-	process := NewProcess(convID, "/tmp/test")
+	process := NewProcess(convID, "/tmp/test", nil)
 
 	process.Close()
 
@@ -327,27 +289,18 @@ func TestProcess_Close(t *testing.T) {
 		t.Error("expected Done channel to be closed")
 	}
 
-	// Input channel should be closed
+	// Output channel should be closed
 	select {
-	case _, ok := <-process.Input:
-		assert.False(t, ok, "expected Input channel to be closed")
+	case _, ok := <-process.Output:
+		assert.False(t, ok, "expected Output channel to be closed")
 	default:
-		t.Error("expected Input channel to be closed")
+		t.Error("expected Output channel to be closed")
 	}
 }
 
 func TestProcess_ChannelBufferSizes(t *testing.T) {
 	convID, _ := uuid.NewV7()
-	process := NewProcess(convID, "/tmp/test")
-
-	// Input channel buffer: 10
-	for i := 0; i < 10; i++ {
-		select {
-		case process.Input <- "test":
-		default:
-			t.Fatalf("Input channel buffer should accept at least 10 messages, blocked at %d", i)
-		}
-	}
+	process := NewProcess(convID, "/tmp/test", nil)
 
 	// Output channel buffer: 100
 	for i := 0; i < 100; i++ {

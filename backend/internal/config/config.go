@@ -17,8 +17,9 @@ type Config struct {
 
 // ServerConfig holds HTTP server configuration
 type ServerConfig struct {
-	Port     string
-	LogLevel string
+	Port      string
+	LogLevel  string
+	LogFormat string // "console" (default) or "json"
 }
 
 // DatabaseConfig holds database connection configuration
@@ -44,8 +45,9 @@ func New() (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			Port:     getEnv("PORT", "8080"),
-			LogLevel: getEnv("LOG_LEVEL", "info"),
+			Port:      getEnv("PORT", "8080"),
+			LogLevel:  getEnv("LOG_LEVEL", "info"),
+			LogFormat: getEnv("LOG_FORMAT", "console"), // "console" or "json"
 		},
 		Database: DatabaseConfig{
 			URL: getEnv("DATABASE_URL", ""),

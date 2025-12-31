@@ -61,6 +61,30 @@ fun ChatScreen(
     viewModel: ChatViewModel = koinInject(),
     onBack: () -> Unit = {}
 ) {
+    ChatScreenContent(
+        conversationId = conversationId,
+        viewModel = viewModel,
+        onBack = onBack
+    )
+}
+
+/**
+ * Content composable for the chat screen.
+ *
+ * This is the main implementation used by both the standalone screen
+ * and the adaptive layout. Extracted to allow reuse in split-screen mode.
+ *
+ * @param conversationId The conversation to connect to
+ * @param viewModel ViewModel injected via Koin
+ * @param onBack Callback when user wants to navigate back
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatScreenContent(
+    conversationId: String,
+    viewModel: ChatViewModel = koinInject(),
+    onBack: () -> Unit = {}
+) {
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
