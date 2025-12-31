@@ -3,6 +3,7 @@ package com.claudecode.native.data.api
 import com.claudecode.native.data.model.Conversation
 import com.claudecode.native.data.model.CreateConversationRequest
 import com.claudecode.native.data.model.UpdateConversationRequest
+import io.ktor.http.encodeURLParameter
 
 /**
  * API client for conversation operations.
@@ -59,5 +60,27 @@ class ConversationApi(private val client: ApiClient) {
      */
     suspend fun deleteConversation(id: String) {
         client.delete("/conversations/$id")
+    }
+
+    /**
+     * Deletes the Claude CLI session for a conversation.
+     * This removes session files from ~/.claude/ allowing a fresh start.
+     *
+     * @param id The conversation ID
+     */
+    suspend fun deleteSession(id: String) {
+        client.delete("/conversations/$id/session")
+    }
+
+    /**
+     * Deletes the Claude CLI session directly by session ID and project path.
+     * Use this for Claude History sessions that may not be in the database.
+     *
+     * @param sessionId The session ID (same as conversation ID for local sessions)
+     * @param projectPath The project path (used to find session files)
+     */
+    suspend fun deleteSessionDirect(sessionId: String, projectPath: String) {
+        val encodedPath = projectPath.encodeURLParameter()
+        client.delete("/sessions/$sessionId?path=$encodedPath")
     }
 }

@@ -48,6 +48,53 @@ fun ProjectListScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     var showCreateDialog by remember { mutableStateOf(false) }
+    var deleteSessionTarget by remember { mutableStateOf<Pair<String, String>?>(null) } // conversationId, projectPath
+    var deleteResultMessage by remember { mutableStateOf<String?>(null) }
+
+    // Auto-dismiss delete result message
+    if (deleteResultMessage != null) {
+        LaunchedEffect(deleteResultMessage) {
+            kotlinx.coroutines.delay(3000)
+            deleteResultMessage = null
+        }
+    }
+
+    // Delete session confirmation dialog
+    if (deleteSessionTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deleteSessionTarget = null },
+            title = { Text("Delete Session") },
+            text = { Text("Delete Claude CLI session files for this conversation? This allows starting fresh.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val (convId, path) = deleteSessionTarget!!
+                        deleteSessionTarget = null
+                        viewModel.deleteSession(
+                            conversationId = convId,
+                            projectPath = path,
+                            onSuccess = {
+                                deleteResultMessage = "Session deleted"
+                            },
+                            onError = { error ->
+                                deleteResultMessage = error
+                            }
+                        )
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteSessionTarget = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -96,6 +143,29 @@ fun ProjectListScreen(
                 },
                 singleLine = true
             )
+
+            // Delete result message
+            if (deleteResultMessage != null) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = if (deleteResultMessage == "Session deleted")
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.small
+                ) {
+                    Text(
+                        text = deleteResultMessage ?: "",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        color = if (deleteResultMessage == "Session deleted")
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        else
+                            MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
 
             // Error banner
             if (uiState.error != null) {
@@ -178,6 +248,9 @@ fun ProjectListScreen(
                                         viewModel.onConversationClick(conversation.id) { conversationId ->
                                             onConversationSelected(conversationId)
                                         }
+                                    },
+                                    onDeleteSession = { conversation ->
+                                        deleteSessionTarget = conversation.id to pwc.project.path
                                     }
                                 )
                             }
@@ -251,7 +324,8 @@ private fun ProjectItem(
     isLoading: Boolean,
     onToggleExpand: () -> Unit,
     onToggleFavorite: () -> Unit,
-    onConversationClick: (Conversation) -> Unit
+    onConversationClick: (Conversation) -> Unit,
+    onDeleteSession: (Conversation) -> Unit
 ) {
     val project = projectWithConversations.project
     val conversations = projectWithConversations.conversations
@@ -339,7 +413,8 @@ private fun ProjectItem(
                     ConversationItem(
                         conversation = conversation,
                         isLoading = isLoading,
-                        onClick = { onConversationClick(conversation) }
+                        onClick = { onConversationClick(conversation) },
+                        onDeleteSession = { onDeleteSession(conversation) }
                     )
                 }
             }
@@ -354,7 +429,8 @@ private fun ProjectItem(
 private fun ConversationItem(
     conversation: Conversation,
     isLoading: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDeleteSession: () -> Unit
 ) {
     Surface(
         modifier = Modifier
@@ -396,6 +472,19 @@ private fun ConversationItem(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            // Delete session button
+            IconButton(
+                onClick = onDeleteSession,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Delete session",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                )
             }
 
             Icon(

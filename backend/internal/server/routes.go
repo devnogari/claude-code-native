@@ -3,6 +3,8 @@ package server
 import (
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofrs/uuid/v5"
+	"go.uber.org/zap"
 )
 
 func (s *Server) setupRoutes() {
@@ -11,6 +13,9 @@ func (s *Server) setupRoutes() {
 
 	// API v1
 	api := s.app.Group("/api/v1")
+
+	// Health check (public)
+	api.Get("/health", s.healthCheck)
 
 	// Auth routes (public)
 	authGroup := api.Group("/auth")
@@ -50,11 +55,118 @@ func (s *Server) setupRoutes() {
 
 	// Sync route - imports Claude CLI history to database
 	protected.Post("/sync", s.syncHandler.Sync)
+
+	// Session management - delete Claude CLI session for a conversation
+	protected.Delete("/conversations/:id/session", s.deleteSession)
+
+	// Direct session deletion by session ID and path (for Claude History sessions not in DB)
+	protected.Delete("/sessions/:sessionId", s.deleteSessionDirect)
 }
 
 func (s *Server) healthCheck(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status":  "ok",
 		"service": "claude-code-native",
+	})
+}
+
+// deleteSession deletes the Claude CLI session files for a conversation
+// This allows starting a fresh session without previous conversation context
+func (s *Server) deleteSession(c *fiber.Ctx) error {
+	// Get conversation ID from URL
+	convIDStr := c.Params("id")
+	convID, err := uuid.FromString(convIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid conversation ID",
+		})
+	}
+
+	// Get user ID from context (set by auth middleware)
+	userIDStr, ok := c.Locals("userID").(string)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "user not authenticated",
+		})
+	}
+	userID, err := uuid.FromString(userIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "invalid user ID",
+		})
+	}
+
+	// Get conversation to find project
+	conv, err := s.convRepo.FindByID(c.Context(), convID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "conversation not found",
+		})
+	}
+
+	// Get project to verify ownership and get path
+	proj, err := s.projectRepo.FindByID(c.Context(), conv.ProjectID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "project not found",
+		})
+	}
+
+	// Verify user owns this project
+	if proj.UserID != userID {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "access denied",
+		})
+	}
+
+	// Delete the Claude CLI session
+	if err := s.claudeMgr.DeleteSession(convID, proj.Path); err != nil {
+		s.logger.Warn("failed to delete claude session",
+			zap.String("conversationID", convID.String()),
+			zap.Error(err))
+		// Don't return error - session might already be deleted or not exist
+	}
+
+	s.logger.Info("claude session deleted",
+		zap.String("conversationID", convID.String()),
+		zap.String("projectPath", proj.Path))
+
+	return c.JSON(fiber.Map{
+		"message": "session deleted successfully",
+	})
+}
+
+// deleteSessionDirect deletes Claude CLI session files directly by session ID and project path
+// This is for Claude History sessions that may not be in the database
+func (s *Server) deleteSessionDirect(c *fiber.Ctx) error {
+	sessionIDStr := c.Params("sessionId")
+	sessionID, err := uuid.FromString(sessionIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid session ID",
+		})
+	}
+
+	// Get project path from query parameter
+	projectPath := c.Query("path")
+	if projectPath == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "project path is required",
+		})
+	}
+
+	// Delete the Claude CLI session
+	if err := s.claudeMgr.DeleteSession(sessionID, projectPath); err != nil {
+		s.logger.Warn("failed to delete claude session",
+			zap.String("sessionID", sessionID.String()),
+			zap.Error(err))
+	}
+
+	s.logger.Info("claude session deleted directly",
+		zap.String("sessionID", sessionID.String()),
+		zap.String("projectPath", projectPath))
+
+	return c.JSON(fiber.Map{
+		"message": "session deleted successfully",
 	})
 }

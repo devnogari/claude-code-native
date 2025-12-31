@@ -1,6 +1,7 @@
 package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.ApiClient
+import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.MessageApi
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.data.websocket.ConnectionState
@@ -51,6 +52,7 @@ class ChatViewModel(
     private val webSocketClient: WebSocketClient,
     private val apiClient: ApiClient,
     private val messageApi: MessageApi,
+    private val conversationApi: ConversationApi,
     private val scope: CoroutineScope
 ) {
     private val mutex = Mutex()
@@ -254,6 +256,35 @@ class ChatViewModel(
         scope.launch {
             mutex.withLock {
                 _messages.value = emptyList()
+            }
+        }
+    }
+
+    /**
+     * Deletes the Claude CLI session for the current conversation.
+     * This removes session files from ~/.claude/ allowing a fresh start.
+     *
+     * @param onSuccess Callback when deletion succeeds
+     * @param onError Callback when deletion fails
+     */
+    fun deleteSession(onSuccess: () -> Unit = {}, onError: (String) -> Unit = {}) {
+        val convId = currentConversationId ?: run {
+            onError("No conversation selected")
+            return
+        }
+
+        scope.launch {
+            try {
+                conversationApi.deleteSession(convId)
+                // Clear local messages after session deletion
+                mutex.withLock {
+                    _messages.value = emptyList()
+                }
+                onSuccess()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onError(e.toUserMessage())
             }
         }
     }
