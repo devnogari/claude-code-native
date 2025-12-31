@@ -155,12 +155,30 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 		return
 	}
 
+	// Determine the Claude session ID to use
+	// If conversation was synced from Claude history, use the original session ID
+	// Otherwise, use the conversation ID as session ID
+	var claudeSessionID uuid.UUID
+	if conv.ClaudeSession != nil && *conv.ClaudeSession != "" {
+		parsedID, err := uuid.FromString(*conv.ClaudeSession)
+		if err == nil {
+			claudeSessionID = parsedID
+			h.logger.Debug("using claude session from sync",
+				zap.String("conversationID", convID.String()),
+				zap.String("claudeSession", claudeSessionID.String()))
+		} else {
+			claudeSessionID = convID
+		}
+	} else {
+		claudeSessionID = convID
+	}
+
 	// Create a new client
 	client := NewClient(userID, convID, c)
 
-	// Store the project path in client for later use
-	// We can use the Client's Conn.Locals for this
+	// Store the project path and claude session ID in client for later use
 	c.Locals("projectPath", proj.Path)
+	c.Locals("claudeSessionID", claudeSessionID.String())
 
 	h.logger.Info("client connected",
 		zap.String("clientID", client.ID.String()),
@@ -184,12 +202,12 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 
 	// Start read and write pumps
 	go h.writePump(client)
-	h.readPump(client, proj.Path)
+	h.readPump(client, proj.Path, claudeSessionID)
 }
 
 // readPump reads messages from the WebSocket connection
 // Note: Client unregistration is handled by HandleConnection's defer, not here
-func (h *Handler) readPump(client *Client, projectPath string) {
+func (h *Handler) readPump(client *Client, projectPath string, claudeSessionID uuid.UUID) {
 	client.Conn.SetReadLimit(maxMessageSize)
 	_ = client.Conn.SetReadDeadline(time.Now().Add(pongWait))
 	client.Conn.SetPongHandler(func(string) error {
@@ -219,7 +237,7 @@ func (h *Handler) readPump(client *Client, projectPath string) {
 		}
 
 		// Handle message based on type
-		h.handleMessage(client, &msg, projectPath)
+		h.handleMessage(client, &msg, projectPath, claudeSessionID)
 	}
 }
 
@@ -258,12 +276,12 @@ func (h *Handler) writePump(client *Client) {
 }
 
 // handleMessage routes incoming messages to appropriate handlers
-func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPath string) {
+func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPath string, claudeSessionID uuid.UUID) {
 	switch msg.Type {
 	case MessageTypeChat:
-		h.handleChatMessage(client, msg.Content, projectPath)
+		h.handleChatMessage(client, msg.Content, projectPath, claudeSessionID)
 	case MessageTypeStop:
-		h.handleStopMessage(client)
+		h.handleStopMessage(client, claudeSessionID)
 	case MessageTypePing:
 		h.handlePingMessage(client)
 	default:
@@ -275,7 +293,7 @@ func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPat
 }
 
 // handleChatMessage processes a chat message from the client
-func (h *Handler) handleChatMessage(client *Client, content, projectPath string) {
+func (h *Handler) handleChatMessage(client *Client, content, projectPath string, claudeSessionID uuid.UUID) {
 	if content == "" {
 		h.sendErrorToClient(client, "empty message content")
 		return
@@ -292,9 +310,12 @@ func (h *Handler) handleChatMessage(client *Client, content, projectPath string)
 	h.logger.Info("received chat message",
 		zap.String("clientID", client.ID.String()),
 		zap.String("conversationID", convID.String()),
-		zap.Int("contentLength", len(content)))
+		zap.String("claudeSessionID", claudeSessionID.String()),
+		zap.Int("contentLength", len(content)),
+		zap.String("projectPath", projectPath))
 
 	// Get next sequence number
+	h.logger.Debug("getting max sequence number")
 	maxSeq, err := h.msgRepo.GetMaxSequenceNum(ctx, convID)
 	if err != nil {
 		h.logger.Error("failed to get max sequence number", zap.Error(err))
@@ -318,41 +339,52 @@ func (h *Handler) handleChatMessage(client *Client, content, projectPath string)
 
 	// Send status update
 	h.sendStatusToClient(client, "processing")
+	h.logger.Debug("sent processing status")
 
 	// Get or create Claude process for this conversation
-	process, err := h.claudeMgr.CreateProcess(convID, projectPath, nil)
+	// Use claudeSessionID (from ClaudeSession if synced, or convID if new)
+	h.logger.Debug("creating claude process",
+		zap.String("projectPath", projectPath),
+		zap.String("claudeSessionID", claudeSessionID.String()))
+	process, err := h.claudeMgr.CreateProcess(claudeSessionID, projectPath, nil)
 	if err != nil {
 		h.logger.Error("failed to create claude process", zap.Error(err))
 		h.sendErrorToClient(client, "failed to start Claude")
 		return
 	}
 
-	// Check if process is already running, if not it needs to be started
-	// Note: The actual CLI starting logic will be implemented in Task 3.5
-	if process.GetStatus() == claude.ProcessStatusIdle {
-		process.SetStatus(claude.ProcessStatusRunning)
-		// TODO: Task 3.5 will implement the actual process.Start() method
-		// that launches the claude CLI subprocess
+	// Check if process is already running (shouldn't happen with new design)
+	if process.GetStatus() == claude.ProcessStatusRunning {
+		h.logger.Warn("process already running, waiting for completion",
+			zap.String("claudeSessionID", claudeSessionID.String()))
+		h.sendErrorToClient(client, "previous request still processing")
+		return
 	}
 
-	// Send the message to Claude's input channel
-	process.SendInput(content)
+	// Start Claude with the prompt
+	// Uses --resume flag if session file exists, --session-id for new sessions
+	h.logger.Debug("starting claude with prompt", zap.Int("promptLen", len(content)))
+	if err := process.StartWithPrompt(content); err != nil {
+		h.logger.Error("failed to start claude process", zap.Error(err))
+		h.sendErrorToClient(client, "failed to start Claude CLI")
+		return
+	}
+	h.logger.Info("claude process started successfully",
+		zap.String("claudeSessionID", claudeSessionID.String()))
 
 	// Stream process output to client
 	go h.streamProcessOutput(client, process)
 }
 
 // handleStopMessage stops the current Claude process
-func (h *Handler) handleStopMessage(client *Client) {
-	convID := client.ConversationID
-
+func (h *Handler) handleStopMessage(client *Client, claudeSessionID uuid.UUID) {
 	h.logger.Info("stopping claude process",
 		zap.String("clientID", client.ID.String()),
-		zap.String("conversationID", convID.String()))
+		zap.String("claudeSessionID", claudeSessionID.String()))
 
-	if err := h.claudeMgr.StopProcess(convID); err != nil {
+	if err := h.claudeMgr.StopProcess(claudeSessionID); err != nil {
 		h.logger.Warn("failed to stop claude process",
-			zap.String("conversationID", convID.String()),
+			zap.String("claudeSessionID", claudeSessionID.String()),
 			zap.Error(err))
 	}
 
@@ -391,17 +423,20 @@ streamLoop:
 				break streamLoop
 			}
 
-			// Only accumulate stdout content as the response
+			// Parse stream-json output and extract displayable text
 			if output.Type == "stdout" {
-				assistantContent += output.Content
-			}
+				text, isDisplayable := claude.ParseStreamJSON(output.Content)
+				if isDisplayable && text != "" {
+					assistantContent += text
 
-			// Send stream message to client with the content (check Done first)
-			select {
-			case <-client.Done:
-				break streamLoop
-			default:
-				h.sendStreamToClient(client, output.Content)
+					// Send stream message to client with the parsed text
+					select {
+					case <-client.Done:
+						break streamLoop
+					default:
+						h.sendStreamToClient(client, text)
+					}
+				}
 			}
 
 		case err, ok := <-process.Error:
