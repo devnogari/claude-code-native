@@ -26,15 +26,3 @@ updates:
       - "kotlin"
     open-pull-requests-limit: 10
 
-  # GitHub Actions
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    commit-message:
-      prefix: "chore(deps)"
-    labels:
-      - "dependencies"
-      - "github-actions"
-    open-pull-requests-limit: 5
