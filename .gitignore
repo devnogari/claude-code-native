@@ -41,3 +41,4 @@ backend/bin/
 
 # Git worktrees
 .worktrees/
+.serena/cache
