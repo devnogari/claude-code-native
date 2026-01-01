@@ -14,6 +14,8 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,6 +80,11 @@ fun ProjectListScreenContent(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val focusManager = LocalFocusManager.current
+
+    // Clear focus on initial composition to prevent keyboard from showing
+    LaunchedEffect(Unit) {
+        focusManager.clearFocus()
+    }
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var deleteSessionTarget by remember { mutableStateOf<Triple<String, String, String?>?>(null) } // sessionId, projectPath, sourceEncodedPath
@@ -164,6 +171,9 @@ fun ProjectListScreenContent(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { focusManager.clearFocus() })
+                }
         ) {
             // Search bar
             OutlinedTextField(

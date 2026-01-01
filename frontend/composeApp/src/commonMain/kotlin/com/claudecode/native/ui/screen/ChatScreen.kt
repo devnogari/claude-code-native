@@ -117,6 +117,11 @@ fun ChatScreenContent(
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
+    // Clear focus on initial composition to prevent keyboard from showing
+    LaunchedEffect(Unit) {
+        focusManager.clearFocus()
+    }
+
     // Track if user is at bottom of the list (for showing scroll button and auto-scroll)
     // With reverseLayout=true, index 0 is at the bottom (most recent messages)
     val isAtBottom by remember {
