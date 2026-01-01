@@ -187,6 +187,17 @@ fun AppNavigation() {
                     // Trigger project list refresh when a new session is created
                     refreshTrigger++
                 },
+                onNewSession = {
+                    // Extract project from current conversationId and start new draft session
+                    selectedConversationId?.let { convId ->
+                        val encodedPath = convId.substringAfter("project=", "")
+                        if (encodedPath.isNotEmpty()) {
+                            currentScreen = Screen.Chat("draft?project=$encodedPath")
+                        } else {
+                            println("App: Cannot create new session - no project path in conversationId: $convId")
+                        }
+                    }
+                },
                 listContent = { onConversationSelected, onSettingsClick ->
                     ProjectListScreenContent(
                         onConversationSelected = onConversationSelected,
@@ -194,11 +205,12 @@ fun AppNavigation() {
                         refreshTrigger = refreshTrigger
                     )
                 },
-                detailContent = { conversationId, onBack, onSessionCreated ->
+                detailContent = { conversationId, onBack, onSessionCreated, onNewSession ->
                     ChatScreenContent(
                         conversationId = conversationId,
                         onBack = onBack,
-                        onSessionCreated = onSessionCreated
+                        onSessionCreated = onSessionCreated,
+                        onNewSession = onNewSession
                     )
                 }
             )

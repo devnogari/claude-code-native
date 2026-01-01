@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
@@ -105,6 +106,7 @@ fun ChatScreen(
  * @param viewModel ViewModel injected via Koin
  * @param onBack Callback when user wants to navigate back
  * @param onSessionCreated Callback when a new session is created from draft mode (for refreshing sidebar)
+ * @param onNewSession Callback when user wants to start a new session (disabled during draft sessions)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,7 +114,8 @@ fun ChatScreenContent(
     conversationId: String,
     viewModel: ChatViewModel = koinInject(),
     onBack: () -> Unit = {},
-    onSessionCreated: () -> Unit = {}
+    onSessionCreated: () -> Unit = {},
+    onNewSession: () -> Unit = {}
 ) {
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -381,6 +384,20 @@ fun ChatScreenContent(
                     }
                 },
                 actions = {
+                    // New Session button - disabled for draft sessions (not yet created)
+                    IconButton(
+                        onClick = onNewSession,
+                        enabled = !isDraftSession
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = "New Session",
+                            tint = if (isDraftSession)
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            else
+                                MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                     // Stop button when streaming
                     androidx.compose.animation.AnimatedVisibility(
                         visible = isStreaming,
