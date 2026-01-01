@@ -101,13 +101,15 @@ fun ChatScreen(
  * @param conversationId The conversation to connect to
  * @param viewModel ViewModel injected via Koin
  * @param onBack Callback when user wants to navigate back
+ * @param onSessionCreated Callback when a new session is created from draft mode (for refreshing sidebar)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreenContent(
     conversationId: String,
     viewModel: ChatViewModel = koinInject(),
-    onBack: () -> Unit = {}
+    onBack: () -> Unit = {},
+    onSessionCreated: () -> Unit = {}
 ) {
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -158,6 +160,17 @@ fun ChatScreenContent(
     val error by viewModel.error.collectAsState()
     val conversationTitle by viewModel.conversationTitle.collectAsState()
     val scrollToBottomSignal by viewModel.scrollToBottomSignal.collectAsState()
+    val isDraftSession by viewModel.isDraftSession.collectAsState()
+    val sessionCreatedEvent by viewModel.sessionCreatedEvent.collectAsState()
+
+    // Notify when a new session is created from draft mode
+    LaunchedEffect(sessionCreatedEvent) {
+        if (sessionCreatedEvent != null) {
+            println("ChatScreen: Session created event received: $sessionCreatedEvent")
+            onSessionCreated()
+            viewModel.clearSessionCreatedEvent()
+        }
+    }
 
     // Command state
     val availableCommands by viewModel.availableCommands.collectAsState()
@@ -666,11 +679,12 @@ fun ChatScreenContent(
             )
 
             // Input area
+            // Allow input in draft mode even when not connected (session will be created on first send)
             ChatInputBar(
                 inputText = inputText,
                 onInputChange = { inputText = it },
                 isStreaming = isStreaming,
-                isConnected = connectionState == ConnectionState.Connected,
+                isConnected = connectionState == ConnectionState.Connected || isDraftSession,
                 onSend = {
                     // Check if it's a slash command
                     if (inputText.startsWith("/")) {

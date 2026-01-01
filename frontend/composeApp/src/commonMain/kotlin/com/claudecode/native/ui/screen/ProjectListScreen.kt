@@ -66,13 +66,15 @@ fun ProjectListScreen(
  * @param viewModel ViewModel injected via Koin
  * @param onConversationSelected Callback when a conversation is ready
  * @param onSettingsClick Callback when settings is clicked
+ * @param refreshTrigger Counter to trigger refresh when incremented (for external refresh requests)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProjectListScreenContent(
     viewModel: ProjectListViewModel = koinInject(),
     onConversationSelected: (String) -> Unit,
-    onSettingsClick: () -> Unit = {}
+    onSettingsClick: () -> Unit = {},
+    refreshTrigger: Int = 0
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val focusManager = LocalFocusManager.current
@@ -80,6 +82,14 @@ fun ProjectListScreenContent(
     var showCreateDialog by remember { mutableStateOf(false) }
     var deleteSessionTarget by remember { mutableStateOf<Pair<String, String>?>(null) } // sessionId, projectPath
     var deleteResultMessage by remember { mutableStateOf<String?>(null) }
+
+    // Refresh projects when refreshTrigger changes (e.g., when a new session is created)
+    LaunchedEffect(refreshTrigger) {
+        if (refreshTrigger > 0) {
+            println("ProjectListScreen: Refreshing due to external trigger")
+            viewModel.refresh()
+        }
+    }
 
     // Auto-dismiss delete result message
     if (deleteResultMessage != null) {
