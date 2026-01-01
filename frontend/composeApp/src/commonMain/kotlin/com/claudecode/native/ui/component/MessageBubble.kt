@@ -1191,15 +1191,21 @@ private fun StreamingToolItem(
 
 /**
  * Displays a queued message bubble for messages waiting to be processed.
- * Shows the message content with a "Queued" indicator.
+ * Shows the message content with a "Queued" indicator and cancel button.
  * Right-aligned like user messages but with a different visual style.
  *
  * @param content The queued message content
+ * @param position Position in the queue (1-based, null if not applicable)
+ * @param isFromCli Whether this message was queued from Claude CLI (terminal)
+ * @param onCancel Callback when user cancels this queued message (null if not cancellable)
  * @param modifier Optional modifier for the component
  */
 @Composable
 fun QueuedMessageBubble(
     content: String,
+    position: Int? = null,
+    isFromCli: Boolean = false,
+    onCancel: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -1209,6 +1215,8 @@ fun QueuedMessageBubble(
     if (showInspectDialog) {
         QueuedInspectDialog(
             content = content,
+            position = position,
+            isFromCli = isFromCli,
             onDismiss = { showInspectDialog = false }
         )
     }
@@ -1236,16 +1244,17 @@ fun QueuedMessageBubble(
                 )
             }
 
-            // Menu button
-            InspectMenuButton(
+            // Menu button with cancel option
+            QueuedMessageMenuButton(
                 showMenu = showMenu,
                 onShowMenuChange = { showMenu = it },
                 onInspectClick = { showInspectDialog = true },
-                compact = true
+                onCancelClick = onCancel,
+                canCancel = onCancel != null && !isFromCli
             )
         }
 
-        // Queued indicator
+        // Queued indicator with position
         Row(
             modifier = Modifier.padding(top = 4.dp, end = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1256,11 +1265,73 @@ fun QueuedMessageBubble(
                 strokeWidth = 1.5.dp,
                 color = MaterialTheme.colorScheme.outline
             )
+            val statusText = buildString {
+                append("Queued")
+                if (position != null) {
+                    append(" #$position")
+                }
+                if (isFromCli) {
+                    append(" (CLI)")
+                }
+            }
             Text(
-                text = "Queued",
+                text = statusText,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline
             )
+        }
+    }
+}
+
+/**
+ * Menu button for queued messages with inspect and cancel options.
+ */
+@Composable
+private fun QueuedMessageMenuButton(
+    showMenu: Boolean,
+    onShowMenuChange: (Boolean) -> Unit,
+    onInspectClick: () -> Unit,
+    onCancelClick: (() -> Unit)?,
+    canCancel: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier) {
+        IconButton(
+            onClick = { onShowMenuChange(true) },
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "Menu",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.outline
+            )
+        }
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { onShowMenuChange(false) }
+        ) {
+            DropdownMenuItem(
+                text = { Text("Inspect") },
+                onClick = {
+                    onShowMenuChange(false)
+                    onInspectClick()
+                }
+            )
+            if (canCancel && onCancelClick != null) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "Cancel",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    },
+                    onClick = {
+                        onShowMenuChange(false)
+                        onCancelClick()
+                    }
+                )
+            }
         }
     }
 }
@@ -1271,6 +1342,8 @@ fun QueuedMessageBubble(
 @Composable
 private fun QueuedInspectDialog(
     content: String,
+    position: Int?,
+    isFromCli: Boolean,
     onDismiss: () -> Unit
 ) {
     val scrollState = rememberScrollState()
@@ -1286,7 +1359,8 @@ private fun QueuedInspectDialog(
                     .verticalScroll(scrollState),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                PayloadField("Status", "Queued")
+                PayloadField("Status", "Queued" + if (position != null) " #$position" else "")
+                PayloadField("Source", if (isFromCli) "Claude CLI (Terminal)" else "This App")
                 PayloadField("Content Length", "${content.length} chars")
 
                 // Content
