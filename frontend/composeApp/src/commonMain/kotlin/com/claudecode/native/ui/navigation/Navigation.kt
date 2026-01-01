@@ -7,6 +7,11 @@ package com.claudecode.native.ui.navigation
  */
 sealed class Screen(val route: String) {
     /**
+     * Host setup screen - configure server host before login.
+     */
+    data object HostSetup : Screen("host-setup")
+
+    /**
      * Login screen - entry point for authentication.
      */
     data object Login : Screen("login")
@@ -27,9 +32,4 @@ sealed class Screen(val route: String) {
      * Settings screen - app configuration and preferences.
      */
     data object Settings : Screen("settings")
-
-    /**
-     * Claude Code history screen - browse local Claude Code conversations.
-     */
-    data object ClaudeHistory : Screen("claude-history")
 }

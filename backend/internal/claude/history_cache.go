@@ -84,6 +84,12 @@ func (c *HistoryCache) GetProjects() []ClaudeProject {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	// Debug: check specific project
+	if p, ok := c.projects["-Users-probe-git-devnogari-claude-code-native-frontend"]; ok {
+		c.logger.Info("GetProjects: frontend project in cache",
+			zap.Int("sessions", len(p.Sessions)))
+	}
+
 	projects := make([]ClaudeProject, 0, len(c.projects))
 	for _, p := range c.projects {
 		projects = append(projects, *p)
@@ -151,11 +157,23 @@ func (c *HistoryCache) loadAll() error {
 		encodedPath := entry.Name()
 		if project, err := c.loadProject(encodedPath); err == nil {
 			c.projects[encodedPath] = project
+			// Debug: log projects with inherited sessions
+			if len(project.Sessions) > 0 && strings.Contains(encodedPath, "frontend") {
+				c.logger.Info("loaded project with sessions",
+					zap.String("project", encodedPath),
+					zap.Int("sessions", len(project.Sessions)))
+			}
 		}
 	}
 
 	c.logger.Info("loaded claude history cache",
 		zap.Int("projects", len(c.projects)))
+
+	// Debug: verify specific project
+	if p, ok := c.projects["-Users-probe-git-devnogari-claude-code-native-frontend"]; ok {
+		c.logger.Info("verification: frontend project in cache",
+			zap.Int("sessions", len(p.Sessions)))
+	}
 
 	return nil
 }
@@ -163,11 +181,30 @@ func (c *HistoryCache) loadAll() error {
 // loadProject loads a single project
 func (c *HistoryCache) loadProject(encodedPath string) (*ClaudeProject, error) {
 	projectDir := filepath.Join(c.basePath, encodedPath)
-	projectPath := decodeProjectPath(encodedPath)
+	projectPath := DecodeProjectPath(encodedPath)
 
 	sessions, lastAccessed, err := c.loadSessions(projectDir)
 	if err != nil {
 		return nil, err
+	}
+
+	// If no sessions found, try to inherit from parent project
+	// (Claude CLI stores sessions in git root, not subdirectories)
+	if len(sessions) == 0 {
+		c.logger.Debug("no sessions found, trying parent lookup",
+			zap.String("project", encodedPath))
+		if parentSessions, parentLastAccessed := c.findParentProjectSessions(encodedPath); len(parentSessions) > 0 {
+			sessions = parentSessions
+			if parentLastAccessed.After(lastAccessed) {
+				lastAccessed = parentLastAccessed
+			}
+			c.logger.Info("inherited sessions from parent project",
+				zap.String("project", encodedPath),
+				zap.Int("sessions", len(sessions)))
+		} else {
+			c.logger.Debug("no parent sessions found",
+				zap.String("project", encodedPath))
+		}
 	}
 
 	name := filepath.Base(projectPath)
@@ -187,6 +224,38 @@ func (c *HistoryCache) loadProject(encodedPath string) (*ClaudeProject, error) {
 		Sessions:     sessions,
 		LastAccessed: lastAccessed,
 	}, nil
+}
+
+// findParentProjectSessions looks for sessions in parent project directories
+// This handles the case where Claude CLI stores sessions in git root, not subdirectories
+func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSession, time.Time) {
+	// Try removing path segments from the end to find parent project
+	parts := strings.Split(encodedPath, "-")
+
+	c.logger.Debug("looking for parent sessions",
+		zap.String("encodedPath", encodedPath),
+		zap.Int("parts", len(parts)))
+
+	for i := len(parts) - 1; i > 1; i-- {
+		parentEncodedPath := strings.Join(parts[:i], "-")
+		parentDir := filepath.Join(c.basePath, parentEncodedPath)
+
+		c.logger.Debug("checking parent dir",
+			zap.String("parentEncodedPath", parentEncodedPath),
+			zap.String("parentDir", parentDir))
+
+		// Check if parent project directory exists
+		if info, err := os.Stat(parentDir); err == nil && info.IsDir() {
+			if sessions, lastAccessed, err := c.loadSessions(parentDir); err == nil && len(sessions) > 0 {
+				c.logger.Info("found parent sessions",
+					zap.String("parentDir", parentDir),
+					zap.Int("sessions", len(sessions)))
+				return sessions, lastAccessed
+			}
+		}
+	}
+
+	return nil, time.Time{}
 }
 
 // loadSessions loads sessions for a project directory
@@ -222,6 +291,12 @@ func (c *HistoryCache) loadSessions(projectDir string) ([]ClaudeSession, time.Ti
 		firstMsg := extractFirstUserMessage(messages)
 		createdAt := extractCreatedAt(messages)
 		modTime := info.ModTime()
+		messageCount := countUserAssistantMessages(messages)
+
+		// Skip sessions with 0 messages
+		if messageCount == 0 {
+			continue
+		}
 
 		if modTime.After(lastAccessed) {
 			lastAccessed = modTime
@@ -230,7 +305,7 @@ func (c *HistoryCache) loadSessions(projectDir string) ([]ClaudeSession, time.Ti
 		sessions = append(sessions, ClaudeSession{
 			ID:           sessionID,
 			Filename:     entry.Name(),
-			MessageCount: countUserAssistantMessages(messages),
+			MessageCount: messageCount,
 			FirstMessage: truncateString(firstMsg, 100),
 			CreatedAt:    createdAt,
 			UpdatedAt:    modTime,
@@ -522,7 +597,7 @@ func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath str
 		return
 	}
 
-	// Read current messages
+	// Read current messages (all messages including queue-operation)
 	messages, err := c.GetSessionMessages(encodedPath, sessionID)
 	if err != nil {
 		c.logger.Error("failed to read session for notification",
@@ -531,10 +606,15 @@ func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath str
 		return
 	}
 
-	// Filter user/assistant messages
+	// Filter user/assistant messages AND queue-operation events
 	var filtered []ClaudeMessage
 	for _, msg := range messages {
+		// Include user/assistant messages
 		if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
+			filtered = append(filtered, msg)
+		}
+		// Also include queue-operation events (for queued message display)
+		if msg.Type == "queue-operation" {
 			filtered = append(filtered, msg)
 		}
 	}

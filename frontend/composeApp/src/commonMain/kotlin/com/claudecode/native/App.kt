@@ -16,14 +16,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.claudecode.native.data.api.ApiClient
-import com.claudecode.native.data.api.ProjectApi
+import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.repository.ThemeRepository
 import com.claudecode.native.di.appModule
 import com.claudecode.native.ui.layout.AdaptiveProjectLayout
 import com.claudecode.native.ui.navigation.BrowserHistory
 import com.claudecode.native.ui.navigation.Screen
+import com.claudecode.native.data.storage.TokenStorage
 import com.claudecode.native.ui.screen.ChatScreen
 import com.claudecode.native.ui.screen.ChatScreenContent
+import com.claudecode.native.ui.screen.HostSetupScreen
 import com.claudecode.native.ui.screen.LoginScreen
 import com.claudecode.native.ui.screen.ProjectListScreen
 import com.claudecode.native.ui.screen.ProjectListScreenContent
@@ -56,6 +58,7 @@ fun App() {
  */
 private fun parsePathToScreen(path: String): Screen {
     return when {
+        path == "/host-setup" -> Screen.HostSetup
         path == "/" || path == "/login" -> Screen.Login
         path == "/projects" -> Screen.ProjectList
         path == "/settings" -> Screen.Settings
@@ -72,27 +75,40 @@ private fun parsePathToScreen(path: String): Screen {
  *
  * Uses state-based navigation with [Screen] sealed class.
  * Syncs with browser URL on WASM platform.
- * Checks for saved token on startup and auto-navigates to ProjectList if valid.
+ * Checks for host configuration first, then for saved token on startup.
  */
 @Composable
 fun AppNavigation() {
     val apiClient: ApiClient = koinInject()
-    val projectApi: ProjectApi = koinInject()
+    val claudeHistoryApi: ClaudeHistoryApi = koinInject()
 
-    // Track if we've checked the token yet
-    var isCheckingToken by remember { mutableStateOf(true) }
+    // Track if we've completed initial checks
+    var isInitializing by remember { mutableStateOf(true) }
 
     // Initialize from current browser path
     val initialPath = BrowserHistory.getCurrentPath()
     var currentScreen: Screen by remember { mutableStateOf(parsePathToScreen(initialPath)) }
 
-    // Check for saved token on startup
+    // Check for host configuration and saved token on startup
     LaunchedEffect(Unit) {
+        // First check if server host is configured
+        val serverHost = TokenStorage.getServerHost()
+        if (serverHost == null) {
+            // No host configured, show host setup screen
+            currentScreen = Screen.HostSetup
+            isInitializing = false
+            return@LaunchedEffect
+        }
+
+        // Host is configured, update ApiClient server host
+        apiClient.updateServerHost(serverHost)
+
+        // Now check for saved token
         val savedToken = apiClient.getAuthToken()
         if (savedToken != null) {
             // Try to validate the token by making an API call
             try {
-                projectApi.getProjects()
+                claudeHistoryApi.getProjects()
                 // Token is valid, navigate to ProjectList
                 currentScreen = Screen.ProjectList
             } catch (e: Exception) {
@@ -100,8 +116,10 @@ fun AppNavigation() {
                 apiClient.clearAuthToken()
                 currentScreen = Screen.Login
             }
+        } else {
+            currentScreen = Screen.Login
         }
-        isCheckingToken = false
+        isInitializing = false
     }
 
     // Handle browser back/forward
@@ -117,8 +135,8 @@ fun AppNavigation() {
         BrowserHistory.pushState("/${currentScreen.route}")
     }
 
-    // Show loading indicator while checking token
-    if (isCheckingToken) {
+    // Show loading indicator while initializing
+    if (isInitializing) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -129,6 +147,19 @@ fun AppNavigation() {
     }
 
     when (val screen = currentScreen) {
+        is Screen.HostSetup -> {
+            HostSetupScreen(
+                onHostConfigured = {
+                    // After host is configured, update ApiClient and go to login
+                    val configuredHost = TokenStorage.getServerHost()
+                    if (configuredHost != null) {
+                        apiClient.updateServerHost(configuredHost)
+                    }
+                    currentScreen = Screen.Login
+                }
+            )
+        }
+
         is Screen.Login -> {
             LoginScreen(
                 onLoginSuccess = {
@@ -173,11 +204,6 @@ fun AppNavigation() {
                     currentScreen = Screen.Login
                 }
             )
-        }
-
-        is Screen.ClaudeHistory -> {
-            // History is now integrated into ProjectListScreen
-            currentScreen = Screen.ProjectList
         }
     }
 }

@@ -57,6 +57,21 @@ func (h *HistoryHandler) ListProjects(c *fiber.Ctx) error {
 	projects := h.cache.GetProjects()
 	h.logger.Info("Got projects from cache", zap.Int("count", len(projects)))
 
+	// Debug: log sessions for claude-code-native
+	for _, p := range projects {
+		if p.Name == "claude-code-native" {
+			h.logger.Info("DEBUG: claude-code-native sessions",
+				zap.Int("count", len(p.Sessions)))
+			for _, s := range p.Sessions {
+				h.logger.Info("DEBUG: session",
+					zap.String("id", s.ID[:8]),
+					zap.Int("messageCount", s.MessageCount),
+					zap.String("firstMsg", truncateString(s.FirstMessage, 30)))
+			}
+			break
+		}
+	}
+
 	// Return empty array if no projects found
 	if projects == nil {
 		projects = []ClaudeProject{}

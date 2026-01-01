@@ -81,6 +81,7 @@ fun MarkdownText(
 
 /**
  * Displays a code block with syntax highlighting background.
+ * Supports diff syntax highlighting with colored +/- lines.
  */
 @Composable
 private fun CodeBlockView(
@@ -89,6 +90,11 @@ private fun CodeBlockView(
     backgroundColor: Color,
     textColor: Color
 ) {
+    // Detect if this is a diff block
+    val isDiff = language == "diff" || code.lines().any { line ->
+        line.startsWith("+") || line.startsWith("-") || line.startsWith("@@")
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -108,13 +114,68 @@ private fun CodeBlockView(
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
         ) {
+            if (isDiff) {
+                // Render diff with colored lines
+                DiffCodeBlock(
+                    code = code.trimEnd(),
+                    textColor = textColor
+                )
+            } else {
+                Text(
+                    text = code.trimEnd(),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 20.sp
+                    ),
+                    color = textColor
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Renders diff code with colored lines.
+ * - Lines starting with + are green (additions)
+ * - Lines starting with - are red (deletions)
+ * - Lines starting with @@ are blue (hunk headers)
+ */
+@Composable
+private fun DiffCodeBlock(
+    code: String,
+    textColor: Color
+) {
+    val additionColor = Color(0xFF22C55E) // Green
+    val deletionColor = Color(0xFFEF4444) // Red
+    val hunkHeaderColor = Color(0xFF60A5FA) // Blue
+    val additionBgColor = Color(0xFF22C55E).copy(alpha = 0.15f)
+    val deletionBgColor = Color(0xFFEF4444).copy(alpha = 0.15f)
+
+    Column {
+        code.lines().forEach { line ->
+            val (lineColor, bgColor) = when {
+                line.startsWith("+++") || line.startsWith("---") -> textColor.copy(alpha = 0.7f) to Color.Transparent
+                line.startsWith("+") -> additionColor to additionBgColor
+                line.startsWith("-") -> deletionColor to deletionBgColor
+                line.startsWith("@@") -> hunkHeaderColor to Color.Transparent
+                else -> textColor to Color.Transparent
+            }
+
             Text(
-                text = code.trimEnd(),
+                text = line,
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = FontFamily.Monospace,
                     lineHeight = 20.sp
                 ),
-                color = textColor
+                color = lineColor,
+                modifier = if (bgColor != Color.Transparent) {
+                    Modifier
+                        .fillMaxWidth()
+                        .background(bgColor)
+                        .padding(horizontal = 4.dp)
+                } else {
+                    Modifier.padding(horizontal = 4.dp)
+                }
             )
         }
     }
@@ -182,37 +243,42 @@ private fun parseInlineMarkdown(
     return buildAnnotatedString {
         var currentText = text
 
-        // Process headers first
+        // Process headers and list items first
         val lines = currentText.split('\n')
-        val processedLines = lines.mapIndexed { index, line ->
+        val processedLines = mutableListOf<String>()
+
+        for (line in lines) {
+            val trimmedLine = line.trimStart()
+            val leadingSpaces = line.length - trimmedLine.length
+            val indent = " ".repeat(leadingSpaces)
+
             when {
-                line.startsWith("### ") -> {
-                    appendLine(buildStyledLine(line.removePrefix("### "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.1f))
-                    ""
+                trimmedLine.startsWith("### ") -> {
+                    appendLine(buildStyledLine(trimmedLine.removePrefix("### "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.1f))
                 }
-                line.startsWith("## ") -> {
-                    appendLine(buildStyledLine(line.removePrefix("## "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.2f))
-                    ""
+                trimmedLine.startsWith("## ") -> {
+                    appendLine(buildStyledLine(trimmedLine.removePrefix("## "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.2f))
                 }
-                line.startsWith("# ") -> {
-                    appendLine(buildStyledLine(line.removePrefix("# "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.4f))
-                    ""
+                trimmedLine.startsWith("# ") -> {
+                    appendLine(buildStyledLine(trimmedLine.removePrefix("# "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.4f))
                 }
-                line.startsWith("- ") || line.startsWith("* ") -> {
-                    val bullet = "  • " + line.substring(2)
-                    bullet
+                trimmedLine.startsWith("- ") -> {
+                    processedLines.add("$indent  • ${trimmedLine.substring(2)}")
                 }
-                line.matches(Regex("^\\d+\\. .*")) -> {
-                    val match = Regex("^(\\d+)\\. (.*)").find(line)
+                trimmedLine.startsWith("* ") -> {
+                    processedLines.add("$indent  • ${trimmedLine.substring(2)}")
+                }
+                trimmedLine.matches(Regex("^\\d+\\. .*")) -> {
+                    val match = Regex("^(\\d+)\\. (.*)").find(trimmedLine)
                     if (match != null) {
-                        "  ${match.groupValues[1]}. ${match.groupValues[2]}"
+                        processedLines.add("$indent  ${match.groupValues[1]}. ${match.groupValues[2]}")
                     } else {
-                        line
+                        processedLines.add(line)
                     }
                 }
-                else -> line
+                else -> processedLines.add(line)
             }
-        }.filter { it.isNotEmpty() }
+        }
 
         if (processedLines.isNotEmpty()) {
             currentText = processedLines.joinToString("\n")
@@ -362,8 +428,8 @@ private fun findMatchingDelimiter(text: String, startIndex: Int, delimiter: Stri
     while (i < text.length) {
         if (text.substring(i).startsWith(delimiter) &&
             (delimiter.length == 1 || !text.substring(i).startsWith(delimiter + delimiter))) {
-            // Make sure it's not escaped and has content before it
-            if (i > startIndex && text[i - 1] != ' ' && text[i - 1] != '\n') {
+            // Make sure there's content between the delimiters
+            if (i > startIndex) {
                 return i
             }
         }

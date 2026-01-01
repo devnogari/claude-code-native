@@ -18,9 +18,9 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.claudecode.native.data.model.Conversation
+import com.claudecode.native.data.model.ClaudeProject
+import com.claudecode.native.data.model.ClaudeSession
 import com.claudecode.native.ui.viewmodel.ProjectListViewModel
-import com.claudecode.native.ui.viewmodel.ProjectWithConversations
 import com.claudecode.native.util.showFolderChooser
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -78,7 +78,7 @@ fun ProjectListScreenContent(
     val focusManager = LocalFocusManager.current
 
     var showCreateDialog by remember { mutableStateOf(false) }
-    var deleteSessionTarget by remember { mutableStateOf<Pair<String, String>?>(null) } // conversationId, projectPath
+    var deleteSessionTarget by remember { mutableStateOf<Pair<String, String>?>(null) } // sessionId, projectPath
     var deleteResultMessage by remember { mutableStateOf<String?>(null) }
 
     // Auto-dismiss delete result message
@@ -270,27 +270,25 @@ fun ProjectListScreenContent(
                         ) {
                             items(
                                 items = filteredProjects,
-                                key = { it.project.id }
-                            ) { pwc ->
+                                key = { it.id }
+                            ) { project ->
                                 ProjectItem(
-                                    projectWithConversations = pwc,
-                                    isFavorite = pwc.project.path in uiState.favorites,
-                                    isExpanded = pwc.project.id in uiState.expandedProjects,
+                                    project = project,
+                                    isFavorite = project.path in uiState.favorites,
+                                    isExpanded = project.id in uiState.expandedProjects,
                                     isLoading = uiState.isLoading,
-                                    onToggleExpand = { viewModel.toggleProjectExpanded(pwc.project.id) },
-                                    onToggleFavorite = { viewModel.toggleFavorite(pwc.project.path) },
-                                    onConversationClick = { conversation ->
-                                        viewModel.onConversationClick(conversation.id) { conversationId ->
-                                            onConversationSelected(conversationId)
+                                    onToggleExpand = { viewModel.toggleProjectExpanded(project.id) },
+                                    onToggleFavorite = { viewModel.toggleFavorite(project.path) },
+                                    onSessionClick = { session ->
+                                        viewModel.onSessionClick(session.id, project.encodedPath) { sessionId, encodedPath ->
+                                            onConversationSelected("$sessionId?project=$encodedPath")
                                         }
                                     },
-                                    onToggleConversationFavorite = { conversation ->
-                                        viewModel.toggleConversationFavorite(conversation.id)
+                                    onToggleSessionFavorite = { session ->
+                                        viewModel.toggleSessionFavorite(session.id, project.path)
                                     },
-                                    onDeleteSession = { conversation ->
-                                        // Use claudeSession if available, otherwise fall back to id
-                                        val sessionId = conversation.claudeSession ?: conversation.id
-                                        deleteSessionTarget = sessionId to pwc.project.path
+                                    onDeleteSession = { session ->
+                                        deleteSessionTarget = session.id to project.path
                                     }
                                 )
                             }
@@ -354,22 +352,21 @@ private fun EmptyProjectsState(
 }
 
 /**
- * Individual project item with expandable conversations.
+ * Individual project item with expandable sessions.
  */
 @Composable
 private fun ProjectItem(
-    projectWithConversations: ProjectWithConversations,
+    project: ClaudeProject,
     isFavorite: Boolean,
     isExpanded: Boolean,
     isLoading: Boolean,
     onToggleExpand: () -> Unit,
     onToggleFavorite: () -> Unit,
-    onConversationClick: (Conversation) -> Unit,
-    onToggleConversationFavorite: (Conversation) -> Unit,
-    onDeleteSession: (Conversation) -> Unit
+    onSessionClick: (ClaudeSession) -> Unit,
+    onToggleSessionFavorite: (ClaudeSession) -> Unit,
+    onDeleteSession: (ClaudeSession) -> Unit
 ) {
-    val project = projectWithConversations.project
-    val conversations = projectWithConversations.conversations
+    val sessions = project.sessions
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -417,15 +414,17 @@ private fun ProjectItem(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "${conversations.size} conversations",
+                            text = "${sessions.size} sessions",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Text(
-                            text = " - ${formatTimeAgo(project.updatedAt)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        project.lastAccessed?.let { lastAccessed ->
+                            Text(
+                                text = " - ${formatTimeAgo(lastAccessed)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
@@ -446,17 +445,17 @@ private fun ProjectItem(
                 )
             }
 
-            // Expanded conversations list
-            if (isExpanded && conversations.isNotEmpty()) {
+            // Expanded sessions list
+            if (isExpanded && sessions.isNotEmpty()) {
                 HorizontalDivider()
 
-                conversations.forEach { conversation ->
-                    ConversationItem(
-                        conversation = conversation,
+                sessions.forEach { session ->
+                    SessionItem(
+                        session = session,
                         isLoading = isLoading,
-                        onClick = { onConversationClick(conversation) },
-                        onToggleFavorite = { onToggleConversationFavorite(conversation) },
-                        onDeleteSession = { onDeleteSession(conversation) }
+                        onClick = { onSessionClick(session) },
+                        onToggleFavorite = { onToggleSessionFavorite(session) },
+                        onDeleteSession = { onDeleteSession(session) }
                     )
                 }
             }
@@ -465,11 +464,11 @@ private fun ProjectItem(
 }
 
 /**
- * Individual conversation item within a project.
+ * Individual session item within a project.
  */
 @Composable
-private fun ConversationItem(
-    conversation: Conversation,
+private fun SessionItem(
+    session: ClaudeSession,
     isLoading: Boolean,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
@@ -496,7 +495,7 @@ private fun ConversationItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = conversation.title?.ifBlank { null } ?: "Conversation ${conversation.id.take(8)}",
+                    text = session.firstMessage.ifBlank { "Session ${session.id.take(8)}" },
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
@@ -505,15 +504,17 @@ private fun ConversationItem(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "${conversation.messageCount} messages",
+                        text = "${session.messageCount} messages",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Text(
-                        text = " - ${formatTimeAgo(conversation.updatedAt)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    session.updatedAt?.let { updatedAt ->
+                        Text(
+                            text = " - ${formatTimeAgo(updatedAt)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -523,9 +524,9 @@ private fun ConversationItem(
                 modifier = Modifier.size(32.dp)
             ) {
                 Icon(
-                    imageVector = if (conversation.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = if (conversation.isFavorite) "Remove from favorites" else "Add to favorites",
-                    tint = if (conversation.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    imageVector = if (session.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = if (session.isFavorite) "Remove from favorites" else "Add to favorites",
+                    tint = if (session.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -545,7 +546,7 @@ private fun ConversationItem(
 
             Icon(
                 Icons.Default.ChevronRight,
-                contentDescription = "Open conversation",
+                contentDescription = "Open session",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

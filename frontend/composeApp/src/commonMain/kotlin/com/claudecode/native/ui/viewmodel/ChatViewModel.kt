@@ -28,19 +28,58 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
+ * Tool usage information for display in the UI.
+ *
+ * @param id Unique identifier for the tool use
+ * @param name Tool name (Read, Edit, Bash, etc.)
+ * @param summary Brief summary of the tool input
+ * @param result Full result content (shown when expanded)
+ * @param isError Whether the result is an error
+ */
+data class ToolUseInfo(
+    val id: String,
+    val name: String,
+    val summary: String,
+    val result: String? = null,
+    val isError: Boolean = false
+)
+
+/**
+ * Content block in a chat message, preserving the order of text and tool usages.
+ * Claude responses can interleave text and tool_use blocks, and this sealed class
+ * preserves that ordering for accurate display.
+ */
+sealed class ContentBlock {
+    /** Text content block */
+    data class Text(val content: String) : ContentBlock()
+    /** Tool usage block */
+    data class Tool(val info: ToolUseInfo) : ContentBlock()
+}
+
+/**
  * Chat message displayed in the UI.
  *
  * @param id Unique identifier for the message
  * @param role Who sent the message (user or assistant)
- * @param content The message text content
+ * @param blocks Ordered list of content blocks (text and tools interleaved)
  * @param isStreaming True if this message is currently being streamed
+ * @param isPending True if this message is pending confirmation from server (user messages only)
  */
 data class ChatMessage(
     val id: String,
     val role: MessageRole,
-    val content: String,
-    val isStreaming: Boolean = false
-)
+    val blocks: List<ContentBlock>,
+    val isStreaming: Boolean = false,
+    val isPending: Boolean = false
+) {
+    /** Convenience property: concatenated text content for searching/matching */
+    val content: String
+        get() = blocks.filterIsInstance<ContentBlock.Text>().joinToString("\n\n") { it.content }
+
+    /** Convenience property: list of tools for backwards compatibility */
+    val tools: List<ToolUseInfo>
+        get() = blocks.filterIsInstance<ContentBlock.Tool>().map { it.info }
+}
 
 /**
  * ViewModel for the chat screen, managing real-time messaging via WebSocket.
@@ -82,6 +121,18 @@ class ChatViewModel(
     /** Current content being streamed, updated incrementally. */
     val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
 
+    private val _streamingTools = MutableStateFlow<List<ToolUseInfo>>(emptyList())
+    /** Current tools being used during streaming. */
+    val streamingTools: StateFlow<List<ToolUseInfo>> = _streamingTools.asStateFlow()
+
+    private val _streamingBlocks = MutableStateFlow<List<ContentBlock>>(emptyList())
+    /** Ordered content blocks during streaming (text and tools interleaved). */
+    val streamingBlocks: StateFlow<List<ContentBlock>> = _streamingBlocks.asStateFlow()
+
+    private val _queuedMessages = MutableStateFlow<List<String>>(emptyList())
+    /** Messages queued while streaming is in progress. */
+    val queuedMessages: StateFlow<List<String>> = _queuedMessages.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     /** Current error message, if any. */
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -93,6 +144,20 @@ class ChatViewModel(
     private var streamingMessageId: String? = null
     private var currentEncodedPath: String? = null
     private var currentClaudeSession: String? = null
+    private var currentProjectPath: String? = null  // Original project path for API calls
+
+    // Session-level tool tracking for matching tool_use with tool_result across messages
+    private val sessionToolUses = mutableMapOf<String, ToolUseInfo>()
+    private val sessionToolResults = mutableMapOf<String, Pair<String, Boolean>>()
+
+    // Track pending user messages to properly handle duplicates from history watch
+    // Key: content hash, Value: message ID
+    private val pendingUserMessages = mutableMapOf<Int, String>()
+
+    // Track finalized assistant messages to prevent duplicates from history watch
+    // Key: content hash (first 200 chars), Value: message ID
+    private val finalizedAssistantMessages = mutableMapOf<Int, String>()
+
 
     init {
         // Collect incoming WebSocket messages
@@ -113,9 +178,11 @@ class ChatViewModel(
     /**
      * Connects to the WebSocket for the given conversation.
      * Safe to call multiple times - will disconnect first if already connected.
-     * Also loads existing messages from the database.
+     * Also loads existing messages from the filesystem-based Claude history.
      *
-     * @param conversationId The conversation to connect to
+     * @param conversationId The conversation identifier, either:
+     *   - New format: "sessionId?project=encodedPath" (from filesystem-based ProjectList)
+     *   - Legacy format: UUID conversation ID (from database)
      */
     fun connect(conversationId: String) {
         scope.launch {
@@ -124,10 +191,14 @@ class ChatViewModel(
                 if (currentConversationId != null && currentConversationId != conversationId) {
                     webSocketClient.disconnect()
                     historyWatchClient.disconnect()
-                    // Clear previous messages
+                    // Clear previous messages and tool tracking
                     mutex.withLock {
                         _messages.value = emptyList()
                     }
+                    sessionToolUses.clear()
+                    sessionToolResults.clear()
+                    pendingUserMessages.clear()
+                    finalizedAssistantMessages.clear()
                 }
 
                 currentConversationId = conversationId
@@ -136,20 +207,174 @@ class ChatViewModel(
                     return@launch
                 }
 
-                // Load existing messages from file-based Claude history
-                loadMessages(conversationId)
+                // Parse conversationId to extract session info
+                // Format: "sessionId?project=encodedPath" or legacy UUID
+                val (sessionId, encodedPath) = parseConversationId(conversationId)
 
-                // Connect to WebSocket for real-time updates (used for sending messages)
-                webSocketClient.connect(conversationId, token)
+                if (sessionId != null && encodedPath != null) {
+                    // New filesystem-based flow
+                    currentEncodedPath = encodedPath
+                    currentClaudeSession = sessionId
 
-                // Connect to history watch for real-time file changes (used for receiving updates)
-                // This allows seeing messages from Claude running in terminal or other sources
-                connectHistoryWatch(conversationId, token)
+                    // Load messages directly from filesystem API
+                    loadMessagesFromFilesystem(encodedPath, sessionId)
+
+                    // Connect to history watch for real-time file changes
+                    println("ChatViewModel: Connecting history watch for $encodedPath / $sessionId")
+                    historyWatchClient.connect(encodedPath, sessionId, token)
+
+                    // Connect WebSocket with the full session identifier
+                    // This allows continuing the conversation
+                    println("ChatViewModel: Connecting WebSocket for filesystem session")
+                    webSocketClient.connect(conversationId, token)
+                } else {
+                    // Legacy database-based flow (fallback)
+                    loadMessages(conversationId)
+                    webSocketClient.connect(conversationId, token)
+                    connectHistoryWatch(conversationId, token)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _error.value = e.toUserMessage()
             }
+        }
+    }
+
+    /**
+     * Parses the conversationId to extract session ID and encoded path.
+     * @return Pair of (sessionId, encodedPath) or (null, null) for legacy format
+     */
+    private fun parseConversationId(conversationId: String): Pair<String?, String?> {
+        if (!conversationId.contains("?project=")) {
+            return Pair(null, null)
+        }
+        val parts = conversationId.split("?project=")
+        if (parts.size != 2) {
+            return Pair(null, null)
+        }
+        return Pair(parts[0], parts[1])
+    }
+
+    /**
+     * Loads messages directly from filesystem-based Claude history API.
+     * Also fetches project info to store the original project path.
+     */
+    private suspend fun loadMessagesFromFilesystem(encodedPath: String, sessionId: String) {
+        try {
+            println("ChatViewModel: Loading messages from filesystem $encodedPath / $sessionId")
+
+            // Fetch project to get the original path for delete operations
+            try {
+                val project = claudeHistoryApi.getProject(encodedPath)
+                currentProjectPath = project.path
+                println("ChatViewModel: Stored project path: ${project.path}")
+            } catch (e: Exception) {
+                println("ChatViewModel: Failed to fetch project info: ${e.message}")
+                // Continue without project path - delete will try to decode
+            }
+
+            // Load messages from file-based API (with summary=false for full content)
+            val response = claudeHistoryApi.getSessionMessages(
+                encodedPath = encodedPath,
+                sessionId = sessionId,
+                limit = 100,
+                offset = 0,
+                summary = false
+            )
+            println("ChatViewModel: Got ${response.messages.size} messages from API")
+
+            // Process messages using existing logic
+            processLoadedMessages(response.messages)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("ChatViewModel: Failed to load messages from filesystem: ${e.message}")
+            _error.value = e.toUserMessage()
+        }
+    }
+
+    /**
+     * Processes loaded ClaudeMessages into ChatMessages and updates the UI.
+     * Two-pass parsing to match tool_use with tool_result across messages.
+     */
+    private suspend fun processLoadedMessages(messages: List<com.claudecode.native.data.model.ClaudeMessage>) {
+        // IMPORTANT: Do NOT sort by timestamp!
+        // The backend returns messages in correct chronological order from the JSONL file.
+        // Sorting by timestamp breaks the order because:
+        // 1. Multiple messages can have identical timestamps
+        // 2. Kotlin's sortedWith() doesn't guarantee stable ordering for equal elements
+        // Trust the file order - it's the source of truth.
+
+        // Clear and rebuild session-level tool tracking
+        sessionToolUses.clear()
+        sessionToolResults.clear()
+
+        // Pass 1: Collect all tool_uses and tool_results
+        for (msg in messages) {
+            val message = msg.message ?: continue
+            extractToolsFromContent(message.content, sessionToolUses, sessionToolResults)
+        }
+
+        // Match tool_results to tool_uses
+        for ((toolId, resultPair) in sessionToolResults) {
+            val (result, isError) = resultPair
+            if (sessionToolUses.containsKey(toolId)) {
+                sessionToolUses[toolId] = sessionToolUses[toolId]!!.copy(result = result, isError = isError)
+            }
+        }
+
+        // Use session-level maps for local reference
+        val allToolUses = sessionToolUses
+
+        // Pass 2: Create chat messages with matched tools (using original file order)
+        val chatMessages = messages.mapIndexedNotNull { index, msg ->
+            val message = msg.message ?: return@mapIndexedNotNull null
+            val role = message.role
+            val blocks = parseMessageContent(message.content)
+
+            // Update tool blocks with results from session maps
+            val blocksWithResults = blocks.map { block ->
+                when (block) {
+                    is ContentBlock.Tool -> {
+                        val toolWithResult = allToolUses[block.info.id]
+                        if (toolWithResult != null) ContentBlock.Tool(toolWithResult) else block
+                    }
+                    else -> block
+                }
+            }
+
+            // Skip tool_result-only messages (they're matched to tool_use messages)
+            if (hasOnlyToolResults(message.content)) {
+                return@mapIndexedNotNull null
+            }
+
+            // Skip messages with no content blocks
+            if (blocksWithResults.isEmpty()) return@mapIndexedNotNull null
+
+            // Get text content for validation
+            val textContent = blocksWithResults.filterIsInstance<ContentBlock.Text>()
+                .joinToString("\n\n") { it.content }
+
+            // Skip compaction/summary messages (system-generated, not user content)
+            if (isCompactionMessage(textContent)) return@mapIndexedNotNull null
+
+            ChatMessage(
+                // Use timestamp + index for unique ID (sessionId is same for all messages in session)
+                id = "msg_${msg.timestamp?.toEpochMilliseconds() ?: index}_$index",
+                role = when (role) {
+                    "user" -> MessageRole.USER
+                    "assistant" -> MessageRole.ASSISTANT
+                    else -> return@mapIndexedNotNull null
+                },
+                blocks = blocksWithResults,
+                isStreaming = false
+            )
+        }
+        println("ChatViewModel: Converted to ${chatMessages.size} chat messages")
+
+        mutex.withLock {
+            _messages.value = chatMessages
         }
     }
 
@@ -185,7 +410,8 @@ class ChatViewModel(
     }
 
     /**
-     * Loads messages from file-based Claude history API.
+     * Loads messages from file-based Claude history API (legacy database-based flow).
+     * Uses conversationApi to get session info, then loads from filesystem.
      */
     private suspend fun loadMessages(conversationId: String) {
         try {
@@ -201,6 +427,10 @@ class ChatViewModel(
             // Get project to find the path
             val project = projectApi.getProject(conversation.projectId)
             val encodedPath = encodeProjectPath(project.path)
+
+            // Store project path for delete operations
+            currentProjectPath = project.path
+
             println("ChatViewModel: Loading messages from $encodedPath / $claudeSession")
 
             // Load messages from file-based API (with summary=false for full content)
@@ -213,29 +443,8 @@ class ChatViewModel(
             )
             println("ChatViewModel: Got ${response.messages.size} messages from API")
 
-            val chatMessages = response.messages.mapIndexedNotNull { index, msg ->
-                val message = msg.message ?: return@mapIndexedNotNull null
-                val role = message.role
-                val content = extractTextContent(message.content)
-                if (content.isBlank()) return@mapIndexedNotNull null
-
-                ChatMessage(
-                    // Use timestamp + index for unique ID (sessionId is same for all messages in session)
-                    id = "msg_${msg.timestamp?.toEpochMilliseconds() ?: index}_$index",
-                    role = when (role) {
-                        "user" -> MessageRole.USER
-                        "assistant" -> MessageRole.ASSISTANT
-                        else -> return@mapIndexedNotNull null
-                    },
-                    content = content,
-                    isStreaming = false
-                )
-            }
-            println("ChatViewModel: Converted to ${chatMessages.size} chat messages")
-
-            mutex.withLock {
-                _messages.value = chatMessages
-            }
+            // Use shared processing logic
+            processLoadedMessages(response.messages)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -262,59 +471,208 @@ class ChatViewModel(
     }
 
     /**
-     * Extracts text content from message content (handles string or array).
+     * Extracts content blocks from message content, preserving the order of text and tool usages.
+     * Returns an ordered list of ContentBlock items (Text and Tool interleaved as they appear).
      */
-    private fun extractTextContent(content: Any?): String {
-        if (content == null) return ""
+    private fun parseMessageContent(content: Any?): List<ContentBlock> {
+        if (content == null) return emptyList()
 
-        return when (content) {
-            is String -> cleanThinkingTags(content)
-            is JsonPrimitive -> cleanThinkingTags(content.content)
-            is JsonArray -> {
-                content.mapNotNull { element ->
-                    when (element) {
-                        is JsonPrimitive -> element.content
-                        is JsonObject -> {
-                            val type = element["type"]?.jsonPrimitive?.content
-                            when (type) {
-                                "text" -> element["text"]?.jsonPrimitive?.content
-                                // Filter out tool_use and tool_result - don't show them
-                                "tool_use", "tool_result" -> null
-                                else -> null
-                            }
-                        }
-                        else -> null
-                    }
-                }.joinToString("\n").let { cleanThinkingTags(it) }
+        val blocks = mutableListOf<ContentBlock>()
+
+        when (content) {
+            is String -> {
+                val cleaned = cleanThinkingTags(content)
+                if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
             }
-            is JsonObject -> {
-                val type = content["type"]?.jsonPrimitive?.content
-                when (type) {
-                    "text" -> cleanThinkingTags(content["text"]?.jsonPrimitive?.content ?: "")
-                    // Filter out tool_use and tool_result
-                    "tool_use", "tool_result" -> ""
-                    else -> ""
+            is JsonPrimitive -> {
+                val cleaned = cleanThinkingTags(content.content)
+                if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
+            }
+            is JsonArray -> {
+                for (element in content) {
+                    when (element) {
+                        is JsonPrimitive -> {
+                            val cleaned = cleanThinkingTags(element.content)
+                            if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
+                        }
+                        is JsonObject -> processJsonElementToBlocks(element, blocks)
+                        else -> {} // Ignore other JSON element types
+                    }
                 }
             }
+            is JsonObject -> processJsonElementToBlocks(content, blocks)
             is List<*> -> {
+                for (item in content) {
+                    when (item) {
+                        is String -> {
+                            val cleaned = cleanThinkingTags(item)
+                            if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
+                        }
+                        is Map<*, *> -> processMapElementToBlocks(item, blocks)
+                        else -> {} // Ignore other item types
+                    }
+                }
+            }
+            else -> {
+                val cleaned = cleanThinkingTags(content.toString())
+                if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
+            }
+        }
+
+        return blocks
+    }
+
+    /**
+     * Processes a JsonObject element and adds ContentBlock to the list (preserving order).
+     * tool_result blocks are handled separately via session-level matching.
+     */
+    private fun processJsonElementToBlocks(
+        element: JsonObject,
+        blocks: MutableList<ContentBlock>
+    ) {
+        val type = element["type"]?.jsonPrimitive?.content
+        when (type) {
+            "text" -> {
+                element["text"]?.jsonPrimitive?.content?.let { text ->
+                    val cleaned = cleanThinkingTags(text)
+                    if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
+                }
+            }
+            "tool_use" -> {
+                val id = element["id"]?.jsonPrimitive?.content ?: "tool_${blocks.size}"
+                val name = element["name"]?.jsonPrimitive?.content ?: "Unknown"
+                val input = element["input"]
+                val summary = extractToolSummary(name, input)
+                blocks.add(ContentBlock.Tool(ToolUseInfo(id = id, name = name, summary = summary)))
+            }
+            // tool_result is handled via session-level matching, not added as a block
+        }
+    }
+
+    /**
+     * Processes a Map element and adds ContentBlock to the list (preserving order).
+     * tool_result blocks are handled separately via session-level matching.
+     */
+    private fun processMapElementToBlocks(
+        item: Map<*, *>,
+        blocks: MutableList<ContentBlock>
+    ) {
+        val type = item["type"] as? String
+        when (type) {
+            "text" -> {
+                (item["text"] as? String)?.let { text ->
+                    val cleaned = cleanThinkingTags(text)
+                    if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
+                }
+            }
+            "tool_use" -> {
+                val id = (item["id"] as? String) ?: "tool_${blocks.size}"
+                val name = (item["name"] as? String) ?: "Unknown"
+                val input = item["input"]
+                val summary = extractToolSummaryFromMap(name, input)
+                blocks.add(ContentBlock.Tool(ToolUseInfo(id = id, name = name, summary = summary)))
+            }
+            // tool_result is handled via session-level matching, not added as a block
+        }
+    }
+
+    /**
+     * Extracts a brief summary for a tool usage from JsonElement input.
+     */
+    private fun extractToolSummary(toolName: String, input: Any?): String {
+        if (input == null) return ""
+        if (input !is JsonObject) return input.toString().take(100)
+
+        return when (toolName) {
+            "Read" -> input["file_path"]?.jsonPrimitive?.content ?: ""
+            "Edit" -> input["file_path"]?.jsonPrimitive?.content ?: ""
+            "Write" -> input["file_path"]?.jsonPrimitive?.content ?: ""
+            "Grep" -> {
+                val pattern = input["pattern"]?.jsonPrimitive?.content ?: ""
+                val path = input["path"]?.jsonPrimitive?.content
+                if (path != null) "$pattern in $path" else pattern
+            }
+            "Glob" -> input["pattern"]?.jsonPrimitive?.content ?: ""
+            "Bash" -> {
+                val cmd = input["command"]?.jsonPrimitive?.content ?: ""
+                cmd.take(80) + if (cmd.length > 80) "..." else ""
+            }
+            "Task" -> input["description"]?.jsonPrimitive?.content ?: ""
+            "WebFetch" -> input["url"]?.jsonPrimitive?.content ?: ""
+            "WebSearch" -> input["query"]?.jsonPrimitive?.content ?: ""
+            else -> {
+                input.entries.firstOrNull()?.let { (key, value) ->
+                    try {
+                        val v = (value as? JsonPrimitive)?.content ?: value.toString()
+                        v.take(80) + if (v.length > 80) "..." else ""
+                    } catch (e: Exception) { "" }
+                } ?: ""
+            }
+        }
+    }
+
+    /**
+     * Extracts a brief summary for a tool usage from Map input.
+     */
+    private fun extractToolSummaryFromMap(toolName: String, input: Any?): String {
+        if (input == null) return ""
+        if (input !is Map<*, *>) return input.toString().take(100)
+
+        return when (toolName) {
+            "Read" -> (input["file_path"] as? String) ?: ""
+            "Edit" -> (input["file_path"] as? String) ?: ""
+            "Write" -> (input["file_path"] as? String) ?: ""
+            "Grep" -> {
+                val pattern = (input["pattern"] as? String) ?: ""
+                val path = input["path"] as? String
+                if (path != null) "$pattern in $path" else pattern
+            }
+            "Glob" -> (input["pattern"] as? String) ?: ""
+            "Bash" -> {
+                val cmd = (input["command"] as? String) ?: ""
+                cmd.take(80) + if (cmd.length > 80) "..." else ""
+            }
+            "Task" -> (input["description"] as? String) ?: ""
+            else -> {
+                input.entries.firstOrNull()?.let { (_, value) ->
+                    val v = value?.toString() ?: ""
+                    v.take(80) + if (v.length > 80) "..." else ""
+                } ?: ""
+            }
+        }
+    }
+
+    /**
+     * Extracts text from tool_result content.
+     */
+    private fun extractToolResultText(content: Any?): String {
+        return when (content) {
+            null -> ""
+            is String -> content
+            is JsonPrimitive -> content.content
+            is JsonArray -> {
                 content.mapNotNull { item ->
                     when (item) {
-                        is String -> item
-                        is Map<*, *> -> {
-                            val type = item["type"] as? String
-                            when (type) {
-                                "text" -> item["text"] as? String
-                                // Filter out tool_use and tool_result
-                                "tool_use", "tool_result" -> null
-                                else -> null
-                            }
+                        is JsonPrimitive -> item.content
+                        is JsonObject -> {
+                            val type = item["type"]?.jsonPrimitive?.content
+                            if (type == "text") item["text"]?.jsonPrimitive?.content else null
                         }
                         else -> null
                     }
-                }.joinToString("\n").let { cleanThinkingTags(it) }
+                }.joinToString("\n")
             }
-            else -> cleanThinkingTags(content.toString())
+            else -> content.toString()
         }
+    }
+
+    /**
+     * Legacy function for simple text extraction (used for backwards compatibility).
+     */
+    private fun extractTextContent(content: Any?): String {
+        return parseMessageContent(content)
+            .filterIsInstance<ContentBlock.Text>()
+            .joinToString("\n\n") { it.content }
     }
 
     /**
@@ -329,6 +687,124 @@ class ChatViewModel(
     }
 
     /**
+     * Checks if the message is a compaction/summary message (system-generated).
+     * These messages are generated when Claude Code session runs out of context
+     * and should not be displayed as user messages.
+     */
+    private fun isCompactionMessage(text: String): Boolean {
+        return text.startsWith("This session is being continued from a previous conversation") ||
+               text.startsWith("Please continue the conversation from where we left") ||
+               text.contains("The conversation is summarized below:") ||
+               text.contains("ran out of context")
+    }
+
+    /**
+     * Extracts tool_use and tool_result items from message content into separate maps.
+     * Used for cross-message matching of tools with their results.
+     */
+    private fun extractToolsFromContent(
+        content: Any?,
+        toolUses: MutableMap<String, ToolUseInfo>,
+        toolResults: MutableMap<String, Pair<String, Boolean>>
+    ) {
+        when (content) {
+            is JsonArray -> {
+                for (element in content) {
+                    if (element is JsonObject) {
+                        val type = element["type"]?.jsonPrimitive?.content
+                        when (type) {
+                            "tool_use" -> {
+                                val id = element["id"]?.jsonPrimitive?.content ?: continue
+                                val name = element["name"]?.jsonPrimitive?.content ?: "Unknown"
+                                val input = element["input"]
+                                val summary = extractToolSummary(name, input)
+                                toolUses[id] = ToolUseInfo(id = id, name = name, summary = summary)
+                            }
+                            "tool_result" -> {
+                                val toolUseId = element["tool_use_id"]?.jsonPrimitive?.content ?: continue
+                                val resultContent = element["content"]
+                                val isError = element["is_error"]?.jsonPrimitive?.content == "true"
+                                val result = extractToolResultText(resultContent)
+                                toolResults[toolUseId] = Pair(result, isError)
+                            }
+                        }
+                    }
+                }
+            }
+            is List<*> -> {
+                for (item in content) {
+                    if (item is Map<*, *>) {
+                        val type = item["type"] as? String
+                        when (type) {
+                            "tool_use" -> {
+                                val id = (item["id"] as? String) ?: continue
+                                val name = (item["name"] as? String) ?: "Unknown"
+                                val input = item["input"]
+                                val summary = extractToolSummaryFromMap(name, input)
+                                toolUses[id] = ToolUseInfo(id = id, name = name, summary = summary)
+                            }
+                            "tool_result" -> {
+                                val toolUseId = (item["tool_use_id"] as? String) ?: continue
+                                val resultContent = item["content"]
+                                val isError = item["is_error"] == true
+                                val result = when (resultContent) {
+                                    is String -> resultContent
+                                    is List<*> -> resultContent.mapNotNull { it?.toString() }.joinToString("\n")
+                                    else -> resultContent?.toString() ?: ""
+                                }
+                                toolResults[toolUseId] = Pair(result, isError)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Checks if message content contains only tool_result items (no text or tool_use).
+     */
+    private fun hasOnlyToolResults(content: Any?): Boolean {
+        var hasToolResult = false
+        var hasOther = false
+
+        when (content) {
+            is JsonArray -> {
+                for (element in content) {
+                    if (element is JsonObject) {
+                        val type = element["type"]?.jsonPrimitive?.content
+                        when (type) {
+                            "tool_result" -> hasToolResult = true
+                            "text" -> {
+                                val text = element["text"]?.jsonPrimitive?.content
+                                if (!text.isNullOrBlank()) hasOther = true
+                            }
+                            "tool_use" -> hasOther = true
+                        }
+                    }
+                }
+            }
+            is List<*> -> {
+                for (item in content) {
+                    if (item is Map<*, *>) {
+                        val type = item["type"] as? String
+                        when (type) {
+                            "tool_result" -> hasToolResult = true
+                            "text" -> {
+                                val text = item["text"] as? String
+                                if (!text.isNullOrBlank()) hasOther = true
+                            }
+                            "tool_use" -> hasOther = true
+                        }
+                    }
+                }
+            }
+        }
+
+        return hasToolResult && !hasOther
+    }
+
+    /**
      * Disconnects from the current WebSocket connection.
      * This is a manual disconnect - auto-reconnection will NOT occur.
      */
@@ -340,6 +816,7 @@ class ChatViewModel(
                 currentConversationId = null
                 currentEncodedPath = null
                 currentClaudeSession = null
+                currentProjectPath = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -367,6 +844,7 @@ class ChatViewModel(
     /**
      * Sends a chat message to the server.
      * Creates a user message locally and sends it via WebSocket.
+     * If streaming is in progress, queues the message for later.
      *
      * @param content The message text to send
      */
@@ -377,33 +855,70 @@ class ChatViewModel(
             return
         }
 
+        // If streaming is in progress, queue the message
+        if (_isStreaming.value) {
+            _queuedMessages.value = _queuedMessages.value + content
+            println("ChatViewModel: Queued message while streaming: ${content.take(50)}...")
+            return
+        }
+
         scope.launch {
-            try {
-                // Add user message to the list
-                val userMessage = ChatMessage(
-                    id = generateMessageId(),
-                    role = MessageRole.USER,
-                    content = content,
-                    isStreaming = false
-                )
+            sendMessageInternal(content)
+        }
+    }
 
-                mutex.withLock {
-                    _messages.value = _messages.value + userMessage
-                }
+    /**
+     * Internal implementation to send a message.
+     * Called directly or after processing from queue.
+     */
+    private suspend fun sendMessageInternal(content: String) {
+        try {
+            // Add user message to the list (marked as pending until confirmed)
+            val messageId = generateMessageId()
+            val userMessage = ChatMessage(
+                id = messageId,
+                role = MessageRole.USER,
+                blocks = listOf(ContentBlock.Text(content)),
+                isStreaming = false,
+                isPending = true  // Mark as pending until confirmed by history watch
+            )
 
-                // Send via WebSocket
-                webSocketClient.sendChat(content)
+            // Track this pending user message to prevent duplicate from history watch
+            pendingUserMessages[content.hashCode()] = messageId
+            println("ChatViewModel: Added pending user message: ${content.take(50)}...")
 
-                // Prepare for streaming response
-                _isStreaming.value = true
-                _streamingContent.value = ""
-                streamingMessageId = generateMessageId()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _error.value = e.toUserMessage()
-                _isStreaming.value = false
+            mutex.withLock {
+                _messages.value = _messages.value + userMessage
             }
+
+            // Send via WebSocket
+            webSocketClient.sendChat(content)
+
+            // Prepare for streaming response
+            _isStreaming.value = true
+            _streamingContent.value = ""
+            _streamingTools.value = emptyList()
+            _streamingBlocks.value = emptyList()
+            streamingMessageId = generateMessageId()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _error.value = e.toUserMessage()
+            _isStreaming.value = false
+        }
+    }
+
+    /**
+     * Processes the next queued message, if any.
+     * Called after streaming completes.
+     */
+    private suspend fun processNextQueuedMessage() {
+        val queue = _queuedMessages.value
+        if (queue.isNotEmpty()) {
+            val nextMessage = queue.first()
+            _queuedMessages.value = queue.drop(1)
+            println("ChatViewModel: Processing queued message: ${nextMessage.take(50)}...")
+            sendMessageInternal(nextMessage)
         }
     }
 
@@ -449,14 +964,45 @@ class ChatViewModel(
      * @param onError Callback when deletion fails
      */
     fun deleteSession(onSuccess: () -> Unit = {}, onError: (String) -> Unit = {}) {
-        val convId = currentConversationId ?: run {
-            onError("No conversation selected")
+        // Use the stored session info for filesystem-based deletion
+        val sessionId = currentClaudeSession
+        val projectPath = currentProjectPath
+
+        if (sessionId == null) {
+            onError("No session selected")
+            return
+        }
+
+        if (projectPath == null) {
+            // Fallback: try to fetch project info using encodedPath
+            val encodedPath = currentEncodedPath
+            if (encodedPath == null) {
+                onError("Cannot delete: project path not available")
+                return
+            }
+
+            scope.launch {
+                try {
+                    // Fetch project to get original path
+                    val project = claudeHistoryApi.getProject(encodedPath)
+                    claudeHistoryApi.deleteSession(sessionId, project.path)
+                    // Clear local messages after session deletion
+                    mutex.withLock {
+                        _messages.value = emptyList()
+                    }
+                    onSuccess()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    onError(e.toUserMessage())
+                }
+            }
             return
         }
 
         scope.launch {
             try {
-                conversationApi.deleteSession(convId)
+                claudeHistoryApi.deleteSession(sessionId, projectPath)
                 // Clear local messages after session deletion
                 mutex.withLock {
                     _messages.value = emptyList()
@@ -523,12 +1069,177 @@ class ChatViewModel(
 
             is HistoryWatchEvent.NewMessages -> {
                 println("ChatViewModel: Received ${event.messages.size} new messages from history watch")
-                // Convert ClaudeMessages to ChatMessages and add them
+
+                // Handle queue-operation events first (terminal queued messages)
+                for (claudeMsg in event.messages) {
+                    if (claudeMsg.type == "queue-operation") {
+                        val operation = claudeMsg.operation
+                        val queueContent = claudeMsg.content ?: continue
+
+                        when (operation) {
+                            "enqueue" -> {
+                                // Add to queued messages (from Claude CLI's perspective)
+                                _queuedMessages.value = _queuedMessages.value + queueContent
+                                println("ChatViewModel: Queued message from CLI: ${queueContent.take(50)}...")
+                            }
+                            "dequeue", "clear" -> {
+                                // Remove from queued messages
+                                val current = _queuedMessages.value
+                                if (current.isNotEmpty()) {
+                                    _queuedMessages.value = current.drop(1)
+                                    println("ChatViewModel: Dequeued message from CLI")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Log incoming messages for debugging (skip queue-operation)
+                for ((idx, claudeMsg) in event.messages.withIndex()) {
+                    val msg = claudeMsg.message ?: continue
+                    val textPreview = parseMessageContent(msg.content)
+                        .filterIsInstance<ContentBlock.Text>()
+                        .joinToString(" ") { it.content }
+                        .take(50)
+                        .replace("\n", " ")
+                    println("ChatViewModel: [$idx] role=${msg.role}, preview='$textPreview...'")
+                }
+
+                // Check if any message is from assistant - this means Claude is processing
+                val hasAssistantMessage = event.messages.any { it.message?.role == "assistant" }
+                if (hasAssistantMessage && !_isStreaming.value) {
+                    println("ChatViewModel: Detected assistant activity, activating streaming state")
+                    _isStreaming.value = true
+                    if (streamingMessageId == null) {
+                        streamingMessageId = generateMessageId()
+                    }
+                }
+
+                // First, extract tools and results from all new messages and update session maps
+                val newToolUses = mutableMapOf<String, ToolUseInfo>()
+                val newToolResults = mutableMapOf<String, Pair<String, Boolean>>()
+
+                for (claudeMsg in event.messages) {
+                    val msg = claudeMsg.message ?: continue
+                    extractToolsFromContent(msg.content, newToolUses, newToolResults)
+                }
+
+                println("ChatViewModel: Found ${newToolUses.size} tool_uses, ${newToolResults.size} tool_results")
+
+                // Add new tools to session maps
+                sessionToolUses.putAll(newToolUses)
+                sessionToolResults.putAll(newToolResults)
+
+                // Match any new tool_results with existing tool_uses
+                for ((toolId, resultPair) in sessionToolResults) {
+                    val (result, isError) = resultPair
+                    if (sessionToolUses.containsKey(toolId) && sessionToolUses[toolId]?.result == null) {
+                        sessionToolUses[toolId] = sessionToolUses[toolId]!!.copy(result = result, isError = isError)
+                    }
+                }
+
+                // If we're streaming, update streaming blocks in order (text and tools interleaved)
+                if (_isStreaming.value) {
+                    val currentBlocks = _streamingBlocks.value.toMutableList()
+
+                    // Process each assistant message to extract blocks in order
+                    for (claudeMsg in event.messages) {
+                        val msg = claudeMsg.message ?: continue
+                        if (msg.role != "assistant") continue
+
+                        val blocks = parseMessageContent(msg.content)
+                        for (block in blocks) {
+                            when (block) {
+                                is ContentBlock.Text -> {
+                                    // Check if this text is already in blocks (avoid duplicates)
+                                    val exists = currentBlocks.any {
+                                        it is ContentBlock.Text && it.content == block.content
+                                    }
+                                    if (!exists && block.content.isNotBlank()) {
+                                        currentBlocks.add(block)
+                                    }
+                                }
+                                is ContentBlock.Tool -> {
+                                    // Check if tool already exists, update or add
+                                    val existingIndex = currentBlocks.indexOfFirst {
+                                        it is ContentBlock.Tool && it.info.id == block.info.id
+                                    }
+                                    val toolWithResult = sessionToolUses[block.info.id] ?: block.info
+                                    if (existingIndex >= 0) {
+                                        currentBlocks[existingIndex] = ContentBlock.Tool(toolWithResult)
+                                    } else {
+                                        currentBlocks.add(ContentBlock.Tool(toolWithResult))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    _streamingBlocks.value = currentBlocks
+
+                    // Also update legacy streaming content and tools for backwards compatibility
+                    _streamingContent.value = currentBlocks
+                        .filterIsInstance<ContentBlock.Text>()
+                        .joinToString("\n\n") { it.content }
+                    _streamingTools.value = currentBlocks
+                        .filterIsInstance<ContentBlock.Tool>()
+                        .map { it.info }
+
+                    println("ChatViewModel: Updated streaming blocks: ${currentBlocks.size} blocks")
+                }
+
+                // Update tool results in streaming blocks
+                if (_isStreaming.value && newToolResults.isNotEmpty()) {
+                    val currentBlocks = _streamingBlocks.value.toMutableList()
+                    for ((toolId, resultPair) in newToolResults) {
+                        val (result, isError) = resultPair
+                        val existingIndex = currentBlocks.indexOfFirst {
+                            it is ContentBlock.Tool && it.info.id == toolId
+                        }
+                        if (existingIndex >= 0) {
+                            val existingTool = (currentBlocks[existingIndex] as ContentBlock.Tool).info
+                            currentBlocks[existingIndex] = ContentBlock.Tool(
+                                existingTool.copy(result = result, isError = isError)
+                            )
+                        }
+                    }
+                    _streamingBlocks.value = currentBlocks
+                    _streamingTools.value = currentBlocks
+                        .filterIsInstance<ContentBlock.Tool>()
+                        .map { it.info }
+                }
+
+                // Convert ClaudeMessages to ChatMessages with matched tools
                 val newChatMessages = event.messages.mapNotNull { claudeMsg ->
                     val msg = claudeMsg.message ?: return@mapNotNull null
                     val role = msg.role
-                    val content = extractTextContent(msg.content)
-                    if (content.isBlank()) return@mapNotNull null
+                    val blocks = parseMessageContent(msg.content)
+
+                    // Update tool blocks with results from session maps
+                    val blocksWithResults = blocks.map { block ->
+                        when (block) {
+                            is ContentBlock.Tool -> {
+                                val toolWithResult = sessionToolUses[block.info.id]
+                                if (toolWithResult != null) ContentBlock.Tool(toolWithResult) else block
+                            }
+                            else -> block
+                        }
+                    }
+
+                    // Skip tool_result-only messages
+                    if (hasOnlyToolResults(msg.content)) {
+                        return@mapNotNull null
+                    }
+
+                    // Skip messages with no content blocks
+                    if (blocksWithResults.isEmpty()) return@mapNotNull null
+
+                    // Get text content for validation
+                    val textContent = blocksWithResults.filterIsInstance<ContentBlock.Text>()
+                        .joinToString("\n\n") { it.content }
+
+                    // Skip compaction/summary messages (system-generated, not user content)
+                    if (isCompactionMessage(textContent)) return@mapNotNull null
 
                     ChatMessage(
                         id = "watch_${claudeMsg.timestamp?.toEpochMilliseconds() ?: Clock.System.now().toEpochMilliseconds()}_${(0..9999).random()}",
@@ -537,26 +1248,139 @@ class ChatViewModel(
                             "assistant" -> MessageRole.ASSISTANT
                             else -> return@mapNotNull null
                         },
-                        content = content,
+                        blocks = blocksWithResults,
                         isStreaming = false
                     )
                 }
 
-                if (newChatMessages.isNotEmpty()) {
-                    mutex.withLock {
-                        // Avoid duplicates by checking if last message content matches
-                        val currentMessages = _messages.value
-                        val filteredNew = newChatMessages.filter { newMsg ->
-                            currentMessages.none { existing ->
-                                existing.content == newMsg.content && existing.role == newMsg.role
+                // Update existing messages that have tools without results
+                mutex.withLock {
+                    val currentMessages = _messages.value.toMutableList()
+                    var messagesUpdated = false
+
+                    // Update existing messages with newly matched tool results
+                    for (i in currentMessages.indices) {
+                        val msg = currentMessages[i]
+                        val hasToolsWithoutResults = msg.blocks.any { block ->
+                            block is ContentBlock.Tool && block.info.result == null
+                        }
+                        if (hasToolsWithoutResults) {
+                            val updatedBlocks = msg.blocks.map { block ->
+                                when (block) {
+                                    is ContentBlock.Tool -> {
+                                        val toolId = block.info.id
+                                        val updatedTool = sessionToolUses[toolId]
+                                        if (updatedTool != null && updatedTool.result != null) {
+                                            ContentBlock.Tool(updatedTool)
+                                        } else {
+                                            block
+                                        }
+                                    }
+                                    else -> block
+                                }
+                            }
+                            if (updatedBlocks != msg.blocks) {
+                                currentMessages[i] = msg.copy(blocks = updatedBlocks)
+                                messagesUpdated = true
+                                println("ChatViewModel: Updated message ${msg.id} with tool results")
                             }
                         }
-                        if (filteredNew.isNotEmpty()) {
-                            _messages.value = currentMessages + filteredNew
-                            println("ChatViewModel: Added ${filteredNew.size} new messages to chat")
+                    }
+
+                    if (messagesUpdated) {
+                        _messages.value = currentMessages.toList()
+                    }
+                }
+
+                if (newChatMessages.isNotEmpty()) {
+                    mutex.withLock {
+                        val currentMessages = _messages.value.toMutableList()
+                        var updated = false
+
+                        for (newMsg in newChatMessages) {
+                            // Check if this is a pending user message we already added locally
+                            val contentHash = newMsg.content.hashCode()
+                            val pendingMsgId = if (newMsg.role == MessageRole.USER) {
+                                pendingUserMessages.remove(contentHash)
+                            } else null
+
+                            if (pendingMsgId != null) {
+                                // This user message was confirmed - update isPending to false
+                                val pendingIndex = currentMessages.indexOfFirst { it.id == pendingMsgId }
+                                if (pendingIndex >= 0) {
+                                    currentMessages[pendingIndex] = currentMessages[pendingIndex].copy(isPending = false)
+                                    updated = true
+                                    println("ChatViewModel: Confirmed pending user message: ${newMsg.content.take(30)}...")
+                                }
+                                continue
+                            }
+
+                            // For assistant messages, check if already finalized from WebSocket
+                            if (newMsg.role == MessageRole.ASSISTANT) {
+                                val contentHash = newMsg.content.take(200).hashCode()
+                                if (finalizedAssistantMessages.containsKey(contentHash)) {
+                                    println("ChatViewModel: Skipping already finalized assistant message: ${newMsg.content.take(30)}...")
+                                    continue
+                                }
+
+                                // Also check if content matches current streaming content
+                                if (_isStreaming.value) {
+                                    val streamingContentValue = _streamingContent.value
+                                    if (streamingContentValue.isNotEmpty() &&
+                                        (newMsg.content == streamingContentValue ||
+                                         newMsg.content.take(100) == streamingContentValue.take(100) ||
+                                         streamingContentValue.contains(newMsg.content.take(100)))) {
+                                        println("ChatViewModel: Skipping message that matches streaming content: ${newMsg.content.take(30)}...")
+                                        continue
+                                    }
+                                }
+                            }
+
+                            // Find existing message with same content and role (improved matching)
+                            val existingIndex = currentMessages.indexOfFirst { existing ->
+                                existing.role == newMsg.role &&
+                                (existing.content == newMsg.content ||
+                                 (existing.content.isNotEmpty() && newMsg.content.isNotEmpty() &&
+                                  (existing.content.take(100) == newMsg.content.take(100) ||
+                                   existing.content.contains(newMsg.content.take(50)) ||
+                                   newMsg.content.contains(existing.content.take(50)))))
+                            }
+
+                            if (existingIndex >= 0) {
+                                // If new message has more blocks or tools, update it
+                                val existing = currentMessages[existingIndex]
+                                val existingToolCount = existing.blocks.count { it is ContentBlock.Tool }
+                                val newToolCount = newMsg.blocks.count { it is ContentBlock.Tool }
+
+                                if (existingToolCount == 0 && newToolCount > 0) {
+                                    // New message has tools that existing doesn't, update with new blocks
+                                    currentMessages[existingIndex] = existing.copy(blocks = newMsg.blocks)
+                                    updated = true
+                                    println("ChatViewModel: Updated existing message with $newToolCount tools")
+                                } else if (newMsg.blocks.size > existing.blocks.size) {
+                                    // Update with more complete message (more blocks)
+                                    currentMessages[existingIndex] = existing.copy(blocks = newMsg.blocks)
+                                    updated = true
+                                    println("ChatViewModel: Updated message with more blocks")
+                                }
+                                // Otherwise skip (duplicate)
+                                println("ChatViewModel: Skipping duplicate message: ${newMsg.role}, ${newMsg.content.take(30)}...")
+                            } else {
+                                // New message, add it
+                                currentMessages.add(newMsg)
+                                updated = true
+                                println("ChatViewModel: Added new message from history watch: ${newMsg.role}, ${newMsg.content.take(30)}...")
+                            }
+                        }
+
+                        if (updated) {
+                            _messages.value = currentMessages
                         }
                     }
                 }
+
+                // Note: Streaming completion is handled by WebSocket COMPLETE message
+                // No debounce needed - trust the WebSocket signal
             }
 
             is HistoryWatchEvent.Error -> {
@@ -572,23 +1396,60 @@ class ChatViewModel(
     private suspend fun finalizeStreamingMessage() {
         val content = _streamingContent.value
         val messageId = streamingMessageId
+        val tools = _streamingTools.value
+        val orderedBlocks = _streamingBlocks.value
 
-        if (content.isNotEmpty() && messageId != null) {
+        if ((content.isNotEmpty() || tools.isNotEmpty() || orderedBlocks.isNotEmpty()) && messageId != null) {
+            // Use ordered blocks if available (preserves interleaved text/tool order)
+            // Fall back to legacy behavior (text first, then tools) if no ordered blocks
+            val blocks = if (orderedBlocks.isNotEmpty()) {
+                orderedBlocks
+            } else {
+                val legacyBlocks = mutableListOf<ContentBlock>()
+                if (content.isNotEmpty()) {
+                    legacyBlocks.add(ContentBlock.Text(content))
+                }
+                tools.forEach { tool ->
+                    legacyBlocks.add(ContentBlock.Tool(tool))
+                }
+                legacyBlocks
+            }
+
             val assistantMessage = ChatMessage(
                 id = messageId,
                 role = MessageRole.ASSISTANT,
-                content = content,
+                blocks = blocks,
                 isStreaming = false
             )
 
             mutex.withLock {
-                _messages.value = _messages.value + assistantMessage
+                // Check if this content already exists in messages (avoid duplicates from history watch)
+                val isDuplicate = _messages.value.any { existing ->
+                    existing.role == MessageRole.ASSISTANT &&
+                    (existing.content == content ||
+                     (content.isNotEmpty() && existing.content.contains(content.take(100))))
+                }
+
+                if (!isDuplicate) {
+                    _messages.value = _messages.value + assistantMessage
+                    // Track this finalized message to prevent duplicate from history watch
+                    val contentHash = content.take(200).hashCode()
+                    finalizedAssistantMessages[contentHash] = messageId
+                    println("ChatViewModel: Finalized streaming message: ${content.take(50)}...")
+                } else {
+                    println("ChatViewModel: Skipping duplicate finalization: ${content.take(50)}...")
+                }
             }
         }
 
         _isStreaming.value = false
         _streamingContent.value = ""
+        _streamingTools.value = emptyList()
+        _streamingBlocks.value = emptyList()
         streamingMessageId = null
+
+        // Process next queued message if any
+        processNextQueuedMessage()
     }
 
     private fun generateMessageId(): String {

@@ -83,6 +83,7 @@ func (r *Repository) FindByProjectID(ctx context.Context, projectID uuid.UUID) (
 	err := r.db.NewSelect().
 		Model(&conversations).
 		Where("project_id = ?", projectID).
+		Where("message_count > 0"). // Filter out 0-message conversations
 		Order("is_favorite DESC", "updated_at DESC").
 		Scan(ctx)
 

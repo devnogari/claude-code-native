@@ -37,14 +37,14 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit
 ) {
-    val serverUrl by viewModel.serverUrl.collectAsState()
+    val serverHost by viewModel.serverHost.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val message by viewModel.message.collectAsState()
     val logoutRequested by viewModel.logoutRequested.collectAsState()
 
-    var editedServerUrl by remember { mutableStateOf(serverUrl) }
+    var editedServerHost by remember { mutableStateOf(serverHost) }
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showClearCacheDialog by remember { mutableStateOf(false) }
 
@@ -56,9 +56,9 @@ fun SettingsScreen(
         }
     }
 
-    // Sync server URL when it changes
-    LaunchedEffect(serverUrl) {
-        editedServerUrl = serverUrl
+    // Sync server host when it changes
+    LaunchedEffect(serverHost) {
+        editedServerHost = serverHost
     }
 
     Scaffold(
@@ -147,20 +147,21 @@ fun SettingsScreen(
                 // Server Configuration Section
                 SettingsSection(title = "Server Configuration") {
                     OutlinedTextField(
-                        value = editedServerUrl,
-                        onValueChange = { editedServerUrl = it },
-                        label = { Text("Server URL") },
-                        placeholder = { Text("http://localhost:8080/api/v1") },
+                        value = editedServerHost,
+                        onValueChange = { editedServerHost = it },
+                        label = { Text("Server Host") },
+                        placeholder = { Text("localhost:8083") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !isLoading
+                        enabled = !isLoading,
+                        supportingText = { Text("Enter IP address and port (e.g., 192.168.1.100:8083)") }
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Button(
-                        onClick = { viewModel.updateServerUrl(editedServerUrl) },
-                        enabled = !isLoading && editedServerUrl != serverUrl,
+                        onClick = { viewModel.updateServerHost(editedServerHost) },
+                        enabled = !isLoading && editedServerHost != serverHost,
                         modifier = Modifier.align(Alignment.End)
                     ) {
                         if (isLoading) {

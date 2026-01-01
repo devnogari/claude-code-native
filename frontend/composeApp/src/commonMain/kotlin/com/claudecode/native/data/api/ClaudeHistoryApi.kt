@@ -96,4 +96,31 @@ class ClaudeHistoryApi(private val client: ApiClient) {
             ToggleSessionFavoriteRequest(projectPath)
         )
     }
+
+    /**
+     * Refreshes the cache and reloads all projects.
+     * Forces the backend to rescan ~/.claude/projects/ for new sessions.
+     */
+    suspend fun refresh() {
+        client.postEmpty<Map<String, String>>("/claude-history/refresh")
+    }
+
+    /**
+     * Deletes a Claude CLI session's files.
+     *
+     * @param sessionId The session ID to delete
+     * @param projectPath The project path where the session resides
+     */
+    suspend fun deleteSession(sessionId: String, projectPath: String) {
+        // URL encode the project path for multiplatform compatibility
+        val encodedPath = projectPath
+            .replace("%", "%25")  // Must be first
+            .replace(" ", "%20")
+            .replace("/", "%2F")
+            .replace("#", "%23")
+            .replace("?", "%3F")
+            .replace("&", "%26")
+            .replace("+", "%2B")
+        client.delete("/sessions/$sessionId?path=$encodedPath")
+    }
 }

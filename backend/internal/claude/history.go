@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
+
+// uuidRegex matches UUID format (session IDs)
+var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // ClaudeProject represents a discovered Claude Code project
 type ClaudeProject struct {
@@ -44,6 +48,9 @@ type ClaudeMessage struct {
 	} `json:"message,omitempty"`
 	Cwd         string `json:"cwd,omitempty"`
 	ParentMsgID string `json:"parentMsgId,omitempty"`
+	// Queue operation fields (type="queue-operation")
+	Operation string `json:"operation,omitempty"` // "enqueue", "dequeue", etc.
+	Content   string `json:"content,omitempty"`   // Queued message content
 }
 
 // HistoryReader reads Claude Code history from ~/.claude/projects/
@@ -77,7 +84,7 @@ func (h *HistoryReader) GetProjects() ([]ClaudeProject, error) {
 		}
 
 		encodedPath := entry.Name()
-		projectPath := decodeProjectPath(encodedPath)
+		projectPath := DecodeProjectPath(encodedPath)
 		projectDir := filepath.Join(h.basePath, encodedPath)
 
 		// Get sessions for this project
@@ -132,7 +139,7 @@ func (h *HistoryReader) GetProject(encodedPath string) (*ClaudeProject, error) {
 		return nil, os.ErrNotExist
 	}
 
-	projectPath := decodeProjectPath(encodedPath)
+	projectPath := DecodeProjectPath(encodedPath)
 	sessions, lastAccessed, err := h.getProjectSessions(projectDir)
 	if err != nil {
 		return nil, err
@@ -173,7 +180,9 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 
 	var sessions []ClaudeSession
 	var lastAccessed time.Time
+	sessionIDsWithJsonl := make(map[string]bool)
 
+	// First pass: collect sessions from .jsonl files
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
@@ -197,6 +206,7 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 		}
 
 		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
+		sessionIDsWithJsonl[sessionID] = true
 		firstMsg := extractFirstUserMessage(messages)
 		createdAt := extractCreatedAt(messages)
 		modTime := info.ModTime()
@@ -215,6 +225,44 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 		})
 	}
 
+	// Second pass: collect sessions from directories (UUID format without .jsonl file)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		dirName := entry.Name()
+		// Skip if this session already has a .jsonl file
+		if sessionIDsWithJsonl[dirName] {
+			continue
+		}
+
+		// Check if directory name is a UUID (session ID format)
+		if !uuidRegex.MatchString(dirName) {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		modTime := info.ModTime()
+		if modTime.After(lastAccessed) {
+			lastAccessed = modTime
+		}
+
+		// Add as empty session (no messages yet, but session exists)
+		sessions = append(sessions, ClaudeSession{
+			ID:           dirName,
+			Filename:     "",
+			MessageCount: 0,
+			FirstMessage: "(Session in progress...)",
+			CreatedAt:    modTime,
+			UpdatedAt:    modTime,
+		})
+	}
+
 	// Sort sessions by updated time (most recent first)
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
@@ -229,11 +277,11 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 	return sessions, lastAccessed, nil
 }
 
-// decodeProjectPath converts encoded project name back to actual path
+// DecodeProjectPath converts encoded project name back to actual path
 // Claude CLI encodes paths by replacing / with -
 // Problem: can't distinguish original dashes from path separators
 // Solution: try decoding and verify path exists using recursive search
-func decodeProjectPath(encoded string) string {
+func DecodeProjectPath(encoded string) string {
 	// Replace leading dash with /
 	if strings.HasPrefix(encoded, "-") {
 		encoded = "/" + encoded[1:]
