@@ -32,6 +32,7 @@ type Server struct {
 	projectRepo    *project.Repository
 	convRepo       *conversation.Repository
 	claudeMgr      *claude.Manager
+	historyCache   *claude.HistoryCache
 
 	// Handlers
 	authHandler         *auth.Handler
@@ -59,6 +60,7 @@ type ServerParams struct {
 	SyncHandler         *claude.SyncHandler
 	HistoryHandler      *claude.HistoryHandler
 	HistoryWatchHandler *claude.HistoryWatchHandler
+	HistoryCache        *claude.HistoryCache
 	ClaudeMgr           *claude.Manager
 	CommandHandler      *command.Handler
 }
@@ -97,6 +99,7 @@ func New(p ServerParams) *Server {
 		projectRepo:         p.ProjectRepo,
 		convRepo:            p.ConvRepo,
 		claudeMgr:           p.ClaudeMgr,
+		historyCache:        p.HistoryCache,
 		authHandler:         authHandler,
 		projectHandler:      projectHandler,
 		convHandler:         convHandler,

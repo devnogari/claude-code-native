@@ -238,6 +238,15 @@ func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSe
 
 	for i := len(parts) - 1; i > 1; i-- {
 		parentEncodedPath := strings.Join(parts[:i], "-")
+
+		// Skip home directory - it contains unrelated sessions from ad-hoc CLI usage
+		// Home directories look like: -Users-username, -home-username, -root
+		if isHomeDirectory(parentEncodedPath) {
+			c.logger.Debug("skipping home directory",
+				zap.String("parentEncodedPath", parentEncodedPath))
+			continue
+		}
+
 		parentDir := filepath.Join(c.basePath, parentEncodedPath)
 
 		c.logger.Debug("checking parent dir",
@@ -257,6 +266,36 @@ func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSe
 	}
 
 	return nil, time.Time{}
+}
+
+// isHomeDirectory checks if the encoded path represents a home directory
+// Home directories should not be used for session inheritance as they contain
+// unrelated sessions from ad-hoc CLI usage
+func isHomeDirectory(encodedPath string) bool {
+	// Common home directory patterns:
+	// macOS: -Users-username
+	// Linux: -home-username
+	// Root: -root
+	parts := strings.Split(encodedPath, "-")
+
+	// Filter out empty parts (from leading dash)
+	var filtered []string
+	for _, p := range parts {
+		if p != "" {
+			filtered = append(filtered, p)
+		}
+	}
+
+	// Home directory patterns have exactly 2 parts: [Users|home, username] or 1 part: [root]
+	if len(filtered) == 2 {
+		prefix := strings.ToLower(filtered[0])
+		return prefix == "users" || prefix == "home"
+	}
+	if len(filtered) == 1 {
+		return strings.ToLower(filtered[0]) == "root"
+	}
+
+	return false
 }
 
 // loadSessions loads sessions for a project directory
