@@ -260,8 +260,16 @@ func (p *Process) waitForExit() {
 	}
 	p.mu.Unlock()
 
-	// Signal completion
-	p.Output <- OutputMessage{Type: "status", Content: "completed"}
+	// Signal completion by sending status and then closing channels
+	// This allows streamProcessOutput to exit its loop and send the complete message
+	select {
+	case p.Output <- OutputMessage{Type: "status", Content: "completed"}:
+	default:
+		// Output channel might be full or closed, continue to Close
+	}
+
+	// Close channels to signal completion to all listeners
+	p.Close()
 }
 
 // SetStatus sets the process status in a thread-safe manner
