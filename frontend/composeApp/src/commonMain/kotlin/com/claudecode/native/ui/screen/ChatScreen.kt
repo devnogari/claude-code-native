@@ -269,9 +269,12 @@ fun ChatScreenContent(
                 try {
                     listState.animateScrollToItem(totalItems - 1)
                 } catch (e: Exception) {
+                    println("ChatScreen: Animate scroll failed, falling back to immediate scroll. Error: ${e.message}")
                     try {
                         listState.scrollToItem(totalItems - 1)
-                    } catch (_: Exception) {}
+                    } catch (scrollError: Exception) {
+                        println("ChatScreen: Immediate scroll also failed. Error: ${scrollError.message}")
+                    }
                 }
                 userScrolledUp = false
                 hasNewMessages = false

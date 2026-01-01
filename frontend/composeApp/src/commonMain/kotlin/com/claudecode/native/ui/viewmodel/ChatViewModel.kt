@@ -1102,11 +1102,12 @@ class ChatViewModel(
 
             // Track this pending user message to prevent duplicate from history watch
             // Use normalized content hash to handle whitespace differences in serialization
+            // Both pendingUserMessages and _messages must be modified under mutex for thread safety
             val normalizedHash = normalizeForComparison(content).hashCode()
-            pendingUserMessages[normalizedHash] = messageId
             println("ChatViewModel: Added pending user message (hash=$normalizedHash): ${content.take(50)}...")
 
             mutex.withLock {
+                pendingUserMessages[normalizedHash] = messageId
                 _messages.value = _messages.value + userMessage
             }
 
