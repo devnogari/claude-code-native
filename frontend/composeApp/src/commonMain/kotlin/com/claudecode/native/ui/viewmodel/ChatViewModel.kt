@@ -155,14 +155,9 @@ class ChatViewModel(
     private var currentClaudeSession: String? = null
     private var currentProjectPath: String? = null  // Original project path for API calls
 
-    // Debounce job for detecting streaming completion from HistoryWatch
-    // When streaming is activated by HistoryWatch (not WebSocket), we need to detect
-    // completion by observing that no new assistant messages arrive for a period
-    private var historyWatchStreamingDebounceJob: Job? = null
     private var loadCommandsJob: Job? = null
     private var currentConnectJob: Job? = null  // Track current connect job to cancel on room switch
     private var isStreamingFromHistoryWatch = false
-    private val historyWatchStreamingTimeout = 3000L // 3 seconds - accounts for tool execution delays
 
     // Session-level tool tracking for matching tool_use with tool_result across messages
     // Using mutableMapOf with Mutex for thread safety across WebSocket and HistoryWatch handlers
@@ -288,10 +283,6 @@ class ChatViewModel(
                 if (currentConversationId != null && currentConversationId != conversationId) {
                     webSocketClient.disconnect()
                     historyWatchClient.disconnect()
-
-                    // Cancel pending debounce job from previous session
-                    historyWatchStreamingDebounceJob?.cancel()
-                    historyWatchStreamingDebounceJob = null
                     isStreamingFromHistoryWatch = false
 
                     // NOTE: We intentionally DO NOT clear messages/title here anymore.
@@ -876,9 +867,6 @@ class ChatViewModel(
                 currentClaudeSession = null
                 currentProjectPath = null
 
-                // Clean up HistoryWatch streaming state
-                historyWatchStreamingDebounceJob?.cancel()
-                historyWatchStreamingDebounceJob = null
                 isStreamingFromHistoryWatch = false
             } catch (e: CancellationException) {
                 throw e
@@ -1445,7 +1433,6 @@ class ChatViewModel(
                 val hasAssistantMessage = event.messages.any { it.message?.role == "assistant" }
                 if (hasAssistantMessage) {
                     // Synchronize streaming state changes to prevent race conditions with WebSocket
-                    // Also manage debounce job inside lock to avoid reading stale isStreamingFromHistoryWatch
                     val shouldStartProgress = streamingMutex.withLock {
                         if (!_isStreaming.value) {
                             println("ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
@@ -1462,27 +1449,6 @@ class ChatViewModel(
                     // Start progress tracking if streaming just started (from HistoryWatch)
                     if (shouldStartProgress) {
                         startProgressTracking("Processing")
-                    }
-                    streamingMutex.withLock {
-
-                        // Reset debounce timer - if no new messages for timeout period, finalize streaming
-                        // Must be inside lock to read isStreamingFromHistoryWatch safely
-                        if (isStreamingFromHistoryWatch) {
-                            historyWatchStreamingDebounceJob?.cancel()
-                            historyWatchStreamingDebounceJob = scope.launch {
-                                delay(historyWatchStreamingTimeout)
-                                // Re-check with lock since state may have changed during delay
-                                streamingMutex.withLock {
-                                    if (_isStreaming.value && isStreamingFromHistoryWatch) {
-                                        println("ChatViewModel: HistoryWatch streaming timeout - finalizing")
-                                    }
-                                }
-                                // Finalize outside the lock to avoid holding it during message finalization
-                                if (_isStreaming.value && isStreamingFromHistoryWatch) {
-                                    finalizeHistoryWatchStreaming()
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -1696,6 +1662,9 @@ class ChatViewModel(
                         isSidechain = claudeMsg.isSidechain
                     )
                 }
+                    // Deduplicate by UUID - keep last message for each UUID
+                    .groupBy { it.id }
+                    .map { (_, messages) -> messages.last() }
 
                 // Update existing messages that have tools without results
                 val toolUsesSnap = mapsMutex.withLock { sessionToolUses.toMap() }
@@ -1772,9 +1741,7 @@ class ChatViewModel(
                     }
                 }
 
-                // Streaming completion is handled by:
-                // 1. WebSocket COMPLETE message (for app-initiated messages)
-                // 2. Debounce timer (for HistoryWatch-initiated streaming from terminal)
+                // Streaming completion is handled by WebSocket COMPLETE message
             }
 
             is HistoryWatchEvent.Error -> {
@@ -1867,10 +1834,7 @@ class ChatViewModel(
             _streamingBlocks.value = emptyList()
             streamingMessageId = null
 
-            // Reset HistoryWatch streaming state if it was active
             isStreamingFromHistoryWatch = false
-            historyWatchStreamingDebounceJob?.cancel()
-            historyWatchStreamingDebounceJob = null
         }
 
         // Stop progress tracking for status line
@@ -1912,27 +1876,6 @@ class ChatViewModel(
 
         // Process next queued message if any (outside the lock to avoid deadlock)
         processNextQueuedMessage()
-    }
-
-    /**
-     * Finalizes streaming that was initiated by HistoryWatch (not WebSocket).
-     * Called when no new assistant messages arrive for a timeout period.
-     */
-    private suspend fun finalizeHistoryWatchStreaming() {
-        // Guard: Only finalize if still in HistoryWatch streaming mode
-        // This prevents race conditions with WebSocket COMPLETE message
-        // Use streamingMutex for thread-safe read of isStreamingFromHistoryWatch
-        val shouldFinalize = streamingMutex.withLock { isStreamingFromHistoryWatch }
-        if (!shouldFinalize) {
-            println("ChatViewModel: HistoryWatch streaming already finalized, skipping")
-            return
-        }
-
-        println("ChatViewModel: Finalizing HistoryWatch streaming")
-
-        // Reuse finalizeStreamingMessage() to properly save streaming blocks as a message
-        // before clearing the streaming state. This prevents chat logs from disappearing.
-        finalizeStreamingMessage()
     }
 
     private fun generateMessageId(): String {
