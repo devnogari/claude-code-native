@@ -153,3 +153,16 @@ data class PaginatedClaudeMessagesResponse(
     val offset: Int,
     @SerialName("has_more") val hasMore: Boolean
 )
+
+/**
+ * Response from session state endpoint for REST API fallback sync.
+ * Used when WebSocket messages are missed or connection is unreliable.
+ */
+@Serializable
+data class SessionStateResponse(
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("encoded_path") val encodedPath: String,
+    @SerialName("session_state") val sessionState: SessionState,
+    val todos: List<TodoItem>,
+    @SerialName("is_streaming") val isStreaming: Boolean
+)

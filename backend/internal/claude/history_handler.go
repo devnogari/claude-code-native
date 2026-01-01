@@ -311,3 +311,71 @@ func (h *HistoryHandler) ToggleSessionFavorite(c *fiber.Ctx) error {
 		IsFavorite: isFavorite,
 	})
 }
+
+// SessionStateResponse represents the session state for REST API fallback sync
+type SessionStateResponse struct {
+	SessionID    string       `json:"session_id"`
+	EncodedPath  string       `json:"encoded_path"`
+	SessionState SessionState `json:"session_state"`
+	Todos        []TodoItem   `json:"todos"`
+	IsStreaming  bool         `json:"is_streaming"`
+}
+
+// GetSessionState handles GET /api/v1/claude-history/projects/:encodedPath/sessions/:sessionId/state
+// This endpoint provides a REST fallback for state sync when WebSocket messages are missed
+func (h *HistoryHandler) GetSessionState(c *fiber.Ctx) error {
+	encodedPath := c.Params("encodedPath")
+	sessionID := c.Params("sessionId")
+
+	if encodedPath == "" || sessionID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "encoded path and session ID are required",
+		})
+	}
+
+	// Validate encodedPath to prevent path traversal attacks
+	if !validateEncodedPath(encodedPath) {
+		h.logger.Warn("invalid encoded path rejected",
+			zap.String("encodedPath", encodedPath))
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "invalid encoded path format",
+		})
+	}
+
+	// Validate sessionID is a valid UUID format
+	if !validateSessionID(sessionID) {
+		h.logger.Warn("invalid session ID rejected",
+			zap.String("sessionID", sessionID))
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "invalid session ID format",
+		})
+	}
+
+	// Get messages to determine session state
+	messages, err := h.cache.GetSessionMessages(encodedPath, sessionID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
+			Error: "session not found",
+		})
+	}
+
+	// Determine session state from messages
+	sessionState := GetSessionState(messages)
+
+	// Get todos for this session
+	todos, _ := GetSessionTodos(sessionID)
+	if todos == nil {
+		todos = []TodoItem{}
+	}
+
+	// isStreaming is true when session is in streaming state
+	isStreaming := sessionState == SessionStateStreaming
+
+	return c.Status(fiber.StatusOK).JSON(SessionStateResponse{
+		SessionID:    sessionID,
+		EncodedPath:  encodedPath,
+		SessionState: sessionState,
+		Todos:        todos,
+		IsStreaming:  isStreaming,
+	})
+}
