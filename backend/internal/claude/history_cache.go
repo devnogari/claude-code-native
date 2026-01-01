@@ -183,7 +183,7 @@ func (c *HistoryCache) loadProject(encodedPath string) (*ClaudeProject, error) {
 	projectDir := filepath.Join(c.basePath, encodedPath)
 	projectPath := DecodeProjectPath(encodedPath)
 
-	sessions, lastAccessed, err := c.loadSessions(projectDir)
+	sessions, lastAccessed, err := c.loadSessions(projectDir, encodedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +246,8 @@ func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSe
 
 		// Check if parent project directory exists
 		if info, err := os.Stat(parentDir); err == nil && info.IsDir() {
-			if sessions, lastAccessed, err := c.loadSessions(parentDir); err == nil && len(sessions) > 0 {
+			// Pass parentEncodedPath so sessions know their actual source location
+			if sessions, lastAccessed, err := c.loadSessions(parentDir, parentEncodedPath); err == nil && len(sessions) > 0 {
 				c.logger.Info("found parent sessions",
 					zap.String("parentDir", parentDir),
 					zap.Int("sessions", len(sessions)))
@@ -259,7 +260,8 @@ func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSe
 }
 
 // loadSessions loads sessions for a project directory
-func (c *HistoryCache) loadSessions(projectDir string) ([]ClaudeSession, time.Time, error) {
+// encodedPath is the encoded path of the directory where session files are located (used for deletion)
+func (c *HistoryCache) loadSessions(projectDir string, encodedPath string) ([]ClaudeSession, time.Time, error) {
 	entries, err := os.ReadDir(projectDir)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -303,12 +305,13 @@ func (c *HistoryCache) loadSessions(projectDir string) ([]ClaudeSession, time.Ti
 		}
 
 		sessions = append(sessions, ClaudeSession{
-			ID:           sessionID,
-			Filename:     entry.Name(),
-			MessageCount: messageCount,
-			FirstMessage: truncateString(firstMsg, 100),
-			CreatedAt:    createdAt,
-			UpdatedAt:    modTime,
+			ID:                sessionID,
+			Filename:          entry.Name(),
+			MessageCount:      messageCount,
+			FirstMessage:      truncateString(firstMsg, 100),
+			CreatedAt:         createdAt,
+			UpdatedAt:         modTime,
+			SourceEncodedPath: encodedPath, // Track where the session file actually resides
 		})
 	}
 

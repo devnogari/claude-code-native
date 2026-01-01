@@ -28,7 +28,8 @@ data class ClaudeSession(
     @SerialName("first_message") val firstMessage: String = "",
     @SerialName("is_favorite") val isFavorite: Boolean = false,
     @SerialName("created_at") val createdAt: Instant? = null,
-    @SerialName("updated_at") val updatedAt: Instant? = null
+    @SerialName("updated_at") val updatedAt: Instant? = null,
+    @SerialName("source_encoded_path") val sourceEncodedPath: String? = null // Actual directory where session file resides (for inherited sessions)
 )
 
 /**

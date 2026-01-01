@@ -80,7 +80,7 @@ fun ProjectListScreenContent(
     val focusManager = LocalFocusManager.current
 
     var showCreateDialog by remember { mutableStateOf(false) }
-    var deleteSessionTarget by remember { mutableStateOf<Pair<String, String>?>(null) } // sessionId, projectPath
+    var deleteSessionTarget by remember { mutableStateOf<Triple<String, String, String?>?>(null) } // sessionId, projectPath, sourceEncodedPath
     var deleteResultMessage by remember { mutableStateOf<String?>(null) }
 
     // Refresh projects when refreshTrigger changes (e.g., when a new session is created)
@@ -108,11 +108,12 @@ fun ProjectListScreenContent(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val (convId, path) = deleteSessionTarget!!
+                        val (convId, path, sourceEncodedPath) = deleteSessionTarget!!
                         deleteSessionTarget = null
                         viewModel.deleteSession(
                             conversationId = convId,
                             projectPath = path,
+                            sourceEncodedPath = sourceEncodedPath,
                             onSuccess = {
                                 deleteResultMessage = "Session deleted"
                                 viewModel.refresh() // Refresh list to reflect deletion
@@ -298,7 +299,7 @@ fun ProjectListScreenContent(
                                         viewModel.toggleSessionFavorite(session.id, project.path)
                                     },
                                     onDeleteSession = { session ->
-                                        deleteSessionTarget = session.id to project.path
+                                        deleteSessionTarget = Triple(session.id, project.path, session.sourceEncodedPath)
                                     },
                                     onNewSession = {
                                         viewModel.startNewSession(project.encodedPath) { sessionId, encodedPath ->

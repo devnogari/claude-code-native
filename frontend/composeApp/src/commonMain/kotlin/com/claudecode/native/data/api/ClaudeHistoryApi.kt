@@ -111,10 +111,17 @@ class ClaudeHistoryApi(private val client: ApiClient) {
      *
      * @param sessionId The session ID to delete
      * @param projectPath The project path where the session resides
+     * @param sourceEncodedPath Optional encoded path where session file actually resides (for inherited sessions)
      */
-    suspend fun deleteSession(sessionId: String, projectPath: String) {
+    suspend fun deleteSession(sessionId: String, projectPath: String, sourceEncodedPath: String? = null) {
         // Use Ktor's built-in URL encoding for consistency
         val encodedPath = projectPath.encodeURLParameter()
-        client.delete("/sessions/$sessionId?path=$encodedPath")
+        val queryParams = buildString {
+            append("path=$encodedPath")
+            if (sourceEncodedPath != null) {
+                append("&source_encoded_path=${sourceEncodedPath.encodeURLParameter()}")
+            }
+        }
+        client.delete("/sessions/$sessionId?$queryParams")
     }
 }

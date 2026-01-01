@@ -9,6 +9,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 mcp-cli call serena/activate_project '{"project": "claude-code-native"}'
 ```
 
+## Workflow Preferences (ALWAYS APPLY)
+
+When working on this project, ALWAYS use these approaches:
+
+1. **Serena**: Use Serena MCP for semantic code analysis (Kotlin + Go)
+2. **Git Worktrees**: Create isolated workspaces for feature development (`.worktrees/`)
+3. **Superpowers Skills**: Use superpowers skills (brainstorming, code-review, TDD, etc.)
+4. **Subagents**: Delegate tasks to specialized agents via Task tool
+5. **Parallel Processing**: Execute independent operations concurrently
+6. **TDD**: Write tests first, then implement (test-driven development)
+7. **Code Review**: ALWAYS run code review (`superpowers:requesting-code-review`) after any code changes
+
+### Worktree Directory
+Worktrees are stored in `.worktrees/` directory (already in .gitignore).
+
 ## Project Overview
 
 Claude Code Native is a cross-platform desktop/web application providing a native UI for Claude Code CLI. It consists of a Go backend with real-time WebSocket streaming and a Kotlin Multiplatform frontend (Compose).
