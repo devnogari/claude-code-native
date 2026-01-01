@@ -169,6 +169,10 @@ class ChatViewModel(
      */
     val sessionCreatedEvent: StateFlow<String?> = _sessionCreatedEvent.asStateFlow()
 
+    /** Pending session ID to emit when first HistoryWatch message arrives (deferred until session folder exists). */
+    private var pendingSessionCreatedEmit: String? = null
+
+
     private val _availableCommands = MutableStateFlow<List<Command>>(emptyList())
     /** Available slash commands (builtin + custom). */
     val availableCommands: StateFlow<List<Command>> = _availableCommands.asStateFlow()
@@ -1387,9 +1391,10 @@ class ChatViewModel(
             // Now send the message
             sendMessageInternal(content)
 
-            // Emit session created event for UI to refresh sidebar
-            println("ChatViewModel: Session created, emitting event: $newSessionId")
-            _sessionCreatedEvent.value = newSessionId
+            // Defer session created event until we receive first HistoryWatch message
+            // (which confirms the session folder exists on disk)
+            println("ChatViewModel: Session created, deferring event until first response: $newSessionId")
+            pendingSessionCreatedEmit = newSessionId
 
         } catch (e: CancellationException) {
             throw e
@@ -1756,6 +1761,15 @@ class ChatViewModel(
                 }
 
                 println("ChatViewModel: Received ${event.messages.size} new messages from history watch")
+
+                // Emit pending session created event now that we've confirmed the session folder exists
+                pendingSessionCreatedEmit?.let { sessionId ->
+                    if (sessionId == event.sessionId) {
+                        println("ChatViewModel: First HistoryWatch message received, emitting session created event: $sessionId")
+                        _sessionCreatedEvent.value = sessionId
+                        pendingSessionCreatedEmit = null
+                    }
+                }
 
                 // Handle queue-operation events first (terminal queued messages)
                 for (claudeMsg in event.messages) {
@@ -2193,10 +2207,14 @@ class ChatViewModel(
 
             is HistoryWatchEvent.Error -> {
                 println("ChatViewModel: History watch error: ${event.message}")
+                // Clear pending event to prevent stale state
+                pendingSessionCreatedEmit = null
             }
 
             is HistoryWatchEvent.Disconnected -> {
                 println("ChatViewModel: History watch disconnected")
+                // Clear pending event to prevent stale state
+                pendingSessionCreatedEmit = null
             }
         }
     }
