@@ -1,9 +1,18 @@
 package ws
 
 import (
+	"log"
 	"sync"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
+)
+
+const (
+	// sendTimeout is the maximum time to wait when sending a message to a client
+	sendTimeout = 100 * time.Millisecond
+	// maxSendRetries is the number of times to retry sending a message
+	maxSendRetries = 3
 )
 
 // BroadcastMessage represents a message to be broadcast to a conversation
@@ -107,6 +116,7 @@ func (h *Hub) unregisterClient(client *Client) {
 }
 
 // broadcastMessage sends a message to all clients in a conversation
+// Uses retry logic with timeout to avoid silent message drops
 func (h *Hub) broadcastMessage(message *BroadcastMessage) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -117,11 +127,22 @@ func (h *Hub) broadcastMessage(message *BroadcastMessage) {
 	}
 
 	for _, client := range clients {
-		// Non-blocking send to avoid blocking if client's buffer is full
-		select {
-		case client.Send <- message.Data:
-		default:
-			// Client's buffer is full, skip this message
+		// Try to send with retry logic to avoid silent drops
+		sent := false
+		for retry := 0; retry < maxSendRetries && !sent; retry++ {
+			select {
+			case client.Send <- message.Data:
+				sent = true
+			case <-time.After(sendTimeout):
+				// Timeout, will retry if retries remaining
+				if retry == maxSendRetries-1 {
+					log.Printf("[WARN] Hub: dropped message for client %s (buffer full after %d retries), conv=%s, msgLen=%d",
+						client.ID, maxSendRetries, message.ConversationID, len(message.Data))
+				}
+			case <-client.Done:
+				// Client is disconnecting, skip
+				sent = true // Mark as sent to break retry loop
+			}
 		}
 	}
 }
