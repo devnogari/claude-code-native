@@ -108,7 +108,7 @@ class ClaudeHistoryApiTest {
                 content = JsonPrimitive("Hello World")
             ),
             cwd = "/Users/test/project",
-            parentMsgId = "parent123"
+            parentUuid = "parent123"
         )
 
         assertEquals("message", message.type)
@@ -116,7 +116,7 @@ class ClaudeHistoryApiTest {
         assertEquals(timestamp, message.timestamp)
         assertEquals("user", message.message?.role)
         assertEquals("/Users/test/project", message.cwd)
-        assertEquals("parent123", message.parentMsgId)
+        assertEquals("parent123", message.parentUuid)
     }
 
     @Test

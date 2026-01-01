@@ -14,6 +14,8 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -127,6 +129,17 @@ fun MessageBubble(
                     }
                 }
             } else {
+                // Show metadata header for assistant messages (agentId, gitBranch, sidechain)
+                val hasMetadata = message.agentId != null || message.gitBranch != null || message.isSidechain
+                if (hasMetadata) {
+                    MessageMetadataHeader(
+                        agentId = message.agentId,
+                        gitBranch = message.gitBranch,
+                        isSidechain = message.isSidechain,
+                        modifier = Modifier.widthIn(max = assistantMaxWidth)
+                    )
+                }
+
                 // Assistant messages: render blocks in order (preserving interleaved structure)
                 message.blocks.forEach { block ->
                     when (block) {
@@ -690,6 +703,100 @@ fun QueuedMessageBubble(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline
             )
+        }
+    }
+}
+
+/**
+ * Displays metadata header for messages (subagent, git branch, sidechain indicators).
+ * Shows a compact row with relevant indicators before the message content.
+ *
+ * @param agentId Subagent ID if message is from a spawned agent
+ * @param gitBranch Git branch where the message was sent
+ * @param isSidechain True if message is part of a sidechain conversation
+ * @param modifier Optional modifier for the component
+ */
+@Composable
+fun MessageMetadataHeader(
+    agentId: String?,
+    gitBranch: String?,
+    isSidechain: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val subagentColor = Color(0xFFBA68C8)  // Purple for subagents
+    val branchColor = Color(0xFF64B5F6)    // Light blue for git branch
+    val sidechainColor = Color(0xFFFFB74D) // Orange for sidechain
+
+    Row(
+        modifier = modifier
+            .padding(bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Subagent indicator
+        if (agentId != null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Person,
+                    contentDescription = "Subagent",
+                    modifier = Modifier.size(12.dp),
+                    tint = subagentColor
+                )
+                Text(
+                    text = "agent-${agentId.take(7)}",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace
+                    ),
+                    color = subagentColor
+                )
+            }
+        }
+
+        // Git branch indicator
+        if (gitBranch != null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AccountTree,
+                    contentDescription = "Git branch",
+                    modifier = Modifier.size(12.dp),
+                    tint = branchColor
+                )
+                Text(
+                    text = gitBranch,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace
+                    ),
+                    color = branchColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        // Sidechain indicator
+        if (isSidechain) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.CallSplit,
+                    contentDescription = "Sidechain",
+                    modifier = Modifier.size(12.dp),
+                    tint = sidechainColor
+                )
+                Text(
+                    text = "sidechain",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = sidechainColor
+                )
+            }
         }
     }
 }

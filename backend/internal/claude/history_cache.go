@@ -38,9 +38,9 @@ type HistoryCache struct {
 	subscribersMu sync.RWMutex
 	subscribers   map[string][]SessionChangeCallback // keyed by "encodedPath/sessionID"
 
-	// Track last known message count per session for detecting new messages
-	lastMessageCount   map[string]int // keyed by "encodedPath/sessionID"
-	lastMessageCountMu sync.RWMutex
+	// Track last known message UUID per session for detecting new messages
+	lastMessageUUID   map[string]string // keyed by "encodedPath/sessionID"
+	lastMessageUUIDMu sync.RWMutex
 }
 
 // NewHistoryCache creates a new cache with file watching
@@ -54,12 +54,12 @@ func NewHistoryCache(logger *zap.Logger) (*HistoryCache, error) {
 	}
 
 	cache := &HistoryCache{
-		basePath:         basePath,
-		logger:           logger,
-		watcher:          watcher,
-		projects:         make(map[string]*ClaudeProject),
-		subscribers:      make(map[string][]SessionChangeCallback),
-		lastMessageCount: make(map[string]int),
+		basePath:        basePath,
+		logger:          logger,
+		watcher:         watcher,
+		projects:        make(map[string]*ClaudeProject),
+		subscribers:     make(map[string][]SessionChangeCallback),
+		lastMessageUUID: make(map[string]string),
 	}
 
 	// Initial load
@@ -590,19 +590,24 @@ func (c *HistoryCache) Subscribe(encodedPath, sessionID string, callback Session
 	defer c.subscribersMu.Unlock()
 	c.subscribers[key] = append(c.subscribers[key], callback)
 
-	// Initialize last message count
-	c.lastMessageCountMu.Lock()
-	if _, exists := c.lastMessageCount[key]; !exists {
+	// Initialize last message UUID
+	c.lastMessageUUIDMu.Lock()
+	if _, exists := c.lastMessageUUID[key]; !exists {
 		messages, _ := c.GetSessionMessages(encodedPath, sessionID)
-		count := 0
+		// Find last message with UUID (user/assistant or queue-operation)
+		lastUUID := ""
 		for _, msg := range messages {
-			if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
-				count++
+			if msg.UUID != "" {
+				if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
+					lastUUID = msg.UUID
+				} else if msg.Type == "queue-operation" {
+					lastUUID = msg.UUID
+				}
 			}
 		}
-		c.lastMessageCount[key] = count
+		c.lastMessageUUID[key] = lastUUID
 	}
-	c.lastMessageCountMu.Unlock()
+	c.lastMessageUUIDMu.Unlock()
 
 	c.logger.Debug("subscribed to session changes",
 		zap.String("encodedPath", encodedPath),
@@ -615,6 +620,11 @@ func (c *HistoryCache) Unsubscribe(encodedPath, sessionID string) {
 	c.subscribersMu.Lock()
 	defer c.subscribersMu.Unlock()
 	delete(c.subscribers, key)
+
+	// Clean up UUID tracking to prevent memory leak
+	c.lastMessageUUIDMu.Lock()
+	delete(c.lastMessageUUID, key)
+	c.lastMessageUUIDMu.Unlock()
 
 	c.logger.Debug("unsubscribed from session changes",
 		zap.String("encodedPath", encodedPath),
@@ -649,36 +659,57 @@ func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath str
 		return
 	}
 
-	// Filter user/assistant messages AND queue-operation events
-	var filtered []ClaudeMessage
+	// Get last known UUID
+	c.lastMessageUUIDMu.Lock()
+	lastUUID := c.lastMessageUUID[key]
+
+	// Find new messages after lastUUID
+	var newMessages []ClaudeMessage
+	foundLast := lastUUID == "" // If no last UUID, all messages are new
+	newLastUUID := lastUUID
+
 	for _, msg := range messages {
-		// Include user/assistant messages
+		// Only include user/assistant messages and queue-operation events
+		isRelevant := false
 		if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
-			filtered = append(filtered, msg)
+			isRelevant = true
+		} else if msg.Type == "queue-operation" {
+			isRelevant = true
 		}
-		// Also include queue-operation events (for queued message display)
-		if msg.Type == "queue-operation" {
-			filtered = append(filtered, msg)
+
+		if !isRelevant {
+			continue
+		}
+
+		if foundLast {
+			// Collect messages after the last known UUID
+			// Note: Messages without UUIDs (e.g., queue-operation) are still collected
+			// and sent to clients, but they don't update newLastUUID. This means if
+			// only UUID-less messages are appended, they may be re-sent on next change.
+			// This is acceptable for queue-operation events which are transient.
+			newMessages = append(newMessages, msg)
+			if msg.UUID != "" {
+				newLastUUID = msg.UUID
+			}
+		} else if msg.UUID == lastUUID {
+			// Found the last known message, start collecting from next
+			foundLast = true
 		}
 	}
 
-	// Check for new messages
-	c.lastMessageCountMu.Lock()
-	lastCount := c.lastMessageCount[key]
-	currentCount := len(filtered)
-	c.lastMessageCount[key] = currentCount
-	c.lastMessageCountMu.Unlock()
+	// Update last UUID
+	c.lastMessageUUID[key] = newLastUUID
+	c.lastMessageUUIDMu.Unlock()
 
-	if currentCount <= lastCount {
-		return // No new messages
+	if len(newMessages) == 0 {
+		return
 	}
-
-	// Get only new messages
-	newMessages := filtered[lastCount:]
 
 	c.logger.Debug("notifying session subscribers",
 		zap.String("sessionID", sessionID),
-		zap.Int("newMessages", len(newMessages)))
+		zap.Int("newMessages", len(newMessages)),
+		zap.String("lastUUID", lastUUID),
+		zap.String("newLastUUID", newLastUUID))
 
 	// Notify all subscribers
 	for _, callback := range callbacks {

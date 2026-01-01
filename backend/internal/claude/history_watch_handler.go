@@ -38,11 +38,12 @@ const (
 
 // WatchOutgoingMessage represents a message sent to the WebSocket client
 type WatchOutgoingMessage struct {
-	Type        string          `json:"type"`
-	SessionID   string          `json:"session_id,omitempty"`
-	EncodedPath string          `json:"encoded_path,omitempty"`
-	Messages    []ClaudeMessage `json:"messages,omitempty"`
-	Error       string          `json:"error,omitempty"`
+	Type         string          `json:"type"`
+	SessionID    string          `json:"session_id,omitempty"`
+	EncodedPath  string          `json:"encoded_path,omitempty"`
+	Messages     []ClaudeMessage `json:"messages,omitempty"`
+	SessionState SessionState    `json:"session_state,omitempty"`
+	Error        string          `json:"error,omitempty"`
 }
 
 // WatchClient represents a WebSocket client watching a session
@@ -183,12 +184,20 @@ func (h *HistoryWatchHandler) handleSessionChange(encodedPath, sessionID string,
 		return
 	}
 
+	// Get all messages to determine session state
+	allMessages, err := h.cache.GetSessionMessages(encodedPath, sessionID)
+	sessionState := SessionStateIdle
+	if err == nil {
+		sessionState = GetSessionState(allMessages)
+	}
+
 	// Create outgoing message
 	msg := &WatchOutgoingMessage{
-		Type:        WatchMessageTypeNewMessages,
-		SessionID:   sessionID,
-		EncodedPath: encodedPath,
-		Messages:    newMessages,
+		Type:         WatchMessageTypeNewMessages,
+		SessionID:    sessionID,
+		EncodedPath:  encodedPath,
+		Messages:     newMessages,
+		SessionState: sessionState,
 	}
 
 	data, err := json.Marshal(msg)
