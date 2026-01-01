@@ -14,6 +14,8 @@ import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.util.toUserMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlin.time.Clock
@@ -145,6 +147,13 @@ class ChatViewModel(
     private var currentEncodedPath: String? = null
     private var currentClaudeSession: String? = null
     private var currentProjectPath: String? = null  // Original project path for API calls
+
+    // Debounce job for detecting streaming completion from HistoryWatch
+    // When streaming is activated by HistoryWatch (not WebSocket), we need to detect
+    // completion by observing that no new assistant messages arrive for a period
+    private var historyWatchStreamingDebounceJob: Job? = null
+    private var isStreamingFromHistoryWatch = false
+    private val historyWatchStreamingTimeout = 3000L // 3 seconds - accounts for tool execution delays
 
     // Session-level tool tracking for matching tool_use with tool_result across messages
     private val sessionToolUses = mutableMapOf<String, ToolUseInfo>()
@@ -845,6 +854,11 @@ class ChatViewModel(
                 currentEncodedPath = null
                 currentClaudeSession = null
                 currentProjectPath = null
+
+                // Clean up HistoryWatch streaming state
+                historyWatchStreamingDebounceJob?.cancel()
+                historyWatchStreamingDebounceJob = null
+                isStreamingFromHistoryWatch = false
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1135,11 +1149,26 @@ class ChatViewModel(
 
                 // Check if any message is from assistant - this means Claude is processing
                 val hasAssistantMessage = event.messages.any { it.message?.role == "assistant" }
-                if (hasAssistantMessage && !_isStreaming.value) {
-                    println("ChatViewModel: Detected assistant activity, activating streaming state")
-                    _isStreaming.value = true
-                    if (streamingMessageId == null) {
-                        streamingMessageId = generateMessageId()
+                if (hasAssistantMessage) {
+                    if (!_isStreaming.value) {
+                        println("ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
+                        _isStreaming.value = true
+                        isStreamingFromHistoryWatch = true
+                        if (streamingMessageId == null) {
+                            streamingMessageId = generateMessageId()
+                        }
+                    }
+
+                    // Reset debounce timer - if no new messages for 2 seconds, finalize streaming
+                    if (isStreamingFromHistoryWatch) {
+                        historyWatchStreamingDebounceJob?.cancel()
+                        historyWatchStreamingDebounceJob = scope.launch {
+                            delay(historyWatchStreamingTimeout)
+                            if (_isStreaming.value && isStreamingFromHistoryWatch) {
+                                println("ChatViewModel: HistoryWatch streaming timeout - finalizing")
+                                finalizeHistoryWatchStreaming()
+                            }
+                        }
                     }
                 }
 
@@ -1407,8 +1436,9 @@ class ChatViewModel(
                     }
                 }
 
-                // Note: Streaming completion is handled by WebSocket COMPLETE message
-                // No debounce needed - trust the WebSocket signal
+                // Streaming completion is handled by:
+                // 1. WebSocket COMPLETE message (for app-initiated messages)
+                // 2. Debounce timer (for HistoryWatch-initiated streaming from terminal)
             }
 
             is HistoryWatchEvent.Error -> {
@@ -1475,6 +1505,38 @@ class ChatViewModel(
         _streamingTools.value = emptyList()
         _streamingBlocks.value = emptyList()
         streamingMessageId = null
+
+        // Reset HistoryWatch streaming state if it was active
+        isStreamingFromHistoryWatch = false
+        historyWatchStreamingDebounceJob?.cancel()
+        historyWatchStreamingDebounceJob = null
+
+        // Process next queued message if any
+        processNextQueuedMessage()
+    }
+
+    /**
+     * Finalizes streaming that was initiated by HistoryWatch (not WebSocket).
+     * Called when no new assistant messages arrive for a timeout period.
+     */
+    private suspend fun finalizeHistoryWatchStreaming() {
+        // Guard: Only finalize if still in HistoryWatch streaming mode
+        // This prevents race conditions with WebSocket COMPLETE message
+        if (!isStreamingFromHistoryWatch) {
+            println("ChatViewModel: HistoryWatch streaming already finalized, skipping")
+            return
+        }
+
+        println("ChatViewModel: Finalizing HistoryWatch streaming")
+
+        // Reset streaming state
+        _isStreaming.value = false
+        _streamingContent.value = ""
+        _streamingTools.value = emptyList()
+        _streamingBlocks.value = emptyList()
+        streamingMessageId = null
+        isStreamingFromHistoryWatch = false
+        historyWatchStreamingDebounceJob = null
 
         // Process next queued message if any
         processNextQueuedMessage()
