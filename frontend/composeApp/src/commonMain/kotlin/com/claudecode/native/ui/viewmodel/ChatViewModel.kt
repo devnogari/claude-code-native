@@ -2128,6 +2128,37 @@ class ChatViewModel(
                                 }
 
                                 if (isAlreadyFinalized) {
+                                    // Even if finalized, we may need to update existing message with new tools
+                                    // This handles the race condition where WebSocket COMPLETE arrives before
+                                    // HistoryWatch delivers tool_use blocks
+                                    val newMsgToolCount = newMsg.blocks.count { it is ContentBlock.Tool }
+                                    if (newMsgToolCount > 0) {
+                                        // Find the existing finalized message and update with tools if needed
+                                        val existingIdx = currentMessages.indexOfFirst { existing ->
+                                            existing.role == MessageRole.ASSISTANT &&
+                                                (existing.content == newMsg.content ||
+                                                 existing.content.take(150) == newMsg.content.take(150) ||
+                                                 (existing.content.isNotEmpty() && newMsg.content.isNotEmpty() &&
+                                                  existing.content.take(100) == newMsg.content.take(100)))
+                                        }
+                                        if (existingIdx >= 0) {
+                                            val existing = currentMessages[existingIdx]
+                                            val existingToolCount = existing.blocks.count { it is ContentBlock.Tool }
+                                            if (existingToolCount < newMsgToolCount) {
+                                                // Update existing message with new tools
+                                                currentMessages[existingIdx] = existing.copy(blocks = newMsg.blocks)
+                                                updated = true
+                                                // Also track new tool IDs as finalized to prevent duplicate processing
+                                                // Lock ordering: mutex (#2) → mapsMutex (#3) is allowed
+                                                mapsMutex.withLock {
+                                                    newMsgToolIds.forEach { toolId ->
+                                                        finalizedAssistantMessages[toolId.hashCode()] = existing.id
+                                                    }
+                                                }
+                                                println("ChatViewModel: Updated finalized message from $existingToolCount to $newMsgToolCount tools")
+                                            }
+                                        }
+                                    }
                                     println("ChatViewModel: Skipping already finalized assistant message: ${newMsg.content.take(30)}... (${newMsgToolIds.size} tools)")
                                     continue
                                 }

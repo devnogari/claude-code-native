@@ -523,4 +523,182 @@ class ChatViewModelRaceConditionTest {
 
         assertTrue(result.isEmpty(), "Should not produce empty message blocks")
     }
+
+    // =====================================
+    // Tool Message Race Condition Tests
+    // =====================================
+
+    /**
+     * Simulates the finalized message update pattern.
+     *
+     * Tests the fix for: WebSocket COMPLETE arriving before HistoryWatch
+     * delivers tool_use blocks, causing tools to be lost.
+     */
+    class FinalizedMessageSimulator {
+        data class ChatMessage(
+            val id: String,
+            val content: String,
+            val toolBlocks: List<String> = emptyList()
+        )
+
+        val messages = mutableListOf<ChatMessage>()
+        val finalizedContentHashes = mutableSetOf<Int>()
+
+        /**
+         * Simulates finalizeStreamingMessage - creates message with content only (no tools yet)
+         */
+        fun finalizeWithTextOnly(messageId: String, content: String) {
+            messages.add(ChatMessage(id = messageId, content = content))
+            // Track this content as finalized
+            finalizedContentHashes.add(content.take(200).hashCode())
+        }
+
+        /**
+         * Simulates handleHistoryWatchEvent processing a new message.
+         * This tests the fix: even if finalized, update if new message has more tools.
+         *
+         * @return true if message was updated, false if skipped
+         */
+        fun processHistoryWatchMessage(content: String, toolBlocks: List<String>): Boolean {
+            val contentHash = content.take(200).hashCode()
+            val isAlreadyFinalized = finalizedContentHashes.contains(contentHash)
+
+            if (isAlreadyFinalized) {
+                // FIX: Even if finalized, update with tools if new message has more
+                val newToolCount = toolBlocks.size
+                if (newToolCount > 0) {
+                    // Find existing finalized message
+                    val existingIdx = messages.indexOfFirst { existing ->
+                        existing.content == content ||
+                            existing.content.take(100) == content.take(100)
+                    }
+                    if (existingIdx >= 0) {
+                        val existing = messages[existingIdx]
+                        val existingToolCount = existing.toolBlocks.size
+                        if (existingToolCount < newToolCount) {
+                            // Update with new tools
+                            messages[existingIdx] = existing.copy(toolBlocks = toolBlocks)
+                            return true
+                        }
+                    }
+                }
+                return false // Skipped as finalized
+            }
+
+            // Not finalized - would add as new message
+            messages.add(ChatMessage(id = "new-${messages.size}", content = content, toolBlocks = toolBlocks))
+            return true
+        }
+    }
+
+    @Test
+    fun `finalized message should be updated with tools from historywatch`() {
+        val sim = FinalizedMessageSimulator()
+
+        // Step 1: WebSocket COMPLETE arrives, message finalized with text only
+        sim.finalizeWithTextOnly("msg-1", "I'll read the file for you.")
+
+        assertEquals(1, sim.messages.size)
+        assertEquals(0, sim.messages[0].toolBlocks.size, "Initially no tools")
+
+        // Step 2: HistoryWatch arrives with same text + tool blocks
+        val updated = sim.processHistoryWatchMessage(
+            content = "I'll read the file for you.",
+            toolBlocks = listOf("read-file-1")
+        )
+
+        assertTrue(updated, "Should update finalized message with tools")
+        assertEquals(1, sim.messages.size, "Should not add new message")
+        assertEquals(1, sim.messages[0].toolBlocks.size, "Should have 1 tool")
+        assertEquals("read-file-1", sim.messages[0].toolBlocks[0])
+    }
+
+    @Test
+    fun `finalized message should be updated with multiple tools`() {
+        val sim = FinalizedMessageSimulator()
+
+        // Finalize with text only
+        sim.finalizeWithTextOnly("msg-1", "Let me read and edit the file.")
+
+        // HistoryWatch with multiple tools
+        val updated = sim.processHistoryWatchMessage(
+            content = "Let me read and edit the file.",
+            toolBlocks = listOf("read-file-1", "edit-file-1", "write-file-1")
+        )
+
+        assertTrue(updated)
+        assertEquals(3, sim.messages[0].toolBlocks.size)
+    }
+
+    @Test
+    fun `finalized message without tools should not be duplicated`() {
+        val sim = FinalizedMessageSimulator()
+
+        sim.finalizeWithTextOnly("msg-1", "Simple response without tools.")
+
+        // HistoryWatch with same text but no tools
+        val updated = sim.processHistoryWatchMessage(
+            content = "Simple response without tools.",
+            toolBlocks = emptyList()
+        )
+
+        assertFalse(updated, "Should skip duplicate without new tools")
+        assertEquals(1, sim.messages.size, "Should not duplicate message")
+    }
+
+    @Test
+    fun `partial content match should still update with tools`() {
+        val sim = FinalizedMessageSimulator()
+
+        // Long text, finalized
+        val longText = "This is a very long response that might be truncated " +
+            "in the content hash comparison..."
+        sim.finalizeWithTextOnly("msg-1", longText)
+
+        // HistoryWatch with slightly different (truncated) text but with tools
+        val slightlyDifferent = "This is a very long response that might be truncated"
+        val updated = sim.processHistoryWatchMessage(
+            content = slightlyDifferent,
+            toolBlocks = listOf("tool-1")
+        )
+
+        // Should update because prefix matches (first 100 chars)
+        assertTrue(updated, "Should update on partial match with new tools")
+    }
+
+    @Test
+    fun `sequential tool results should accumulate`() {
+        val sim = FinalizedMessageSimulator()
+
+        // Finalize with text
+        sim.finalizeWithTextOnly("msg-1", "Running multiple tools...")
+
+        // First HistoryWatch: 1 tool
+        sim.processHistoryWatchMessage("Running multiple tools...", listOf("tool-1"))
+        assertEquals(1, sim.messages[0].toolBlocks.size)
+
+        // Second HistoryWatch: 2 tools
+        sim.processHistoryWatchMessage("Running multiple tools...", listOf("tool-1", "tool-2"))
+        assertEquals(2, sim.messages[0].toolBlocks.size)
+
+        // Third HistoryWatch: 3 tools
+        sim.processHistoryWatchMessage("Running multiple tools...", listOf("tool-1", "tool-2", "tool-3"))
+        assertEquals(3, sim.messages[0].toolBlocks.size)
+    }
+
+    @Test
+    fun `existing tools should not be reduced`() {
+        val sim = FinalizedMessageSimulator()
+
+        sim.finalizeWithTextOnly("msg-1", "Response with tools")
+
+        // First update: 3 tools
+        sim.processHistoryWatchMessage("Response with tools", listOf("tool-1", "tool-2", "tool-3"))
+        assertEquals(3, sim.messages[0].toolBlocks.size)
+
+        // Stale update: only 1 tool (should be ignored)
+        val updated = sim.processHistoryWatchMessage("Response with tools", listOf("tool-1"))
+        assertFalse(updated, "Should not reduce tool count")
+        assertEquals(3, sim.messages[0].toolBlocks.size, "Should keep 3 tools")
+    }
 }
