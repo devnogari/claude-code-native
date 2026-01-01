@@ -146,6 +146,10 @@ func (s *Server) deleteSession(c *fiber.Ctx) error {
 		// Don't return error - session might already be deleted or not exist
 	}
 
+	// Refresh history cache to reflect the deletion immediately
+	s.historyCache.Refresh()
+	s.logger.Info("history cache refreshed after session deletion")
+
 	s.logger.Info("claude session deleted",
 		zap.String("sessionID", sessionIDToDelete.String()),
 		zap.String("conversationID", convID.String()),
@@ -233,6 +237,11 @@ func (s *Server) deleteSessionDirect(c *fiber.Ctx) error {
 			}
 		}
 	}
+
+	// Refresh history cache to reflect the deletion immediately
+	// This ensures the API returns updated session counts without waiting for file watcher
+	s.historyCache.Refresh()
+	s.logger.Info("history cache refreshed after session deletion")
 
 	s.logger.Info("claude session deleted directly",
 		zap.String("sessionID", sessionID.String()),
