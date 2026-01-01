@@ -356,6 +356,20 @@ class ChatViewModel(
                         currentClaudeSession = null  // No session ID yet
                         _conversationTitle.value = "New Chat"
 
+                        // FIX: Clear previous session's messages for draft sessions
+                        // Without this, messages from the previous conversation remain visible
+                        mapsMutex.withLock {
+                            sessionToolUses.clear()
+                            sessionToolResults.clear()
+                            pendingUserMessages.clear()
+                            finalizedAssistantMessages.clear()
+                            processedHistoryWatchTimestamps.clear()
+                        }
+                        mutex.withLock {
+                            _messages.value = emptyList()
+                        }
+                        println("ChatViewModel: Cleared previous session state for draft")
+
                         // Fetch project info for project path and commands
                         try {
                             val project = claudeHistoryApi.getProject(encodedPath)
