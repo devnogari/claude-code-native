@@ -189,17 +189,19 @@ fun ChatScreenContent(
     var hasScrolledToBottom by remember(conversationId) { mutableStateOf(false) }
     LaunchedEffect(conversationId, messages.size) {
         if (!hasScrolledToBottom && messages.isNotEmpty()) {
-            // Wait a bit for layout to complete
+            // Wait for layout to stabilize
             kotlinx.coroutines.delay(100)
             try {
+                // Verify layout is ready before scrolling
+                val expectedCount = filteredMessagesCount
                 val totalItems = listState.layoutInfo.totalItemsCount
-                if (totalItems > 0) {
+                if (totalItems > 0 && totalItems >= expectedCount) {
                     listState.scrollToItem(totalItems - 1)
+                    hasScrolledToBottom = true
                 }
             } catch (e: Exception) {
                 // Ignore layout exceptions
             }
-            hasScrolledToBottom = true
         }
     }
 
@@ -211,9 +213,17 @@ fun ChatScreenContent(
     val swipeThreshold = 100f  // Minimum swipe distance to trigger back
 
     // Single auto-scroll effect: scroll to bottom when new content arrives (unless user scrolled up)
+    // Wait for layout to stabilize before scrolling to prevent jumps during message reload
     LaunchedEffect(messages.size, streamingBlocks.size, isStreaming) {
+        // Small delay to let LazyColumn layout stabilize after message list changes
+        kotlinx.coroutines.delay(50)
+
+        // Calculate expected item count (filtered messages + streaming bubble if active)
+        val expectedCount = filteredMessagesCount + (if (isStreaming) 1 else 0) + queuedMessages.size
         val totalItems = listState.layoutInfo.totalItemsCount
-        if (totalItems > 0) {
+
+        // Only scroll if layout is consistent with expected count
+        if (totalItems > 0 && totalItems >= expectedCount - 1) {
             if (!userScrolledUp) {
                 // Auto-scroll to bottom
                 try {
