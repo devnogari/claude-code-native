@@ -496,10 +496,30 @@ class ChatViewModel(
                         e.message?.contains("404", ignoreCase = true) == true ||
                         e.message?.contains("resource not found", ignoreCase = true) == true
                 if (isNotFound) {
-                    println("ChatViewModel: No history found for session (this is normal for new chats)")
-                    // Start with empty messages - session will be created on first message send
+                    println("[$callId] No history found for session (this is normal for new chats)")
+
+                    // GUARD CHECK: Verify we're still the active conversation before clearing state
+                    if (currentConversationId != expectedConversationId) {
+                        println("[$callId] !!! GUARD: Room switched during 404 handling, aborting state clear")
+                        return
+                    }
+
+                    // Clear old state for new sessions - this is the FIX for stale messages
+                    // Previously we only cleared on successful message load, leaving old messages
+                    // visible when starting a new session
+                    mapsMutex.withLock {
+                        sessionToolUses.clear()
+                        sessionToolResults.clear()
+                        pendingUserMessages.clear()
+                        finalizedAssistantMessages.clear()
+                        processedHistoryWatchTimestamps.clear()
+                    }
+                    mutex.withLock {
+                        _messages.value = emptyList()
+                    }
+                    println("[$callId] Cleared state for new session")
                 } else {
-                    println("ChatViewModel: Failed to load messages from filesystem: ${e.message}")
+                    println("[$callId] Failed to load messages from filesystem: ${e.message}")
                     _error.value = e.toUserMessage()
                 }
             }
@@ -763,6 +783,18 @@ class ChatViewModel(
                     e.message?.contains("404", ignoreCase = true) == true
             if (isNotFound) {
                 println("ChatViewModel: No history found for conversation (this is normal for new chats)")
+
+                // Clear old state for new sessions - matches behavior in loadMessagesFromFilesystem()
+                mapsMutex.withLock {
+                    sessionToolUses.clear()
+                    sessionToolResults.clear()
+                    pendingUserMessages.clear()
+                    finalizedAssistantMessages.clear()
+                    processedHistoryWatchTimestamps.clear()
+                }
+                mutex.withLock {
+                    _messages.value = emptyList()
+                }
             } else {
                 println("ChatViewModel: Failed to load messages: ${e.message}")
                 e.printStackTrace()
