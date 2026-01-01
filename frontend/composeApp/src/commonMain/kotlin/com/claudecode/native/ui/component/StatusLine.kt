@@ -190,11 +190,11 @@ private fun formatTokenCount(tokens: Int): String {
         tokens < 1000 -> "$tokens"
         tokens < 1_000_000 -> {
             val k = tokens / 1000.0
-            if (k >= 10) "${k.toInt()}k" else "%.1fk".format(k)
+            if (k >= 10) "${k.toInt()}k" else "${(k * 10).toInt() / 10.0}k"
         }
         else -> {
             val m = tokens / 1_000_000.0
-            "%.1fM".format(m)
+            "${(m * 10).toInt() / 10.0}M"
         }
     }
 }
