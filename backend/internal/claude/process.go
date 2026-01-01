@@ -90,7 +90,8 @@ type Process struct {
 	logger         *zap.Logger
 	mu             sync.RWMutex
 	closeOnce      sync.Once
-	hasRun         bool // Track if process has run before (for --continue flag)
+	hasRun         bool           // Track if process has run before (for --continue flag)
+	wg             sync.WaitGroup // Track goroutines for cleanup synchronization
 }
 
 // NewProcess creates a new Process for a conversation
@@ -125,6 +126,13 @@ func (p *Process) StartWithPrompt(prompt string) error {
 
 	// Reset channels for reuse if this is a subsequent run
 	if p.hasRun {
+		// Release lock while waiting for goroutines to avoid deadlock
+		p.mu.Unlock()
+		// Wait for previous goroutines (readOutput, waitForExit) to complete
+		// This prevents race condition where old goroutines send on closed channels
+		p.wg.Wait()
+		p.mu.Lock()
+		// Now safe to recreate channels
 		p.Done = make(chan struct{})
 		p.Output = make(chan OutputMessage, 100)
 		p.Error = make(chan error, 10)
@@ -201,10 +209,20 @@ func (p *Process) StartWithPrompt(prompt string) error {
 		zap.Int("pid", cmd.Process.Pid),
 		zap.String("sessionID", p.ConversationID.String()))
 
-	// Start goroutines for I/O handling
-	go p.readOutput(stdout, "stdout")
-	go p.readOutput(stderr, "stderr")
-	go p.waitForExit()
+	// Start goroutines for I/O handling with WaitGroup tracking
+	p.wg.Add(3)
+	go func() {
+		defer p.wg.Done()
+		p.readOutput(stdout, "stdout")
+	}()
+	go func() {
+		defer p.wg.Done()
+		p.readOutput(stderr, "stderr")
+	}()
+	go func() {
+		defer p.wg.Done()
+		p.waitForExit()
+	}()
 
 	return nil
 }
