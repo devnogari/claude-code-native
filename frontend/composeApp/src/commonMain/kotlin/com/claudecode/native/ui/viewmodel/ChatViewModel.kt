@@ -133,18 +133,29 @@ class ChatViewModel(
      */
     val scrollToBottomSignal: StateFlow<Int> = _scrollToBottomSignal.asStateFlow()
 
-    private val _progressStatus = MutableStateFlow(ProgressStatus())
+    // Per-conversation progress tracking (Map: conversationId -> ProgressStatus)
+    // Note: Map access is safe because all operations occur on the main coroutine dispatcher
+    // via viewModelScope, which is single-threaded. No mutex needed.
+    private val _progressStatusMap = mutableMapOf<String, MutableStateFlow<ProgressStatus>>()
+
+    // Per-conversation elapsed time tracking jobs (Map: conversationId -> Job)
+    private val elapsedTimeJobs = mutableMapOf<String, Job>()
+
+    // Per-conversation streaming start times (Map: conversationId -> timestamp)
+    private val streamingStartTimes = mutableMapOf<String, Long>()
+
+    // Static fallback for when no conversation is selected (avoids creating new StateFlow each access)
+    private val _inactiveProgressStatus = MutableStateFlow(ProgressStatus()).asStateFlow()
+
     /**
-     * Progress status for the status line UI (Claude Code style).
+     * Progress status for the current conversation's status line UI (Claude Code style).
      * Tracks elapsed time, status text, tokens, and thinking time during streaming.
+     * Returns the status for currentConversationId, or inactive status if none.
      */
-    val progressStatus: StateFlow<ProgressStatus> = _progressStatus.asStateFlow()
-
-    /** Job for tracking elapsed time during streaming. */
-    private var elapsedTimeJob: Job? = null
-
-    /** Timestamp when streaming started (for elapsed time calculation). */
-    private var streamingStartTime: Long = 0L
+    val progressStatus: StateFlow<ProgressStatus>
+        get() = currentConversationId?.let { convId ->
+            _progressStatusMap.getOrPut(convId) { MutableStateFlow(ProgressStatus()) }
+        }?.asStateFlow() ?: _inactiveProgressStatus
 
     /** Connection state exposed from the WebSocket client. */
     val connectionState: StateFlow<ConnectionState> = webSocketClient.connectionState
@@ -1889,14 +1900,20 @@ class ChatViewModel(
     /**
      * Starts progress tracking for the status line UI.
      * Called when streaming begins - starts elapsed time counter and shows the status line.
+     * Tracks progress per-conversation to support multiple concurrent sessions.
      *
      * @param statusText Initial status text to display (e.g., "Thinking", "Processing")
      */
     private fun startProgressTracking(statusText: String = "Processing") {
-        streamingStartTime = Clock.System.now().toEpochMilliseconds()
+        val convId = currentConversationId ?: return
+
+        streamingStartTimes[convId] = Clock.System.now().toEpochMilliseconds()
+
+        // Get or create progress status flow for this conversation
+        val progressFlow = _progressStatusMap.getOrPut(convId) { MutableStateFlow(ProgressStatus()) }
 
         // Initialize progress status
-        _progressStatus.value = ProgressStatus(
+        progressFlow.value = ProgressStatus(
             statusText = statusText,
             elapsedSeconds = 0,
             tokenCount = null,
@@ -1904,13 +1921,16 @@ class ChatViewModel(
             isActive = true
         )
 
-        // Start elapsed time counter job
-        elapsedTimeJob?.cancel()
-        elapsedTimeJob = scope.launch {
+        // Cancel existing job for this conversation if any
+        elapsedTimeJobs[convId]?.cancel()
+
+        // Start elapsed time counter job for this conversation
+        elapsedTimeJobs[convId] = scope.launch {
             while (true) {
                 delay(1000)
-                val elapsed = ((Clock.System.now().toEpochMilliseconds() - streamingStartTime) / 1000).toInt()
-                _progressStatus.update { current ->
+                val startTime = streamingStartTimes[convId] ?: break
+                val elapsed = ((Clock.System.now().toEpochMilliseconds() - startTime) / 1000).toInt()
+                progressFlow.update { current ->
                     current.copy(elapsedSeconds = elapsed)
                 }
             }
@@ -1920,11 +1940,16 @@ class ChatViewModel(
     /**
      * Stops progress tracking and hides the status line.
      * Called when streaming ends (complete, error, or stop).
+     * Stops tracking for the current conversation only.
      */
     private fun stopProgressTracking() {
-        elapsedTimeJob?.cancel()
-        elapsedTimeJob = null
-        _progressStatus.value = ProgressStatus(isActive = false)
+        val convId = currentConversationId ?: return
+
+        elapsedTimeJobs[convId]?.cancel()
+        elapsedTimeJobs.remove(convId)
+        streamingStartTimes.remove(convId)
+
+        _progressStatusMap[convId]?.value = ProgressStatus(isActive = false)
     }
 
 }
