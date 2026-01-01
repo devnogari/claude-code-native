@@ -3,12 +3,15 @@ package com.claudecode.native.ui.component
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -16,11 +19,13 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,10 +54,12 @@ import com.claudecode.native.ui.viewmodel.ToolUseInfo
  * User messages are right-aligned with primary color background (plain text).
  * Assistant messages are left-aligned with surface variant background (markdown rendered).
  * Content blocks (text and tools) are rendered in their original order for assistant messages.
+ * Double-click on any message to inspect its payload.
  *
  * @param message The chat message to display
  * @param modifier Optional modifier for the component
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(
     message: ChatMessage,
@@ -62,9 +69,23 @@ fun MessageBubble(
     if (message.blocks.isEmpty()) return
 
     val isUser = message.role == MessageRole.USER
+    var showInspectDialog by remember { mutableStateOf(false) }
+
+    // Inspect Payload Dialog
+    if (showInspectDialog) {
+        MessageInspectDialog(
+            message = message,
+            onDismiss = { showInspectDialog = false }
+        )
+    }
 
     BoxWithConstraints(
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = { /* normal click does nothing */ },
+                onDoubleClick = { showInspectDialog = true }
+            )
     ) {
         // Calculate max width based on available space
         // User messages: smaller (up to 70% or 500dp max)
@@ -169,6 +190,164 @@ fun MessageBubble(
                 }
             }
         }
+    }
+}
+
+/**
+ * Dialog to inspect message payload details.
+ */
+@Composable
+private fun MessageInspectDialog(
+    message: ChatMessage,
+    onDismiss: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Message Payload",
+                style = MaterialTheme.typography.titleMedium
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Message ID
+                PayloadField("ID", message.id)
+
+                // Role
+                PayloadField("Role", message.role.name)
+
+                // Agent ID
+                message.agentId?.let { PayloadField("Agent ID", it) }
+
+                // Git Branch
+                message.gitBranch?.let { PayloadField("Git Branch", it) }
+
+                // Sidechain
+                PayloadField("Sidechain", message.isSidechain.toString())
+
+                // Is Pending
+                PayloadField("Pending", message.isPending.toString())
+
+                // Blocks count
+                PayloadField("Blocks Count", message.blocks.size.toString())
+
+                // Blocks details
+                if (message.blocks.isNotEmpty()) {
+                    Text(
+                        text = "Blocks:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    message.blocks.forEachIndexed { index, block ->
+                        when (block) {
+                            is ContentBlock.Text -> {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(8.dp)
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "[$index] Text Block",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = block.content.take(500) + if (block.content.length > 500) "..." else "",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = FontFamily.Monospace
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            is ContentBlock.Tool -> {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(8.dp)
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "[$index] Tool: ${block.info.name}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = "ID: ${block.info.id}",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = FontFamily.Monospace
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "Summary: ${block.info.summary}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        if (block.info.isError) {
+                                            Text(
+                                                text = "Error: true",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+/**
+ * Helper composable for displaying a labeled field in the inspect dialog.
+ */
+@Composable
+private fun PayloadField(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "$label:",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.widthIn(min = 80.dp)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontFamily = FontFamily.Monospace
+            ),
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 
