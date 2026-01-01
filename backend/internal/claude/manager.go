@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
 	"go.uber.org/zap"
@@ -55,46 +57,97 @@ func (m *Manager) GetProcess(convID uuid.UUID) *Process {
 	return m.processes[convID]
 }
 
-// StopProcess stops and removes a process for a conversation
+// StopProcess stops and removes a process for a conversation.
+// It first sends SIGINT for graceful shutdown, then SIGKILL if the process
+// doesn't terminate within the timeout period.
 func (m *Manager) StopProcess(convID uuid.UUID) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	process, exists := m.processes[convID]
 	if !exists {
+		m.mu.Unlock()
 		return fmt.Errorf("process not found for conversation %s", convID)
 	}
 
-	// Kill the underlying command if running
+	// Remove from map immediately to prevent duplicate stop attempts
+	delete(m.processes, convID)
+	m.mu.Unlock()
+
+	// Interrupt the process gracefully
 	if process.Cmd != nil && process.Cmd.Process != nil {
-		_ = process.Cmd.Process.Kill()
+		m.logger.Info("sending SIGINT to claude process",
+			zap.String("convID", convID.String()),
+			zap.Int("pid", process.Cmd.Process.Pid))
+
+		// First, try graceful shutdown with SIGINT
+		if err := process.Cmd.Process.Signal(syscall.SIGINT); err != nil {
+			m.logger.Warn("failed to send SIGINT, trying SIGKILL",
+				zap.String("convID", convID.String()),
+				zap.Error(err))
+			_ = process.Cmd.Process.Kill()
+		} else {
+			// Wait for process to exit gracefully (up to 2 seconds)
+			// Note: If waitForExit() goroutine (in process.go) already reaped the process,
+			// this Wait() will return an error, which is harmless and expected.
+			done := make(chan struct{})
+			go func() {
+				_, _ = process.Cmd.Process.Wait()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				m.logger.Info("claude process terminated gracefully",
+					zap.String("convID", convID.String()))
+			case <-time.After(2 * time.Second):
+				m.logger.Warn("graceful shutdown timeout, sending SIGKILL",
+					zap.String("convID", convID.String()))
+				_ = process.Cmd.Process.Kill()
+			}
+		}
 	}
 
 	// Close the process channels
 	process.Close()
 
-	// Remove from map
-	delete(m.processes, convID)
-
 	return nil
 }
 
-// StopAll stops all managed processes
+// StopAll stops all managed processes with graceful shutdown.
+// Used during server shutdown to cleanly terminate all Claude processes.
 func (m *Manager) StopAll() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Copy the map to avoid holding lock during shutdown
+	processesCopy := make(map[uuid.UUID]*Process, len(m.processes))
+	for k, v := range m.processes {
+		processesCopy[k] = v
+	}
+	// Clear the original map
+	m.processes = make(map[uuid.UUID]*Process)
+	m.mu.Unlock()
 
-	for convID, process := range m.processes {
-		// Kill the underlying command if running
+	// Send SIGINT to all processes first
+	for convID, process := range processesCopy {
 		if process.Cmd != nil && process.Cmd.Process != nil {
-			_ = process.Cmd.Process.Kill()
+			m.logger.Info("sending SIGINT to claude process during shutdown",
+				zap.String("convID", convID.String()))
+			_ = process.Cmd.Process.Signal(syscall.SIGINT)
 		}
+	}
 
-		// Close the process channels
+	// Wait up to 2 seconds for all to terminate gracefully
+	time.Sleep(2 * time.Second)
+
+	// Force kill any remaining processes and close channels
+	for convID, process := range processesCopy {
+		if process.Cmd != nil && process.Cmd.Process != nil {
+			// Check if still running by sending signal 0
+			if err := process.Cmd.Process.Signal(syscall.Signal(0)); err == nil {
+				m.logger.Warn("force killing claude process",
+					zap.String("convID", convID.String()))
+				_ = process.Cmd.Process.Kill()
+			}
+		}
 		process.Close()
-
-		// Remove from map
-		delete(m.processes, convID)
 	}
 }
 
