@@ -474,8 +474,12 @@ fun ChatScreenContent(
                 }
             }
 
-            // Messages list - filter out empty messages (no blocks) to avoid blank spaces
-            val filteredMessages = messages.filter { it.blocks.isNotEmpty() }
+            // Messages list - filter out empty messages and current streaming message
+            val streamingMessageId = viewModel.currentStreamingMessageId
+            val filteredMessages = messages.filter { msg ->
+                msg.blocks.isNotEmpty() &&
+                !(isStreaming && msg.id == streamingMessageId)  // Exclude streaming message to avoid duplicate
+            }
 
             Box(
                 modifier = Modifier
@@ -519,7 +523,8 @@ fun ChatScreenContent(
                             StreamingBubble(
                                 content = streamingContent,
                                 tools = streamingTools,
-                                blocks = streamingBlocks
+                                blocks = streamingBlocks,
+                                messageId = viewModel.currentStreamingMessageId
                             )
                         }
                     }

@@ -161,7 +161,13 @@ class ChatViewModel(
     val connectionState: StateFlow<ConnectionState> = webSocketClient.connectionState
 
     private var currentConversationId: String? = null
-    private var streamingMessageId: String? = null
+    private var _streamingMessageId: String? = null
+    private var streamingMessageId: String?
+        get() = _streamingMessageId
+        set(value) { _streamingMessageId = value }
+
+    /** Current streaming message ID for inspection */
+    val currentStreamingMessageId: String? get() = _streamingMessageId
     private var currentEncodedPath: String? = null
     private var currentClaudeSession: String? = null
     private var currentProjectPath: String? = null  // Original project path for API calls
@@ -586,7 +592,7 @@ class ChatViewModel(
         val chatMessages = messages.mapIndexedNotNull { index, msg ->
             val message = msg.message ?: return@mapIndexedNotNull null
             val role = message.role
-            val blocks = parseMessageContent(message.content)
+            val blocks = parseMessageContent(message.content, msg.uuid)
 
             // Update tool blocks with results from session maps
             val blocksWithResults = updateBlocksWithToolResults(blocks, allToolUses)
@@ -607,9 +613,9 @@ class ChatViewModel(
             if (isCompactionMessage(textContent)) return@mapIndexedNotNull null
 
             ChatMessage(
-                // Use timestamp + index for unique ID (sessionId is same for all messages in session)
-                // Use "loaded_" prefix to avoid collision with generateMessageId() which uses "msg_" prefix
-                id = "loaded_${msg.timestamp?.toEpochMilliseconds() ?: index}_$index",
+                // Use UUID from Claude message, fallback to timestamp-based ID
+                // Use same fallback pattern as HistoryWatch for consistency
+                id = msg.uuid ?: "msg_${msg.timestamp?.toEpochMilliseconds() ?: index}",
                 role = when (role) {
                     "user" -> MessageRole.USER
                     "assistant" -> MessageRole.ASSISTANT
@@ -705,7 +711,14 @@ class ChatViewModel(
                 }
             }
 
-            _messages.value = stableMessages + messagesToAdd
+            // Final deduplication by ID - O(n) using LinkedHashMap to preserve order
+            val allMessages = stableMessages + messagesToAdd
+            val deduplicatedMessages = allMessages
+                .associateBy { it.id }  // Keeps last occurrence, preserves insertion order
+                .values
+                .toList()
+
+            _messages.value = deduplicatedMessages
             println("ChatViewModel:697 - Added ${messagesToAdd.size} messages (initial load), total=${_messages.value.size}")
         }
     }
@@ -813,7 +826,7 @@ class ChatViewModel(
     }
 
     // Message parsing delegated to MessageParser utility object
-    private fun parseMessageContent(content: Any?) = MessageParser.parseMessageContent(content)
+    private fun parseMessageContent(content: Any?, messageUuid: String? = null) = MessageParser.parseMessageContent(content, messageUuid)
     private fun extractToolsFromContent(
         content: Any?,
         toolUses: MutableMap<String, ToolUseInfo>,
@@ -1073,12 +1086,13 @@ class ChatViewModel(
             webSocketClient.sendChat(content)
 
             // Prepare for streaming response (use streamingMutex for consistency with other handlers)
+            // Note: streamingMessageId will be set by HistoryWatch when it receives the actual message UUID
             streamingMutex.withLock {
                 _isStreaming.value = true
                 _streamingContent.value = ""
                 _streamingTools.value = emptyList()
                 _streamingBlocks.value = emptyList()
-                streamingMessageId = generateMessageId()
+                // Don't generate ID here - HistoryWatch will provide the actual message UUID
             }
 
             // Start progress tracking for status line
@@ -1444,21 +1458,22 @@ class ChatViewModel(
                 }
 
                 // Check if any message is from assistant - this means Claude is processing
-                val hasAssistantMessage = event.messages.any { it.message?.role == "assistant" }
-                if (hasAssistantMessage) {
+                // Get the assistant message's UUID to use as streamingMessageId
+                val assistantMessage = event.messages.find { it.message?.role == "assistant" }
+                if (assistantMessage != null) {
                     // Synchronize streaming state changes to prevent race conditions with WebSocket
                     val shouldStartProgress = streamingMutex.withLock {
-                        if (!_isStreaming.value) {
+                        val wasNotStreaming = !_isStreaming.value
+                        if (wasNotStreaming) {
                             println("ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
                             _isStreaming.value = true
                             isStreamingFromHistoryWatch = true
-                            if (streamingMessageId == null) {
-                                streamingMessageId = generateMessageId()
-                            }
-                            true
-                        } else {
-                            false
                         }
+                        // Always update streamingMessageId with the actual message UUID from HistoryWatch
+                        if (assistantMessage.uuid != null) {
+                            streamingMessageId = assistantMessage.uuid
+                        }
+                        wasNotStreaming
                     }
                     // Start progress tracking if streaming just started (from HistoryWatch)
                     if (shouldStartProgress) {
@@ -1514,7 +1529,7 @@ class ChatViewModel(
                             val msg = claudeMsg.message ?: continue
                             if (msg.role != "assistant") continue
 
-                            val blocks = parseMessageContent(msg.content)
+                            val blocks = parseMessageContent(msg.content, claudeMsg.uuid)
                             for (block in blocks) {
                                 when (block) {
                                     is ContentBlock.Text -> {
@@ -1638,7 +1653,7 @@ class ChatViewModel(
                 val newChatMessages = event.messages.mapNotNull { claudeMsg ->
                     val msg = claudeMsg.message ?: return@mapNotNull null
                     val role = msg.role
-                    val blocks = parseMessageContent(msg.content)
+                    val blocks = parseMessageContent(msg.content, claudeMsg.uuid)
 
                     // Update tool blocks with results from session maps
                     val blocksWithResults = updateBlocksWithToolResults(blocks, toolUsesSnapshot)
@@ -1659,8 +1674,9 @@ class ChatViewModel(
                     if (isCompactionMessage(textContent)) return@mapNotNull null
 
                     // Use UUID from Claude message, fallback to timestamp-based ID
+                    // Use same fallback pattern as initial load for consistency
                     val messageId = claudeMsg.uuid
-                        ?: "watch_${claudeMsg.timestamp?.toEpochMilliseconds() ?: Clock.System.now().toEpochMilliseconds()}"
+                        ?: "msg_${claudeMsg.timestamp?.toEpochMilliseconds() ?: Clock.System.now().toEpochMilliseconds()}"
 
                     ChatMessage(
                         id = messageId,
@@ -1709,6 +1725,10 @@ class ChatViewModel(
                 if (newChatMessages.isNotEmpty()) {
                     mutex.withLock {
                         val currentMessages = _messages.value.toMutableList()
+                        // Build ID -> index map for O(1) lookup
+                        val idToIndex = currentMessages.withIndex()
+                            .associate { (index, msg) -> msg.id to index }
+                            .toMutableMap()
                         var updated = false
 
                         for (newMsg in newChatMessages) {
@@ -1719,38 +1739,36 @@ class ChatViewModel(
                             } else null
 
                             if (pendingMsgId != null) {
-                                // This user message was confirmed - update isPending to false
-                                val pendingIndex = currentMessages.indexOfFirst { it.id == pendingMsgId }
-                                if (pendingIndex >= 0) {
+                                // This user message was confirmed - update isPending to false (O(1) lookup)
+                                val pendingIndex = idToIndex[pendingMsgId]
+                                if (pendingIndex != null) {
                                     currentMessages[pendingIndex] = currentMessages[pendingIndex].copy(isPending = false)
                                     updated = true
-                                    println("ChatViewModel: Confirmed pending user message: ${newMsg.content.take(30)}...")
                                 }
                                 continue
                             }
 
-                            // Simple UUID-based deduplication: find by ID, update or add
-                            val existingIndex = currentMessages.indexOfFirst { it.id == newMsg.id }
+                            // O(1) ID lookup using index map
+                            val existingIndex = idToIndex[newMsg.id]
 
-                            if (existingIndex >= 0) {
-                                // Message exists - always update with latest blocks (HistoryWatch has complete data)
+                            if (existingIndex != null) {
+                                // Message exists - update with latest blocks
                                 val existing = currentMessages[existingIndex]
                                 currentMessages[existingIndex] = existing.copy(
                                     blocks = newMsg.blocks,
                                     isStreaming = false
                                 )
                                 updated = true
-                                println("ChatViewModel: Updated message ${newMsg.id}: ${newMsg.content.take(30)}...")
                             } else {
-                                // New message - add it
+                                // New message - add it and update index
+                                idToIndex[newMsg.id] = currentMessages.size
                                 currentMessages.add(newMsg)
                                 updated = true
-                                println("ChatViewModel:1735 - Added HistoryWatch message id=${newMsg.id}, content=${newMsg.content.take(30)}...")
                             }
                         }
 
                         if (updated) {
-                            _messages.value = currentMessages
+                            _messages.value = currentMessages.toList()
                             println("ChatViewModel:1742 - HistoryWatch update, total=${_messages.value.size}")
                         }
                     }
@@ -1803,13 +1821,14 @@ class ChatViewModel(
 
             if (pendingEntries.isNotEmpty()) {
                 val currentMessages = _messages.value.toMutableList()
+                val idToIndex = currentMessages.withIndex()
+                    .associate { (i, m) -> m.id to i }
                 var updated = false
                 for ((_, pendingMsgId) in pendingEntries) {
-                    val index = currentMessages.indexOfFirst { it.id == pendingMsgId }
-                    if (index >= 0 && currentMessages[index].isPending) {
+                    val index = idToIndex[pendingMsgId] ?: continue
+                    if (currentMessages[index].isPending) {
                         currentMessages[index] = currentMessages[index].copy(isPending = false)
                         updated = true
-                        println("ChatViewModel: Cleared pending flag on streaming complete: ${currentMessages[index].content.take(30)}...")
                     }
                 }
                 if (updated) {
@@ -1825,8 +1844,9 @@ class ChatViewModel(
         processNextQueuedMessage()
     }
 
+    @OptIn(ExperimentalUuidApi::class)
     private fun generateMessageId(): String {
-        return "msg_${Clock.System.now().toEpochMilliseconds()}_${(0..9999).random()}"
+        return kotlin.uuid.Uuid.random().toString()
     }
 
     // ============================================================================
