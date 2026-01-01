@@ -49,6 +49,7 @@ import com.claudecode.native.ui.component.QueuedMessageBubble
 import com.claudecode.native.ui.component.ProcessingIndicator
 import com.claudecode.native.ui.component.SlashCommand
 import com.claudecode.native.ui.component.SlashCommandMenu
+import com.claudecode.native.ui.component.StatusLine
 import com.claudecode.native.ui.component.StreamingBubble
 import com.claudecode.native.ui.component.ThinkingBubble
 import com.claudecode.native.ui.component.toSlashCommand
@@ -163,6 +164,7 @@ fun ChatScreenContent(
     val scrollToBottomSignal by viewModel.scrollToBottomSignal.collectAsState()
     val isDraftSession by viewModel.isDraftSession.collectAsState()
     val sessionCreatedEvent by viewModel.sessionCreatedEvent.collectAsState()
+    val progressStatus by viewModel.progressStatus.collectAsState()
 
     // Notify when a new session is created from draft mode
     LaunchedEffect(sessionCreatedEvent) {
@@ -344,40 +346,13 @@ fun ChatScreenContent(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text(
-                            text = conversationTitle?.take(50)?.let {
-                                if (it.length < (conversationTitle?.length ?: 0)) "$it..." else it
-                            } ?: "Chat",
-                            maxLines = 1,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        // Thinking indicator in title bar
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = isStreaming,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = "Thinking...",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = conversationTitle?.take(50)?.let {
+                            if (it.length < (conversationTitle?.length ?: 0)) "$it..." else it
+                        } ?: "Chat",
+                        maxLines = 1,
+                        style = MaterialTheme.typography.titleMedium
+                    )
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -663,6 +638,10 @@ fun ChatScreenContent(
                 },
                 modifier = Modifier.padding(bottom = 8.dp)
             )
+
+            // Status line (Claude Code style progress indicator)
+            // Note: ESC key handling for stop is in ChatInputBar
+            StatusLine(status = progressStatus)
 
             // Input area
             // Allow input in draft mode even when not connected (session will be created on first send)
