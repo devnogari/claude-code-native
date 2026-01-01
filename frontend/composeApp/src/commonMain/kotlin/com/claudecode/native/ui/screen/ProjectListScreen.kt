@@ -84,7 +84,9 @@ fun ProjectListScreenContent(
     val keyboardController = LocalSoftwareKeyboardController.current
 
     // Clear focus and hide keyboard on initial composition
+    // Delay ensures TextField is fully composed before clearing focus (iOS fix)
     LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100)
         focusManager.clearFocus()
         keyboardController?.hide()
     }
