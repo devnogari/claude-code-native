@@ -63,9 +63,13 @@ class ChatViewModel(
      * 1. streamingMutex - protects streaming state (_isStreaming, isStreamingFromHistoryWatch)
      * 2. mutex - protects message list (_messages)
      * 3. mapsMutex - protects tool tracking maps (sessionToolUses, sessionToolResults)
+     * 4. sessionCreatedMutex - protects pendingSessionCreatedEmit (independent, never nested)
      *
      * When multiple locks are needed, acquire in this order. Never acquire a higher-numbered
      * lock while holding a lower-numbered one.
+     *
+     * Note: sessionCreatedMutex (#4) is designed to be acquired independently and is never
+     * nested with other locks, so it can be safely used in any context.
      */
     private val mutex = Mutex()  // Lock #2: protects _messages updates
 
@@ -101,8 +105,13 @@ class ChatViewModel(
      */
     val sessionCreatedEvent: StateFlow<String?> = _sessionCreatedEvent.asStateFlow()
 
-    /** Pending session ID to emit when first HistoryWatch message arrives (deferred until session folder exists). */
+    /**
+     * Pending session ID to emit when first server response arrives (STREAM message).
+     * HistoryWatch serves as fallback for edge cases where STREAM may be missed.
+     * Protected by sessionCreatedMutex to ensure thread-safe access from multiple handlers.
+     */
     private var pendingSessionCreatedEmit: String? = null
+    private val sessionCreatedMutex = Mutex()
 
 
     private val _availableCommands = MutableStateFlow<List<Command>>(emptyList())
@@ -835,6 +844,76 @@ class ChatViewModel(
     }
 
     /**
+     * Syncs session state via REST API as a fallback when WebSocket messages are missed.
+     * Updates streaming state, progress status, and todos from server.
+     * This should be called periodically or when WebSocket connection is unstable.
+     *
+     * Note: Skips sync if WebSocket is actively receiving messages to avoid race conditions
+     * where stale REST responses might override fresher WebSocket state.
+     */
+    fun syncStateViaRest() {
+        val encodedPath = currentEncodedPath ?: return
+        val sessionId = currentClaudeSession ?: return
+        val convId = currentConversationId ?: return
+
+        // Skip if WebSocket connection is healthy and actively receiving
+        // REST sync is a fallback for when WebSocket is unreliable
+        if (connectionState.value == ConnectionState.Connected && _isStreaming.value) {
+            println("ChatViewModel: Skipping REST sync - WebSocket is actively streaming")
+            return
+        }
+
+        scope.launch {
+            try {
+                println("ChatViewModel: Syncing state via REST for $encodedPath / $sessionId")
+                val stateResponse = claudeHistoryApi.getSessionState(encodedPath, sessionId)
+
+                // Double-check streaming hasn't started via WebSocket while we were fetching
+                // This prevents stale REST responses from overriding fresh WebSocket state
+                streamingMutex.withLock {
+                    if (_isStreaming.value && !stateResponse.isStreaming) {
+                        // WebSocket says streaming, REST says not - trust WebSocket (it's more recent)
+                        println("ChatViewModel: REST sync - skipping state update (WebSocket has fresher streaming state)")
+                        // Still update todos since they're additive
+                    } else if (_isStreaming.value != stateResponse.isStreaming) {
+                        println("ChatViewModel: REST sync - updating streaming state: ${stateResponse.isStreaming}")
+                        _isStreaming.value = stateResponse.isStreaming
+
+                        // If server says streaming started but we didn't know, start progress tracking
+                        if (stateResponse.isStreaming) {
+                            // Don't start if already tracked
+                            if (!streamingStartTimes.containsKey(convId)) {
+                                startProgressTracking("Processing")
+                            }
+                        } else {
+                            // Server says not streaming, stop progress tracking
+                            stopProgressTracking()
+                        }
+                    }
+                }
+
+                // Update todos in progress status (always update, todos are additive/safe)
+                val progressFlow = _progressStatusMap[convId]
+                if (progressFlow != null && stateResponse.todos.isNotEmpty()) {
+                    val currentStatus = progressFlow.value
+                    if (currentStatus.todos != stateResponse.todos) {
+                        println("ChatViewModel: REST sync - updating todos: ${stateResponse.todos.size} items")
+                        progressFlow.value = currentStatus.copy(todos = stateResponse.todos)
+                    }
+                }
+
+                println("ChatViewModel: REST sync complete - state=${stateResponse.sessionState}, streaming=${stateResponse.isStreaming}, todos=${stateResponse.todos.size}")
+
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("ChatViewModel: Failed to sync state via REST: ${e.message}")
+                // Don't propagate error - this is a fallback mechanism
+            }
+        }
+    }
+
+    /**
      * Disconnects from the current WebSocket connection.
      * This is a manual disconnect - auto-reconnection will NOT occur.
      */
@@ -1000,10 +1079,12 @@ class ChatViewModel(
             // Now send the message
             sendMessageInternal(content)
 
-            // Defer session created event until we receive first HistoryWatch message
-            // (which confirms the session folder exists on disk)
+            // Defer session created event until first server response (STREAM message)
+            // HistoryWatch serves as fallback for edge cases where STREAM may be missed
             println("ChatViewModel: Session created, deferring event until first response: $newSessionId")
-            pendingSessionCreatedEmit = newSessionId
+            sessionCreatedMutex.withLock {
+                pendingSessionCreatedEmit = newSessionId
+            }
 
         } catch (e: CancellationException) {
             throw e
@@ -1380,6 +1461,18 @@ class ChatViewModel(
                 if (wasNotStreaming) {
                     startProgressTracking("Processing")
                 }
+
+                // Emit session created event on first stream response
+                // This ensures sidebar refresh happens when server actually starts responding,
+                // not waiting for HistoryWatch filesystem detection which can be delayed
+                sessionCreatedMutex.withLock {
+                    pendingSessionCreatedEmit?.let { sessionId ->
+                        println("ChatViewModel: First STREAM message received, emitting session created event: $sessionId")
+                        _sessionCreatedEvent.value = sessionId
+                        pendingSessionCreatedEmit = null
+                    }
+                }
+
                 // Stream content is now handled via HistoryWatch messages
             }
 
@@ -1429,12 +1522,15 @@ class ChatViewModel(
 
                 println("ChatViewModel: Received ${event.messages.size} new messages from history watch")
 
-                // Emit pending session created event now that we've confirmed the session folder exists
-                pendingSessionCreatedEmit?.let { sessionId ->
-                    if (sessionId == event.sessionId) {
-                        println("ChatViewModel: First HistoryWatch message received, emitting session created event: $sessionId")
-                        _sessionCreatedEvent.value = sessionId
-                        pendingSessionCreatedEmit = null
+                // Fallback: Emit session created event if not already emitted via STREAM message
+                // This handles edge cases where STREAM messages might be missed but HistoryWatch detects the session
+                sessionCreatedMutex.withLock {
+                    pendingSessionCreatedEmit?.let { sessionId ->
+                        if (sessionId == event.sessionId) {
+                            println("ChatViewModel: HistoryWatch fallback - emitting session created event: $sessionId")
+                            _sessionCreatedEvent.value = sessionId
+                            pendingSessionCreatedEmit = null
+                        }
                     }
                 }
 
@@ -1682,13 +1778,17 @@ class ChatViewModel(
             is HistoryWatchEvent.Error -> {
                 println("ChatViewModel: History watch error: ${event.message}")
                 // Clear pending event to prevent stale state
-                pendingSessionCreatedEmit = null
+                sessionCreatedMutex.withLock {
+                    pendingSessionCreatedEmit = null
+                }
             }
 
             is HistoryWatchEvent.Disconnected -> {
                 println("ChatViewModel: History watch disconnected")
                 // Clear pending event to prevent stale state
-                pendingSessionCreatedEmit = null
+                sessionCreatedMutex.withLock {
+                    pendingSessionCreatedEmit = null
+                }
             }
         }
     }

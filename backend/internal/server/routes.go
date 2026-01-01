@@ -57,6 +57,7 @@ func (s *Server) setupRoutes() {
 	historyGroup.Get("/projects", s.historyHandler.ListProjects)
 	historyGroup.Get("/projects/:encodedPath", s.historyHandler.GetProject)
 	historyGroup.Get("/projects/:encodedPath/sessions/:sessionId", s.historyHandler.GetSessionMessages)
+	historyGroup.Get("/projects/:encodedPath/sessions/:sessionId/state", s.historyHandler.GetSessionState)
 	historyGroup.Post("/sessions/:sessionId/favorite", s.historyHandler.ToggleSessionFavorite)
 	historyGroup.Post("/refresh", s.historyHandler.Refresh)
 

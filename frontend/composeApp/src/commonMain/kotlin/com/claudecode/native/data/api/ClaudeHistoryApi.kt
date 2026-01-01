@@ -2,6 +2,7 @@ package com.claudecode.native.data.api
 
 import com.claudecode.native.data.model.ClaudeProject
 import com.claudecode.native.data.model.PaginatedClaudeMessagesResponse
+import com.claudecode.native.data.model.SessionStateResponse
 import io.ktor.http.encodeURLParameter
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -123,5 +124,17 @@ class ClaudeHistoryApi(private val client: ApiClient) {
             }
         }
         client.delete("/sessions/$sessionId?$queryParams")
+    }
+
+    /**
+     * Retrieves current session state including todos and streaming status.
+     * This is a REST fallback for when WebSocket messages are missed.
+     *
+     * @param encodedPath The encoded project path
+     * @param sessionId The session ID
+     * @return Session state with todos and streaming status
+     */
+    suspend fun getSessionState(encodedPath: String, sessionId: String): SessionStateResponse {
+        return client.get("/claude-history/projects/$encodedPath/sessions/$sessionId/state")
     }
 }
