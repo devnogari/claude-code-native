@@ -51,7 +51,7 @@ import com.claudecode.native.ui.component.SlashCommand
 import com.claudecode.native.ui.component.SlashCommandMenu
 import com.claudecode.native.ui.component.StreamingBubble
 import com.claudecode.native.ui.component.ThinkingBubble
-import com.claudecode.native.ui.component.defaultSlashCommands
+import com.claudecode.native.ui.component.toSlashCommand
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.ContentBlock
 import org.koin.compose.koinInject
@@ -158,6 +158,11 @@ fun ChatScreenContent(
     val error by viewModel.error.collectAsState()
     val conversationTitle by viewModel.conversationTitle.collectAsState()
 
+    // Command state
+    val availableCommands by viewModel.availableCommands.collectAsState()
+    val commandsLoading by viewModel.commandsLoading.collectAsState()
+    val slashCommands = availableCommands.map { it.toSlashCommand() }
+
     // Track if initial connection is complete to avoid duplicate sync on first resume
     var hasInitialized by remember { mutableStateOf(false) }
 
@@ -166,6 +171,9 @@ fun ChatScreenContent(
         viewModel.connect(conversationId)
         hasInitialized = true
     }
+
+    // Note: Commands are loaded automatically by ChatViewModel when project path is set
+    // (in loadMessages/loadMessagesFromFilesystem after currentProjectPath is determined)
 
     // Sync messages when app returns to foreground (skip initial resume)
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -608,9 +616,15 @@ fun ChatScreenContent(
             SlashCommandMenu(
                 visible = showSlashMenu,
                 filter = slashFilter,
+                commands = slashCommands,
+                isLoading = commandsLoading,
                 onCommandSelected = { command ->
+                    // Parse args from current input (if any text after command name)
+                    val parts = inputText.removePrefix("/").split(" ")
+                    val commandArgs = if (parts.size > 1) parts.drop(1) else emptyList()
                     handleSlashCommand(
                         command = command,
+                        args = commandArgs,
                         viewModel = viewModel,
                         onClearInput = { inputText = "" },
                         onShowDeleteDialog = { showDeleteDialog = true }
@@ -628,17 +642,20 @@ fun ChatScreenContent(
                 onSend = {
                     // Check if it's a slash command
                     if (inputText.startsWith("/")) {
-                        val commandName = inputText.removePrefix("/").split(" ").firstOrNull() ?: ""
-                        val command = defaultSlashCommands.find { it.name.equals(commandName, ignoreCase = true) }
+                        val parts = inputText.removePrefix("/").split(" ")
+                        val commandName = parts.firstOrNull() ?: ""
+                        val commandArgs = if (parts.size > 1) parts.drop(1) else emptyList()
+                        val command = slashCommands.find { it.name.equals(commandName, ignoreCase = true) }
                         if (command != null) {
                             handleSlashCommand(
                                 command = command,
+                                args = commandArgs,
                                 viewModel = viewModel,
                                 onClearInput = { inputText = "" },
                                 onShowDeleteDialog = { showDeleteDialog = true }
                             )
                         } else {
-                            // Unknown command - send as regular message
+                            // Unknown command - send as regular message to Claude
                             viewModel.sendMessage(inputText)
                             inputText = ""
                         }
@@ -871,45 +888,48 @@ private fun ChatInputBar(
 /**
  * Handles slash command execution.
  *
+ * For builtin commands, uses the backend API for execution.
+ * For custom commands (project/user), sends the processed content as a message.
+ *
  * @param command The slash command to execute
+ * @param args Arguments passed to the command (parsed from input after command name)
  * @param viewModel The chat view model for actions
  * @param onClearInput Callback to clear the input field
  * @param onShowDeleteDialog Callback to show the delete session dialog
  */
 private fun handleSlashCommand(
     command: SlashCommand,
+    args: List<String>,
     viewModel: ChatViewModel,
     onClearInput: () -> Unit,
     onShowDeleteDialog: () -> Unit
 ) {
+    // Handle local-only commands that don't need API
     when (command.name.lowercase()) {
         "clear" -> {
             viewModel.clearMessages()
             onClearInput()
+            return
         }
         "reset" -> {
             onShowDeleteDialog()
             onClearInput()
-        }
-        "help" -> {
-            // Send help command to Claude
-            viewModel.sendMessage("/help")
-            onClearInput()
-        }
-        "compact" -> {
-            // Send compact request to Claude
-            viewModel.sendMessage("/compact")
-            onClearInput()
-        }
-        "init" -> {
-            // Send init command
-            viewModel.sendMessage("/init")
-            onClearInput()
-        }
-        else -> {
-            // Unknown command - send as message
-            viewModel.sendMessage("/${command.name}")
-            onClearInput()
+            return
         }
     }
+
+    // Execute command via API
+    val commandName = "/${command.name}"
+    viewModel.executeCommand(
+        commandName = commandName,
+        commandPath = command.path,
+        args = args,
+        onBuiltinResult = { response ->
+            // Most builtin commands are handled internally by ChatViewModel
+            // (displaying results as local assistant messages).
+            // This callback is only for commands that need custom UI handling.
+            println("ChatScreen: Unhandled builtin command action: ${response.action}")
+        }
+    )
+    onClearInput()
 }
