@@ -462,6 +462,25 @@ class ChatViewModel(
             // Preserve pending messages that haven't been confirmed by history watch yet
             // These are locally added messages waiting for filesystem sync
             val pendingMessages = _messages.value.filter { it.isPending }
+
+            // Preserve streaming message if active - this prevents losing tool messages
+            // during filesystem reload while streaming is happening
+            val streamingMessage: ChatMessage? = if (_isStreaming.value) {
+                val blocks = _streamingBlocks.value
+                val msgId = streamingMessageId
+                if (blocks.isNotEmpty() && msgId != null) {
+                    println("ChatViewModel: Preserving streaming message with ${blocks.size} blocks during reload")
+                    ChatMessage(
+                        id = msgId,
+                        role = MessageRole.ASSISTANT,
+                        blocks = blocks,
+                        isStreaming = true
+                    )
+                } else null
+            } else null
+
+            val messagesToAdd = mutableListOf<ChatMessage>()
+
             if (pendingMessages.isNotEmpty()) {
                 println("ChatViewModel: Preserving ${pendingMessages.size} pending messages during reload")
                 // Merge: loaded messages + pending messages not already in loaded list
@@ -469,10 +488,19 @@ class ChatViewModel(
                 val uniquePendingMessages = pendingMessages.filter { pending ->
                     pending.content.hashCode() !in loadedContentHashes
                 }
-                _messages.value = chatMessages + uniquePendingMessages
-            } else {
-                _messages.value = chatMessages
+                messagesToAdd.addAll(uniquePendingMessages)
             }
+
+            // Add streaming message if it wasn't already in loaded messages
+            if (streamingMessage != null) {
+                val streamingContentHash = streamingMessage.content.hashCode()
+                val alreadyLoaded = chatMessages.any { it.content.hashCode() == streamingContentHash }
+                if (!alreadyLoaded) {
+                    messagesToAdd.add(streamingMessage)
+                }
+            }
+
+            _messages.value = chatMessages + messagesToAdd
         }
     }
 
@@ -917,6 +945,13 @@ class ChatViewModel(
         val convId = currentConversationId ?: return
         val encodedPath = currentEncodedPath
         val sessionId = currentClaudeSession
+
+        // Skip sync if streaming is active to prevent losing streaming content
+        // The streaming will handle its own synchronization with the filesystem
+        if (_isStreaming.value) {
+            println("ChatViewModel: Skipping foreground sync - streaming is active")
+            return
+        }
 
         scope.launch {
             try {
@@ -1638,19 +1673,40 @@ class ChatViewModel(
                             // For assistant messages, check if already finalized from WebSocket
                             if (newMsg.role == MessageRole.ASSISTANT) {
                                 val contentHash = newMsg.content.take(200).hashCode()
-                                if (finalizedAssistantMessages.containsKey(contentHash)) {
-                                    println("ChatViewModel: Skipping already finalized assistant message: ${newMsg.content.take(30)}...")
+                                val newMsgToolIds = newMsg.blocks.filterIsInstance<ContentBlock.Tool>()
+                                    .map { it.info.id }
+
+                                // Check if content or any tool IDs are already finalized
+                                val isAlreadyFinalized = finalizedAssistantMessages.containsKey(contentHash) ||
+                                    newMsgToolIds.any { toolId ->
+                                        finalizedAssistantMessages.containsKey(toolId.hashCode())
+                                    }
+
+                                if (isAlreadyFinalized) {
+                                    println("ChatViewModel: Skipping already finalized assistant message: ${newMsg.content.take(30)}... (${newMsgToolIds.size} tools)")
                                     continue
                                 }
 
-                                // Also check if content matches current streaming content
+                                // Also check if content or tools match current streaming
                                 if (_isStreaming.value) {
                                     val streamingContentValue = _streamingContent.value
-                                    if (streamingContentValue.isNotEmpty() &&
+                                    val streamingToolIds = _streamingBlocks.value
+                                        .filterIsInstance<ContentBlock.Tool>()
+                                        .map { it.info.id }.toSet()
+
+                                    // Check text content match
+                                    val textMatch = streamingContentValue.isNotEmpty() &&
                                         (newMsg.content == streamingContentValue ||
                                          newMsg.content.take(100) == streamingContentValue.take(100) ||
-                                         streamingContentValue.contains(newMsg.content.take(100)))) {
-                                        println("ChatViewModel: Skipping message that matches streaming content: ${newMsg.content.take(30)}...")
+                                         streamingContentValue.contains(newMsg.content.take(100)))
+
+                                    // Check tool ID match
+                                    val toolMatch = newMsgToolIds.isNotEmpty() &&
+                                        streamingToolIds.isNotEmpty() &&
+                                        newMsgToolIds.any { it in streamingToolIds }
+
+                                    if (textMatch || toolMatch) {
+                                        println("ChatViewModel: Skipping message that matches streaming: ${newMsg.content.take(30)}... (textMatch=$textMatch, toolMatch=$toolMatch)")
                                         continue
                                     }
                                 }
@@ -1762,10 +1818,25 @@ class ChatViewModel(
 
                 mutex.withLock {
                     // Check if this content already exists in messages (avoid duplicates from history watch)
+                    // Must check both text content AND tool blocks for proper duplicate detection
+                    val streamingToolIds = blocks.filterIsInstance<ContentBlock.Tool>()
+                        .map { it.info.id }.toSet()
+
                     val isDuplicate = _messages.value.any { existing ->
-                        existing.role == MessageRole.ASSISTANT &&
-                        (existing.content == content ||
-                         (content.isNotEmpty() && existing.content.contains(content.take(100))))
+                        if (existing.role != MessageRole.ASSISTANT) return@any false
+
+                        // Check text content match
+                        val textMatch = existing.content == content ||
+                            (content.isNotEmpty() && existing.content.contains(content.take(100)))
+
+                        // Check tool block match (for tool-heavy messages where text may be empty)
+                        val existingToolIds = existing.blocks.filterIsInstance<ContentBlock.Tool>()
+                            .map { it.info.id }.toSet()
+                        val toolMatch = streamingToolIds.isNotEmpty() &&
+                            existingToolIds.isNotEmpty() &&
+                            streamingToolIds.intersect(existingToolIds).isNotEmpty()
+
+                        textMatch || toolMatch
                     }
 
                     if (!isDuplicate) {
@@ -1773,9 +1844,13 @@ class ChatViewModel(
                         // Track this finalized message to prevent duplicate from history watch
                         val contentHash = content.take(200).hashCode()
                         finalizedAssistantMessages[contentHash] = messageId
-                        println("ChatViewModel: Finalized streaming message: ${content.take(50)}...")
+                        // Also track tool IDs to prevent duplicates
+                        streamingToolIds.forEach { toolId ->
+                            finalizedAssistantMessages[toolId.hashCode()] = messageId
+                        }
+                        println("ChatViewModel: Finalized streaming message: ${content.take(50)}... (${streamingToolIds.size} tools)")
                     } else {
-                        println("ChatViewModel: Skipping duplicate finalization: ${content.take(50)}...")
+                        println("ChatViewModel: Skipping duplicate finalization: ${content.take(50)}... (${streamingToolIds.size} tools)")
                     }
                 }
             }
