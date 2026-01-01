@@ -459,7 +459,20 @@ class ChatViewModel(
         println("ChatViewModel: Converted to ${chatMessages.size} chat messages")
 
         mutex.withLock {
-            _messages.value = chatMessages
+            // Preserve pending messages that haven't been confirmed by history watch yet
+            // These are locally added messages waiting for filesystem sync
+            val pendingMessages = _messages.value.filter { it.isPending }
+            if (pendingMessages.isNotEmpty()) {
+                println("ChatViewModel: Preserving ${pendingMessages.size} pending messages during reload")
+                // Merge: loaded messages + pending messages not already in loaded list
+                val loadedContentHashes = chatMessages.map { it.content.hashCode() }.toSet()
+                val uniquePendingMessages = pendingMessages.filter { pending ->
+                    pending.content.hashCode() !in loadedContentHashes
+                }
+                _messages.value = chatMessages + uniquePendingMessages
+            } else {
+                _messages.value = chatMessages
+            }
         }
     }
 
@@ -1025,17 +1038,21 @@ class ChatViewModel(
             // Send via WebSocket
             webSocketClient.sendChat(content)
 
-            // Prepare for streaming response
-            _isStreaming.value = true
-            _streamingContent.value = ""
-            _streamingTools.value = emptyList()
-            _streamingBlocks.value = emptyList()
-            streamingMessageId = generateMessageId()
+            // Prepare for streaming response (use streamingMutex for consistency with other handlers)
+            streamingMutex.withLock {
+                _isStreaming.value = true
+                _streamingContent.value = ""
+                _streamingTools.value = emptyList()
+                _streamingBlocks.value = emptyList()
+                streamingMessageId = generateMessageId()
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             _error.value = e.toUserMessage()
-            _isStreaming.value = false
+            streamingMutex.withLock {
+                _isStreaming.value = false
+            }
         }
     }
 
