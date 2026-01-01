@@ -29,64 +29,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonPrimitive
-
-/**
- * Tool usage information for display in the UI.
- *
- * @param id Unique identifier for the tool use
- * @param name Tool name (Read, Edit, Bash, etc.)
- * @param summary Brief summary of the tool input
- * @param result Full result content (shown when expanded)
- * @param isError Whether the result is an error
- */
-data class ToolUseInfo(
-    val id: String,
-    val name: String,
-    val summary: String,
-    val result: String? = null,
-    val isError: Boolean = false
-)
-
-/**
- * Content block in a chat message, preserving the order of text and tool usages.
- * Claude responses can interleave text and tool_use blocks, and this sealed class
- * preserves that ordering for accurate display.
- */
-sealed class ContentBlock {
-    /** Text content block */
-    data class Text(val content: String) : ContentBlock()
-    /** Tool usage block */
-    data class Tool(val info: ToolUseInfo) : ContentBlock()
-}
-
-/**
- * Chat message displayed in the UI.
- *
- * @param id Unique identifier for the message
- * @param role Who sent the message (user or assistant)
- * @param blocks Ordered list of content blocks (text and tools interleaved)
- * @param isStreaming True if this message is currently being streamed
- * @param isPending True if this message is pending confirmation from server (user messages only)
- */
-data class ChatMessage(
-    val id: String,
-    val role: MessageRole,
-    val blocks: List<ContentBlock>,
-    val isStreaming: Boolean = false,
-    val isPending: Boolean = false
-) {
-    /** Convenience property: concatenated text content for searching/matching */
-    val content: String
-        get() = blocks.filterIsInstance<ContentBlock.Text>().joinToString("\n\n") { it.content }
-
-    /** Convenience property: list of tools for backwards compatibility */
-    val tools: List<ToolUseInfo>
-        get() = blocks.filterIsInstance<ContentBlock.Tool>().map { it.info }
-}
 
 /**
  * ViewModel for the chat screen, managing real-time messaging via WebSocket.
@@ -674,7 +616,10 @@ class ChatViewModel(
                     else -> return@mapIndexedNotNull null
                 },
                 blocks = blocksWithResults,
-                isStreaming = false
+                isStreaming = false,
+                gitBranch = msg.gitBranch,
+                agentId = msg.agentId,
+                isSidechain = msg.isSidechain
             )
         }
         println("ChatViewModel: Converted to ${chatMessages.size} chat messages")
@@ -875,339 +820,15 @@ class ChatViewModel(
         return path.replace("/", "-")
     }
 
-    /**
-     * Extracts content blocks from message content, preserving the order of text and tool usages.
-     * Returns an ordered list of ContentBlock items (Text and Tool interleaved as they appear).
-     */
-    private fun parseMessageContent(content: Any?): List<ContentBlock> {
-        if (content == null) return emptyList()
-
-        val blocks = mutableListOf<ContentBlock>()
-
-        when (content) {
-            is String -> {
-                val cleaned = cleanThinkingTags(content)
-                if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
-            }
-            is JsonPrimitive -> {
-                val cleaned = cleanThinkingTags(content.content)
-                if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
-            }
-            is JsonArray -> {
-                for (element in content) {
-                    when (element) {
-                        is JsonPrimitive -> {
-                            val cleaned = cleanThinkingTags(element.content)
-                            if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
-                        }
-                        is JsonObject -> processJsonElementToBlocks(element, blocks)
-                        else -> {} // Ignore other JSON element types
-                    }
-                }
-            }
-            is JsonObject -> processJsonElementToBlocks(content, blocks)
-            is List<*> -> {
-                for (item in content) {
-                    when (item) {
-                        is String -> {
-                            val cleaned = cleanThinkingTags(item)
-                            if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
-                        }
-                        is Map<*, *> -> processMapElementToBlocks(item, blocks)
-                        else -> {} // Ignore other item types
-                    }
-                }
-            }
-            else -> {
-                val cleaned = cleanThinkingTags(content.toString())
-                if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
-            }
-        }
-
-        return blocks
-    }
-
-    /**
-     * Processes a JsonObject element and adds ContentBlock to the list (preserving order).
-     * tool_result blocks are handled separately via session-level matching.
-     */
-    private fun processJsonElementToBlocks(
-        element: JsonObject,
-        blocks: MutableList<ContentBlock>
-    ) {
-        val type = element["type"]?.jsonPrimitive?.content
-        when (type) {
-            "text" -> {
-                element["text"]?.jsonPrimitive?.content?.let { text ->
-                    val cleaned = cleanThinkingTags(text)
-                    if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
-                }
-            }
-            "tool_use" -> {
-                val id = element["id"]?.jsonPrimitive?.content ?: "tool_${blocks.size}"
-                val name = element["name"]?.jsonPrimitive?.content ?: "Unknown"
-                val input = element["input"]
-                val summary = extractToolSummary(name, input)
-                blocks.add(ContentBlock.Tool(ToolUseInfo(id = id, name = name, summary = summary)))
-            }
-            // tool_result is handled via session-level matching, not added as a block
-        }
-    }
-
-    /**
-     * Processes a Map element and adds ContentBlock to the list (preserving order).
-     * tool_result blocks are handled separately via session-level matching.
-     */
-    private fun processMapElementToBlocks(
-        item: Map<*, *>,
-        blocks: MutableList<ContentBlock>
-    ) {
-        val type = item["type"] as? String
-        when (type) {
-            "text" -> {
-                (item["text"] as? String)?.let { text ->
-                    val cleaned = cleanThinkingTags(text)
-                    if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
-                }
-            }
-            "tool_use" -> {
-                val id = (item["id"] as? String) ?: "tool_${blocks.size}"
-                val name = (item["name"] as? String) ?: "Unknown"
-                val input = item["input"]
-                val summary = extractToolSummaryFromMap(name, input)
-                blocks.add(ContentBlock.Tool(ToolUseInfo(id = id, name = name, summary = summary)))
-            }
-            // tool_result is handled via session-level matching, not added as a block
-        }
-    }
-
-    /**
-     * Extracts a brief summary for a tool usage from JsonElement input.
-     */
-    private fun extractToolSummary(toolName: String, input: Any?): String {
-        if (input == null) return ""
-        if (input !is JsonObject) return input.toString().take(100)
-
-        return when (toolName) {
-            "Read" -> input["file_path"]?.jsonPrimitive?.content ?: ""
-            "Edit" -> input["file_path"]?.jsonPrimitive?.content ?: ""
-            "Write" -> input["file_path"]?.jsonPrimitive?.content ?: ""
-            "Grep" -> {
-                val pattern = input["pattern"]?.jsonPrimitive?.content ?: ""
-                val path = input["path"]?.jsonPrimitive?.content
-                if (path != null) "$pattern in $path" else pattern
-            }
-            "Glob" -> input["pattern"]?.jsonPrimitive?.content ?: ""
-            "Bash" -> {
-                val cmd = input["command"]?.jsonPrimitive?.content ?: ""
-                cmd.take(80) + if (cmd.length > 80) "..." else ""
-            }
-            "Task" -> input["description"]?.jsonPrimitive?.content ?: ""
-            "WebFetch" -> input["url"]?.jsonPrimitive?.content ?: ""
-            "WebSearch" -> input["query"]?.jsonPrimitive?.content ?: ""
-            else -> {
-                input.entries.firstOrNull()?.let { (key, value) ->
-                    try {
-                        val v = (value as? JsonPrimitive)?.content ?: value.toString()
-                        v.take(80) + if (v.length > 80) "..." else ""
-                    } catch (e: Exception) { "" }
-                } ?: ""
-            }
-        }
-    }
-
-    /**
-     * Extracts a brief summary for a tool usage from Map input.
-     */
-    private fun extractToolSummaryFromMap(toolName: String, input: Any?): String {
-        if (input == null) return ""
-        if (input !is Map<*, *>) return input.toString().take(100)
-
-        return when (toolName) {
-            "Read" -> (input["file_path"] as? String) ?: ""
-            "Edit" -> (input["file_path"] as? String) ?: ""
-            "Write" -> (input["file_path"] as? String) ?: ""
-            "Grep" -> {
-                val pattern = (input["pattern"] as? String) ?: ""
-                val path = input["path"] as? String
-                if (path != null) "$pattern in $path" else pattern
-            }
-            "Glob" -> (input["pattern"] as? String) ?: ""
-            "Bash" -> {
-                val cmd = (input["command"] as? String) ?: ""
-                cmd.take(80) + if (cmd.length > 80) "..." else ""
-            }
-            "Task" -> (input["description"] as? String) ?: ""
-            else -> {
-                input.entries.firstOrNull()?.let { (_, value) ->
-                    val v = value?.toString() ?: ""
-                    v.take(80) + if (v.length > 80) "..." else ""
-                } ?: ""
-            }
-        }
-    }
-
-    /**
-     * Extracts text from tool_result content.
-     */
-    private fun extractToolResultText(content: Any?): String {
-        return when (content) {
-            null -> ""
-            is String -> content
-            is JsonPrimitive -> content.content
-            is JsonArray -> {
-                content.mapNotNull { item ->
-                    when (item) {
-                        is JsonPrimitive -> item.content
-                        is JsonObject -> {
-                            val type = item["type"]?.jsonPrimitive?.content
-                            if (type == "text") item["text"]?.jsonPrimitive?.content else null
-                        }
-                        else -> null
-                    }
-                }.joinToString("\n")
-            }
-            else -> content.toString()
-        }
-    }
-
-    /**
-     * Legacy function for simple text extraction (used for backwards compatibility).
-     */
-    private fun extractTextContent(content: Any?): String {
-        return parseMessageContent(content)
-            .filterIsInstance<ContentBlock.Text>()
-            .joinToString("\n\n") { it.content }
-    }
-
-    /**
-     * Removes thinking tags from content.
-     */
-    private fun cleanThinkingTags(text: String): String {
-        return text
-            .replace(Regex("<thinking>.*?</thinking>", RegexOption.DOT_MATCHES_ALL), "")
-            .replace("</thinking>", "")
-            .replace("<thinking>", "")
-            .trim()
-    }
-
-    /**
-     * Checks if the message is a compaction/summary message (system-generated).
-     * These messages are generated when Claude Code session runs out of context
-     * and should not be displayed as user messages.
-     */
-    private fun isCompactionMessage(text: String): Boolean {
-        return text.startsWith("This session is being continued from a previous conversation") ||
-               text.startsWith("Please continue the conversation from where we left") ||
-               text.contains("The conversation is summarized below:") ||
-               text.contains("ran out of context")
-    }
-
-    /**
-     * Extracts tool_use and tool_result items from message content into separate maps.
-     * Used for cross-message matching of tools with their results.
-     */
+    // Message parsing delegated to MessageParser utility object
+    private fun parseMessageContent(content: Any?) = MessageParser.parseMessageContent(content)
     private fun extractToolsFromContent(
         content: Any?,
         toolUses: MutableMap<String, ToolUseInfo>,
         toolResults: MutableMap<String, Pair<String, Boolean>>
-    ) {
-        when (content) {
-            is JsonArray -> {
-                for (element in content) {
-                    if (element is JsonObject) {
-                        val type = element["type"]?.jsonPrimitive?.content
-                        when (type) {
-                            "tool_use" -> {
-                                val id = element["id"]?.jsonPrimitive?.content ?: continue
-                                val name = element["name"]?.jsonPrimitive?.content ?: "Unknown"
-                                val input = element["input"]
-                                val summary = extractToolSummary(name, input)
-                                toolUses[id] = ToolUseInfo(id = id, name = name, summary = summary)
-                            }
-                            "tool_result" -> {
-                                val toolUseId = element["tool_use_id"]?.jsonPrimitive?.content ?: continue
-                                val resultContent = element["content"]
-                                val isError = element["is_error"]?.jsonPrimitive?.content == "true"
-                                val result = extractToolResultText(resultContent)
-                                toolResults[toolUseId] = Pair(result, isError)
-                            }
-                        }
-                    }
-                }
-            }
-            is List<*> -> {
-                for (item in content) {
-                    if (item is Map<*, *>) {
-                        val type = item["type"] as? String
-                        when (type) {
-                            "tool_use" -> {
-                                val id = (item["id"] as? String) ?: continue
-                                val name = (item["name"] as? String) ?: "Unknown"
-                                val input = item["input"]
-                                val summary = extractToolSummaryFromMap(name, input)
-                                toolUses[id] = ToolUseInfo(id = id, name = name, summary = summary)
-                            }
-                            "tool_result" -> {
-                                val toolUseId = (item["tool_use_id"] as? String) ?: continue
-                                val resultContent = item["content"]
-                                val isError = item["is_error"] == true
-                                val result = when (resultContent) {
-                                    is String -> resultContent
-                                    is List<*> -> resultContent.mapNotNull { it?.toString() }.joinToString("\n")
-                                    else -> resultContent?.toString() ?: ""
-                                }
-                                toolResults[toolUseId] = Pair(result, isError)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Checks if message content contains only tool_result items (no text or tool_use).
-     */
-    private fun hasOnlyToolResults(content: Any?): Boolean {
-        var hasToolResult = false
-        var hasOther = false
-
-        when (content) {
-            is JsonArray -> {
-                for (element in content) {
-                    if (element is JsonObject) {
-                        val type = element["type"]?.jsonPrimitive?.content
-                        when (type) {
-                            "tool_result" -> hasToolResult = true
-                            "text" -> {
-                                val text = element["text"]?.jsonPrimitive?.content
-                                if (!text.isNullOrBlank()) hasOther = true
-                            }
-                            "tool_use" -> hasOther = true
-                        }
-                    }
-                }
-            }
-            is List<*> -> {
-                for (item in content) {
-                    if (item is Map<*, *>) {
-                        val type = item["type"] as? String
-                        when (type) {
-                            "tool_result" -> hasToolResult = true
-                            "text" -> {
-                                val text = item["text"] as? String
-                                if (!text.isNullOrBlank()) hasOther = true
-                            }
-                            "tool_use" -> hasOther = true
-                        }
-                    }
-                }
-            }
-        }
-
-        return hasToolResult && !hasOther
-    }
+    ) = MessageParser.extractToolsFromContent(content, toolUses, toolResults)
+    private fun hasOnlyToolResults(content: Any?) = MessageParser.hasOnlyToolResults(content)
+    private fun isCompactionMessage(text: String) = MessageParser.isCompactionMessage(text)
 
     /**
      * Syncs messages when app returns to foreground.
@@ -2043,7 +1664,10 @@ class ChatViewModel(
                             else -> return@mapNotNull null
                         },
                         blocks = blocksWithResults,
-                        isStreaming = false
+                        isStreaming = false,
+                        gitBranch = claudeMsg.gitBranch,
+                        agentId = claudeMsg.agentId,
+                        isSidechain = claudeMsg.isSidechain
                     )
                 }
 

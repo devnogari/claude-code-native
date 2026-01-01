@@ -40,18 +40,107 @@ type ClaudeSession struct {
 
 // ClaudeMessage represents a single message in a Claude Code conversation
 type ClaudeMessage struct {
-	Type      string    `json:"type"`
-	SessionID string    `json:"sessionId,omitempty"`
-	Timestamp time.Time `json:"timestamp,omitempty"`
-	Message   *struct {
-		Role    string `json:"role"`
-		Content any    `json:"content"`
-	} `json:"message,omitempty"`
-	Cwd         string `json:"cwd,omitempty"`
-	ParentMsgID string `json:"parentMsgId,omitempty"`
+	// Common fields
+	UUID       string    `json:"uuid,omitempty"`
+	ParentUUID string    `json:"parentUuid,omitempty"`
+	Type       string    `json:"type"`
+	SessionID  string    `json:"sessionId,omitempty"`
+	Timestamp  time.Time `json:"timestamp,omitempty"`
+	Cwd        string    `json:"cwd,omitempty"`
+	GitBranch  string    `json:"gitBranch,omitempty"`
+	IsSidechain bool     `json:"isSidechain,omitempty"`
+	UserType   string    `json:"userType,omitempty"`
+	Version    string    `json:"version,omitempty"`
+	Slug       string    `json:"slug,omitempty"`
+	AgentID    string    `json:"agentId,omitempty"` // ID for subagent messages
+
+	// Message content (for user/assistant types)
+	Message   *MessageContent `json:"message,omitempty"`
+	RequestID string          `json:"requestId,omitempty"`
+
+	// Tool use result (for user type with tool results)
+	ToolUseResult *ToolUseResult `json:"toolUseResult,omitempty"`
+
 	// Queue operation fields (type="queue-operation")
-	Operation string `json:"operation,omitempty"` // "enqueue", "dequeue", etc.
-	Content   string `json:"content,omitempty"`   // Queued message content
+	Operation string `json:"operation,omitempty"`
+	Content   string `json:"content,omitempty"`
+}
+
+// MessageContent represents the message content structure
+type MessageContent struct {
+	Role         string `json:"role"`
+	Content      any    `json:"content"`
+	Model        string `json:"model,omitempty"`
+	ID           string `json:"id,omitempty"`
+	Type         string `json:"type,omitempty"`
+	StopReason   string `json:"stop_reason,omitempty"`
+	StopSequence string `json:"stop_sequence,omitempty"`
+	Usage        *Usage `json:"usage,omitempty"`
+}
+
+// Usage represents token usage information
+type Usage struct {
+	InputTokens              int                 `json:"input_tokens,omitempty"`
+	CacheCreationInputTokens int                 `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int                 `json:"cache_read_input_tokens,omitempty"`
+	OutputTokens             int                 `json:"output_tokens,omitempty"`
+	ServiceTier              string              `json:"service_tier,omitempty"`
+	CacheCreation            *CacheCreationUsage `json:"cache_creation,omitempty"`
+}
+
+// CacheCreationUsage represents cache creation token breakdown
+type CacheCreationUsage struct {
+	Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens,omitempty"`
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens,omitempty"`
+}
+
+// ToolUseResult represents the result of a tool invocation
+type ToolUseResult struct {
+	Stdout      string `json:"stdout,omitempty"`
+	Stderr      string `json:"stderr,omitempty"`
+	Interrupted bool   `json:"interrupted,omitempty"`
+	IsImage     bool   `json:"isImage,omitempty"`
+}
+
+// SessionState represents the current state of a Claude session
+type SessionState string
+
+const (
+	SessionStateIdle      SessionState = "idle"      // Ready for new input
+	SessionStateQueued    SessionState = "queued"    // Message queued, waiting to process
+	SessionStateStreaming SessionState = "streaming" // Currently generating response
+)
+
+// GetSessionState determines the current state of a session from its messages
+func GetSessionState(messages []ClaudeMessage) SessionState {
+	var lastQueueOp string
+	var lastRelevantMsg *ClaudeMessage
+
+	for i := range messages {
+		msg := &messages[i]
+		// Track queue operations
+		if msg.Type == "queue-operation" {
+			lastQueueOp = msg.Operation
+		}
+		// Track last user/assistant message
+		if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
+			lastRelevantMsg = msg
+		}
+	}
+
+	// If last queue op is enqueue, message is queued
+	if lastQueueOp == "enqueue" {
+		return SessionStateQueued
+	}
+	// After dequeue/remove, fall through to check message role to determine
+	// if we're streaming (last msg is user) or idle (last msg is assistant)
+
+	// If last message is from user, assistant is streaming
+	if lastRelevantMsg != nil && lastRelevantMsg.Message.Role == "user" {
+		return SessionStateStreaming
+	}
+
+	return SessionStateIdle
 }
 
 // HistoryReader reads Claude Code history from ~/.claude/projects/

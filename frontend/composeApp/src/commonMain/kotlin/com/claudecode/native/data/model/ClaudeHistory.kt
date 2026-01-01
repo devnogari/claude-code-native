@@ -37,22 +37,80 @@ data class ClaudeSession(
  */
 @Serializable
 data class ClaudeMessage(
+    // Common fields
+    val uuid: String? = null,
+    @SerialName("parentUuid") val parentUuid: String? = null,
     val type: String,
     @SerialName("sessionId") val sessionId: String? = null,
     val timestamp: Instant? = null,
-    val message: MessageContent? = null,
     val cwd: String? = null,
-    @SerialName("parentMsgId") val parentMsgId: String? = null,
+    @SerialName("gitBranch") val gitBranch: String? = null,
+    @SerialName("isSidechain") val isSidechain: Boolean = false,
+    @SerialName("userType") val userType: String? = null,
+    val version: String? = null,
+    val slug: String? = null,
+    @SerialName("agentId") val agentId: String? = null, // ID for subagent messages
+
+    // Message content (for user/assistant types)
+    val message: MessageContent? = null,
+    @SerialName("requestId") val requestId: String? = null,
+
+    // Tool use result (for user type with tool results)
+    @SerialName("toolUseResult") val toolUseResult: ToolUseResult? = null,
+
     // Queue operation fields (type="queue-operation")
-    val operation: String? = null, // "enqueue", "dequeue", etc.
-    val content: String? = null    // Queued message content
+    val operation: String? = null,
+    val content: String? = null
 )
 
 @Serializable
 data class MessageContent(
     val role: String,
-    val content: kotlinx.serialization.json.JsonElement
+    val content: kotlinx.serialization.json.JsonElement,
+    val model: String? = null,
+    val id: String? = null,
+    val type: String? = null,
+    @SerialName("stop_reason") val stopReason: String? = null,
+    @SerialName("stop_sequence") val stopSequence: String? = null,
+    val usage: Usage? = null
 )
+
+@Serializable
+data class Usage(
+    @SerialName("input_tokens") val inputTokens: Int = 0,
+    @SerialName("cache_creation_input_tokens") val cacheCreationInputTokens: Int = 0,
+    @SerialName("cache_read_input_tokens") val cacheReadInputTokens: Int = 0,
+    @SerialName("output_tokens") val outputTokens: Int = 0,
+    @SerialName("service_tier") val serviceTier: String? = null,
+    @SerialName("cache_creation") val cacheCreation: CacheCreationUsage? = null
+)
+
+@Serializable
+data class CacheCreationUsage(
+    @SerialName("ephemeral_5m_input_tokens") val ephemeral5mInputTokens: Int = 0,
+    @SerialName("ephemeral_1h_input_tokens") val ephemeral1hInputTokens: Int = 0
+)
+
+@Serializable
+data class ToolUseResult(
+    val stdout: String? = null,
+    val stderr: String? = null,
+    val interrupted: Boolean = false,
+    @SerialName("isImage") val isImage: Boolean = false
+)
+
+/**
+ * Represents the current state of a Claude session
+ */
+@Serializable
+enum class SessionState {
+    @SerialName("idle")
+    IDLE,
+    @SerialName("queued")
+    QUEUED,
+    @SerialName("streaming")
+    STREAMING
+}
 
 /**
  * Paginated response for Claude session messages

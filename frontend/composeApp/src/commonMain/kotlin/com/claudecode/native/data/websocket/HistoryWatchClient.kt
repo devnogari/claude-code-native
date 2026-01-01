@@ -1,6 +1,7 @@
 package com.claudecode.native.data.websocket
 
 import com.claudecode.native.data.model.ClaudeMessage
+import com.claudecode.native.data.model.SessionState
 import com.claudecode.native.data.storage.TokenStorage
 import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
@@ -31,6 +32,7 @@ data class HistoryWatchMessage(
     @SerialName("session_id") val sessionId: String? = null,
     @SerialName("encoded_path") val encodedPath: String? = null,
     val messages: List<ClaudeMessage>? = null,
+    @SerialName("session_state") val sessionState: SessionState? = null,
     val error: String? = null
 )
 
@@ -42,7 +44,8 @@ sealed class HistoryWatchEvent {
     data class NewMessages(
         val sessionId: String,
         val encodedPath: String,
-        val messages: List<ClaudeMessage>
+        val messages: List<ClaudeMessage>,
+        val sessionState: SessionState = SessionState.IDLE
     ) : HistoryWatchEvent()
     data class Error(val message: String) : HistoryWatchEvent()
     data object Disconnected : HistoryWatchEvent()
@@ -182,7 +185,8 @@ class HistoryWatchClient(
                             _events.emit(HistoryWatchEvent.NewMessages(
                                 sessionId = sessionId,
                                 encodedPath = encodedPath,
-                                messages = messages
+                                messages = messages,
+                                sessionState = message.sessionState ?: SessionState.IDLE
                             ))
                         }
                     }
