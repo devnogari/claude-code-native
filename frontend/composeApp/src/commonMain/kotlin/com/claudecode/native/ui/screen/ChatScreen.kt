@@ -156,6 +156,7 @@ fun ChatScreenContent(
     val queuedMessages by viewModel.queuedMessages.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
+    val conversationTitle by viewModel.conversationTitle.collectAsState()
 
     // Track if initial connection is complete to avoid duplicate sync on first resume
     var hasInitialized by remember { mutableStateOf(false) }
@@ -316,7 +317,13 @@ fun ChatScreenContent(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("Chat")
+                        Text(
+                            text = conversationTitle?.take(50)?.let {
+                                if (it.length < (conversationTitle?.length ?: 0)) "$it..." else it
+                            } ?: "Chat",
+                            maxLines = 1,
+                            style = MaterialTheme.typography.titleMedium
+                        )
                         // Thinking indicator in title bar
                         androidx.compose.animation.AnimatedVisibility(
                             visible = isStreaming,
