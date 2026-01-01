@@ -139,6 +139,10 @@ class ChatViewModel(
     /** Current error message, if any. */
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _conversationTitle = MutableStateFlow<String?>(null)
+    /** Current conversation title for display in UI. */
+    val conversationTitle: StateFlow<String?> = _conversationTitle.asStateFlow()
+
     /** Connection state exposed from the WebSocket client. */
     val connectionState: StateFlow<ConnectionState> = webSocketClient.connectionState
 
@@ -156,17 +160,21 @@ class ChatViewModel(
     private val historyWatchStreamingTimeout = 3000L // 3 seconds - accounts for tool execution delays
 
     // Session-level tool tracking for matching tool_use with tool_result across messages
-    // Using synchronized maps for thread safety across WebSocket and HistoryWatch handlers
-    private val sessionToolUses = java.util.concurrent.ConcurrentHashMap<String, ToolUseInfo>()
-    private val sessionToolResults = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Boolean>>()
+    // Using mutableMapOf with Mutex for thread safety across WebSocket and HistoryWatch handlers
+    // (ConcurrentHashMap is not available in Kotlin Multiplatform)
+    private val sessionToolUses = mutableMapOf<String, ToolUseInfo>()
+    private val sessionToolResults = mutableMapOf<String, Pair<String, Boolean>>()
 
     // Track pending user messages to properly handle duplicates from history watch
     // Key: content hash, Value: message ID
-    private val pendingUserMessages = java.util.concurrent.ConcurrentHashMap<Int, String>()
+    private val pendingUserMessages = mutableMapOf<Int, String>()
 
     // Track finalized assistant messages to prevent duplicates from history watch
     // Key: content hash (first 200 chars), Value: message ID
-    private val finalizedAssistantMessages = java.util.concurrent.ConcurrentHashMap<Int, String>()
+    private val finalizedAssistantMessages = mutableMapOf<Int, String>()
+
+    // Mutex for thread-safe access to session-level maps
+    private val mapsMutex = Mutex()
 
     // Mutex for streaming state changes to prevent race conditions between WebSocket and HistoryWatch
     private val streamingMutex = Mutex()
@@ -223,6 +231,7 @@ class ChatViewModel(
                     _streamingTools.value = emptyList()
                     _queuedMessages.value = emptyList()
                     _error.value = null
+                    _conversationTitle.value = null
                     streamingMessageId = null
 
                     // Clear tool tracking
@@ -289,20 +298,31 @@ class ChatViewModel(
 
     /**
      * Loads messages directly from filesystem-based Claude history API.
-     * Also fetches project info to store the original project path.
+     * Also fetches project info to store the original project path and session title.
      */
     private suspend fun loadMessagesFromFilesystem(encodedPath: String, sessionId: String) {
         try {
             println("ChatViewModel: Loading messages from filesystem $encodedPath / $sessionId")
 
-            // Fetch project to get the original path for delete operations
+            // Fetch project to get the original path and session title for delete operations
             try {
                 val project = claudeHistoryApi.getProject(encodedPath)
                 currentProjectPath = project.path
                 println("ChatViewModel: Stored project path: ${project.path}")
+
+                // Find the session and extract the title (firstMessage)
+                val session = project.sessions.find { it.id == sessionId }
+                if (session != null && session.firstMessage.isNotBlank()) {
+                    _conversationTitle.value = session.firstMessage
+                    println("ChatViewModel: Set conversation title: ${session.firstMessage}")
+                } else {
+                    // Fallback to project name if no firstMessage
+                    _conversationTitle.value = project.name
+                }
             } catch (e: Exception) {
                 println("ChatViewModel: Failed to fetch project info: ${e.message}")
                 // Continue without project path - delete will try to decode
+                _conversationTitle.value = null
             }
 
             // Load messages from file-based API (with summary=false for full content)
@@ -448,6 +468,10 @@ class ChatViewModel(
         try {
             // Get conversation details to find claudeSession and project
             val conversation = conversationApi.getConversation(conversationId)
+
+            // Set conversation title from database
+            _conversationTitle.value = conversation.title
+
             val claudeSession = conversation.claudeSession
             if (claudeSession.isNullOrBlank()) {
                 // No Claude session linked - this is a new conversation
