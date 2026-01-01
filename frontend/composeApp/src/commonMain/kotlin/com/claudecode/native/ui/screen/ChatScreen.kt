@@ -169,16 +169,20 @@ fun ChatScreenContent(
 
     // Connect when screen is displayed
     LaunchedEffect(conversationId) {
+        println("ChatScreen: LaunchedEffect(${conversationId.take(20)}) - calling connect()")
         viewModel.connect(conversationId)
         hasInitialized = true
+        println("ChatScreen: LaunchedEffect(${conversationId.take(20)}) - connect() returned")
     }
 
     // Note: Commands are loaded automatically by ChatViewModel when project path is set
     // (in loadMessages/loadMessagesFromFilesystem after currentProjectPath is determined)
 
     // Sync messages when app returns to foreground (skip initial resume)
+    // NOTE: Only keyed on lifecycleOwner, NOT conversationId
+    // We don't want to disconnect when switching rooms - only when leaving ChatScreen entirely
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, conversationId) {
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && hasInitialized) {
                 println("ChatScreen: ON_RESUME - syncing messages")
@@ -188,6 +192,8 @@ fun ChatScreenContent(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            // Only disconnect when truly leaving ChatScreen (e.g., navigating to settings)
+            // Not when switching between rooms
             viewModel.disconnect()
         }
     }

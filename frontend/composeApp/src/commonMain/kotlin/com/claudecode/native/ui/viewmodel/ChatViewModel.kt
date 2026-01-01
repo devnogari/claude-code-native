@@ -259,11 +259,29 @@ class ChatViewModel(
      *   - Legacy format: UUID conversation ID (from database)
      */
     fun connect(conversationId: String) {
+        // Generate unique ID for this connect call for debugging
+        val connectCallId = "CONN-${(0..9999).random()}"
+        val shortConvId = conversationId.take(20)
+
+        // OPTIMIZATION: Skip if already connected to this room and not loading
+        if (currentConversationId == conversationId && currentConnectJob?.isActive != true) {
+            println("[$connectCallId] SKIP: Already connected to $shortConvId")
+            return
+        }
+
+        println("[$connectCallId] >>> connect() CALLED with: $shortConvId")
+        println("[$connectCallId] Current state: currentConversationId=${currentConversationId?.take(20)}, title=${_conversationTitle.value?.take(30)}")
+
         // Cancel any previous connect job to prevent race conditions when switching rooms quickly
-        currentConnectJob?.cancel()
+        val prevJob = currentConnectJob
+        if (prevJob != null) {
+            println("[$connectCallId] Cancelling previous connect job")
+            prevJob.cancel()
+        }
 
         currentConnectJob = scope.launch {
             try {
+                println("[$connectCallId] Inside coroutine, checking if need to disconnect")
                 // Disconnect from previous conversation if any
                 if (currentConversationId != null && currentConversationId != conversationId) {
                     webSocketClient.disconnect()
@@ -274,31 +292,25 @@ class ChatViewModel(
                     historyWatchStreamingDebounceJob = null
                     isStreamingFromHistoryWatch = false
 
-                    // Clear ALL previous state
-                    mutex.withLock {
-                        _messages.value = emptyList()
-                    }
+                    // NOTE: We intentionally DO NOT clear messages/title here anymore.
+                    // Old messages remain visible during loading to prevent empty screen flash.
+                    // State will be replaced atomically when new data loads successfully.
+                    // If guard check fails (user switched rooms), we abort without clearing.
+
+                    // Only clear transient streaming state
                     _isStreaming.value = false
                     _streamingContent.value = ""
                     _streamingBlocks.value = emptyList()
                     _streamingTools.value = emptyList()
                     _queuedMessages.value = emptyList()
                     _error.value = null
-                    _conversationTitle.value = null
                     streamingMessageId = null
-
-                    // Clear tool tracking and dedup state with proper synchronization
-                    mapsMutex.withLock {
-                        sessionToolUses.clear()
-                        sessionToolResults.clear()
-                        pendingUserMessages.clear()
-                        finalizedAssistantMessages.clear()
-                        processedHistoryWatchTimestamps.clear()
-                    }
                 }
 
                 // Set conversation ID immediately so subsequent connect() calls know to disconnect
                 currentConversationId = conversationId
+                println("[$connectCallId] Set currentConversationId = $shortConvId")
+
                 val token = apiClient.getAuthToken() ?: run {
                     _error.value = "Not authenticated"
                     return@launch
@@ -307,21 +319,29 @@ class ChatViewModel(
                 // Parse conversationId to extract session info
                 // Format: "sessionId?project=encodedPath" or legacy UUID
                 val (sessionId, encodedPath) = parseConversationId(conversationId)
+                println("[$connectCallId] Parsed: sessionId=${sessionId?.take(15)}, encodedPath=${encodedPath?.take(30)}")
 
                 if (sessionId != null && encodedPath != null) {
                     // New filesystem-based flow
                     currentEncodedPath = encodedPath
                     currentClaudeSession = sessionId
 
+                    println("[$connectCallId] BEFORE loadMessagesFromFilesystem, title=${_conversationTitle.value?.take(30)}")
+
                     // Load messages directly from filesystem API
-                    loadMessagesFromFilesystem(encodedPath, sessionId)
+                    loadMessagesFromFilesystem(encodedPath, sessionId, conversationId, connectCallId)
+
+                    println("[$connectCallId] AFTER loadMessagesFromFilesystem, title=${_conversationTitle.value?.take(30)}")
+                    println("[$connectCallId] currentConversationId now = ${currentConversationId?.take(20)}")
 
                     // Guard: Check if we're still the active conversation after async load
                     // If user switched rooms during loading, abort this connection
                     if (currentConversationId != conversationId) {
-                        println("ChatViewModel: Aborting connect - room switched during message load")
+                        println("[$connectCallId] !!! GUARD TRIGGERED: room switched during load, ABORTING")
+                        println("[$connectCallId] BUT TITLE IS ALREADY SET TO: ${_conversationTitle.value?.take(50)}")
                         return@launch
                     }
+                    println("[$connectCallId] Guard passed, continuing with connection")
 
                     // Connect to history watch for real-time file changes
                     println("ChatViewModel: Connecting history watch for $encodedPath / $sessionId")
@@ -329,24 +349,29 @@ class ChatViewModel(
 
                     // Connect WebSocket with the full session identifier
                     // This allows continuing the conversation
-                    println("ChatViewModel: Connecting WebSocket for filesystem session")
+                    println("[$connectCallId] Connecting WebSocket for filesystem session")
                     webSocketClient.connect(conversationId, token)
+                    println("[$connectCallId] <<< connect() COMPLETE for: $shortConvId")
+                    println("[$connectCallId] Final state: title=${_conversationTitle.value?.take(40)}, msgCount=${_messages.value.size}")
                 } else {
                     // Legacy database-based flow (fallback)
                     loadMessages(conversationId)
 
                     // Guard: Check if we're still the active conversation after async load
                     if (currentConversationId != conversationId) {
-                        println("ChatViewModel: Aborting connect - room switched during message load")
+                        println("[$connectCallId] !!! Legacy GUARD TRIGGERED: room switched during message load")
                         return@launch
                     }
 
                     webSocketClient.connect(conversationId, token)
                     connectHistoryWatch(conversationId, token)
+                    println("[$connectCallId] <<< Legacy connect() COMPLETE")
                 }
             } catch (e: CancellationException) {
+                println("[$connectCallId] !!! CANCELLED - job was cancelled")
                 throw e
             } catch (e: Exception) {
+                println("[$connectCallId] !!! ERROR: ${e.message}")
                 _error.value = e.toUserMessage()
             }
         }
@@ -371,32 +396,62 @@ class ChatViewModel(
      * Loads messages directly from filesystem-based Claude history API.
      * Also fetches project info to store the original project path and session title.
      */
-    private suspend fun loadMessagesFromFilesystem(encodedPath: String, sessionId: String) {
+    private suspend fun loadMessagesFromFilesystem(
+        encodedPath: String,
+        sessionId: String,
+        expectedConversationId: String,
+        callId: String = "?"
+    ) {
         try {
-            println("ChatViewModel: Loading messages from filesystem $encodedPath / $sessionId")
+            println("[$callId] loadMessagesFromFilesystem START - sessionId=${sessionId.take(15)}")
+            println("[$callId] Before API call, currentConversationId=${currentConversationId?.take(20)}")
 
             // Fetch project to get the original path and session title for delete operations
             try {
                 val project = claudeHistoryApi.getProject(encodedPath)
+
+                // GUARD CHECK: Before setting ANY state, verify we're still the active conversation
+                // This prevents race condition where user clicks another room during API call
+                if (currentConversationId != expectedConversationId) {
+                    println("[$callId] !!! GUARD: Room switched during project fetch, aborting state update")
+                    println("[$callId] Expected: ${expectedConversationId.take(20)}, Current: ${currentConversationId?.take(20)}")
+                    return
+                }
+
                 currentProjectPath = project.path
-                println("ChatViewModel: Stored project path: ${project.path}")
+                println("[$callId] Got project: ${project.name}")
 
                 // Find the session and extract the title (firstMessage)
                 val session = project.sessions.find { it.id == sessionId }
-                if (session != null && session.firstMessage.isNotBlank()) {
-                    _conversationTitle.value = session.firstMessage
-                    println("ChatViewModel: Set conversation title: ${session.firstMessage}")
+                val newTitle = if (session != null && session.firstMessage.isNotBlank()) {
+                    session.firstMessage
                 } else {
-                    // Fallback to project name if no firstMessage
-                    _conversationTitle.value = project.name
+                    project.name
                 }
+
+                // GUARD CHECK again before setting title (in case of context switch)
+                if (currentConversationId != expectedConversationId) {
+                    println("[$callId] !!! GUARD: Room switched before title set, aborting")
+                    return
+                }
+
+                println("[$callId] About to set title to: ${newTitle.take(50)}")
+                println("[$callId] currentConversationId at title set time: ${currentConversationId?.take(20)}")
+                _conversationTitle.value = newTitle
+                println("[$callId] Title IS NOW: ${_conversationTitle.value?.take(50)}")
 
                 // Load commands now that we have the project path
                 loadCommands(project.path)
             } catch (e: Exception) {
-                println("ChatViewModel: Failed to fetch project info: ${e.message}")
+                println("[$callId] Failed to fetch project info: ${e.message}")
                 // Continue without project path - delete will try to decode
                 _conversationTitle.value = null
+            }
+
+            // GUARD CHECK before loading messages
+            if (currentConversationId != expectedConversationId) {
+                println("[$callId] !!! GUARD: Room switched before message load, aborting")
+                return
             }
 
             // Load messages from file-based API (with summary=false for full content)
@@ -408,7 +463,27 @@ class ChatViewModel(
                     offset = 0,
                     summary = false
                 )
-                println("ChatViewModel: Got ${response.messages.size} messages from API")
+
+                // GUARD CHECK after API call, before setting messages
+                if (currentConversationId != expectedConversationId) {
+                    println("[$callId] !!! GUARD: Room switched during message fetch, discarding ${response.messages.size} messages")
+                    return
+                }
+
+                println("[$callId] Got ${response.messages.size} messages from API, processing...")
+
+                // Clear old state atomically ONLY after guard check passes
+                // This prevents empty view flash when rapidly switching rooms
+                mapsMutex.withLock {
+                    sessionToolUses.clear()
+                    sessionToolResults.clear()
+                    pendingUserMessages.clear()
+                    finalizedAssistantMessages.clear()
+                    processedHistoryWatchTimestamps.clear()
+                }
+                mutex.withLock {
+                    _messages.value = emptyList()
+                }
 
                 // Process messages using existing logic
                 processLoadedMessages(response.messages)
@@ -1055,12 +1130,18 @@ class ChatViewModel(
             return
         }
 
+        // Skip sync if a connect is already in progress to prevent duplicate API calls
+        if (currentConnectJob?.isActive == true) {
+            println("ChatViewModel: Skipping foreground sync - connect in progress")
+            return
+        }
+
         scope.launch {
             try {
                 if (encodedPath != null && sessionId != null) {
                     // Reload messages from filesystem
                     println("ChatViewModel: Syncing messages on foreground for $encodedPath / $sessionId")
-                    loadMessagesFromFilesystem(encodedPath, sessionId)
+                    loadMessagesFromFilesystem(encodedPath, sessionId, convId, "SYNC")
                 } else {
                     // Legacy flow - reload via conversation API
                     println("ChatViewModel: Syncing messages on foreground (legacy) for $convId")
