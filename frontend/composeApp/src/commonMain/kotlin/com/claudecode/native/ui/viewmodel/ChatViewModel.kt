@@ -1461,6 +1461,14 @@ class ChatViewModel(
             }
 
             is HistoryWatchEvent.NewMessages -> {
+                // Validate event belongs to current conversation to prevent stale messages
+                // from previous conversation appearing after switching chat rooms
+                if (event.sessionId != currentClaudeSession || event.encodedPath != currentEncodedPath) {
+                    println("ChatViewModel: Ignoring history watch event for stale session " +
+                            "(event: ${event.sessionId}, current: $currentClaudeSession)")
+                    return
+                }
+
                 println("ChatViewModel: Received ${event.messages.size} new messages from history watch")
 
                 // Handle queue-operation events first (terminal queued messages)

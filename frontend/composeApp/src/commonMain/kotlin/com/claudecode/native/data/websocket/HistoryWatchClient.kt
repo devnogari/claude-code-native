@@ -39,7 +39,11 @@ data class HistoryWatchMessage(
  */
 sealed class HistoryWatchEvent {
     data class Connected(val sessionId: String, val encodedPath: String) : HistoryWatchEvent()
-    data class NewMessages(val messages: List<ClaudeMessage>) : HistoryWatchEvent()
+    data class NewMessages(
+        val sessionId: String,
+        val encodedPath: String,
+        val messages: List<ClaudeMessage>
+    ) : HistoryWatchEvent()
     data class Error(val message: String) : HistoryWatchEvent()
     data object Disconnected : HistoryWatchEvent()
 }
@@ -68,6 +72,10 @@ class HistoryWatchClient(
     private var session: DefaultClientWebSocketSession? = null
     private var watchJob: Job? = null
 
+    // Track current session info for event context
+    private var currentSessionId: String? = null
+    private var currentEncodedPath: String? = null
+
     private val _events = MutableSharedFlow<HistoryWatchEvent>(replay = 0)
     val events: SharedFlow<HistoryWatchEvent> = _events.asSharedFlow()
 
@@ -84,6 +92,10 @@ class HistoryWatchClient(
      */
     suspend fun connect(encodedPath: String, sessionId: String, token: String) {
         disconnect()
+
+        // Store current session info for event context
+        currentSessionId = sessionId
+        currentEncodedPath = encodedPath
 
         watchJob = scope.launch {
             try {
@@ -138,6 +150,8 @@ class HistoryWatchClient(
         }
         session = null
         _isConnected.value = false
+        currentSessionId = null
+        currentEncodedPath = null
     }
 
     /**
@@ -161,8 +175,16 @@ class HistoryWatchClient(
                     )
                 }
                 HistoryWatchMessageType.NEW_MESSAGES -> {
-                    message.messages?.let { messages ->
-                        _events.emit(HistoryWatchEvent.NewMessages(messages))
+                    val sessionId = currentSessionId
+                    val encodedPath = currentEncodedPath
+                    if (sessionId != null && encodedPath != null) {
+                        message.messages?.let { messages ->
+                            _events.emit(HistoryWatchEvent.NewMessages(
+                                sessionId = sessionId,
+                                encodedPath = encodedPath,
+                                messages = messages
+                            ))
+                        }
                     }
                 }
                 HistoryWatchMessageType.ERROR -> {

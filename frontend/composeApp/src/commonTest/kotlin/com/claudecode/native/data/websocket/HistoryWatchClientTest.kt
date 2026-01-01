@@ -79,16 +79,22 @@ class HistoryWatchClientTest {
     }
 
     @Test
-    fun `HistoryWatchEvent NewMessages should contain message list`() {
+    fun `HistoryWatchEvent NewMessages should contain session info and message list`() {
         val messages = listOf(
             com.claudecode.native.data.model.ClaudeMessage(
                 type = "message",
                 sessionId = "session1"
             )
         )
-        val event = HistoryWatchEvent.NewMessages(messages)
+        val event = HistoryWatchEvent.NewMessages(
+            sessionId = "session1",
+            encodedPath = "Users-test-project",
+            messages = messages
+        )
 
         assertTrue(event is HistoryWatchEvent.NewMessages)
+        assertEquals("session1", event.sessionId)
+        assertEquals("Users-test-project", event.encodedPath)
         assertEquals(1, event.messages.size)
         assertEquals("session1", event.messages[0].sessionId)
     }
