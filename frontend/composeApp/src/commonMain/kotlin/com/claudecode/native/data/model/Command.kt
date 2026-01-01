@@ -15,7 +15,7 @@ data class Command(
     val relativePath: String? = null,
     val description: String,
     val namespace: String, // "builtin", "project", "user"
-    val metadata: Map<String, String>? = null
+    val metadata: Map<String, JsonElement>? = null
 )
 
 /**
@@ -69,5 +69,5 @@ data class ExecuteCommandResponse(
     val data: Map<String, JsonElement>? = null,
     val hasFileIncludes: Boolean = false,
     val hasBashCommands: Boolean = false,
-    val metadata: Map<String, String>? = null
+    val metadata: Map<String, JsonElement>? = null
 )
