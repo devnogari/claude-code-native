@@ -117,15 +117,16 @@ fun ChatScreenContent(
     val focusManager = LocalFocusManager.current
 
     // Track if user is at bottom of the list (for showing scroll button and auto-scroll)
+    // With reverseLayout=true, index 0 is at the bottom (most recent messages)
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
-            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+            val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
             val totalItems = layoutInfo.totalItemsCount
-            // Consider at bottom if: no items, last item visible, or very few items
+            // Consider at bottom if: no items, first item (index 0) visible, or very few items
             totalItems == 0 ||
-                lastVisibleItem == null ||
-                lastVisibleItem.index >= totalItems - 1 ||
+                firstVisibleItem == null ||
+                firstVisibleItem.index == 0 ||
                 totalItems <= 3
         }
     }
@@ -214,25 +215,7 @@ fun ChatScreenContent(
     // Filter out empty messages (no blocks) for display count
     val filteredMessagesCount = messages.count { it.blocks.isNotEmpty() }
 
-    // Scroll to bottom when conversation first loads
-    var hasScrolledToBottom by remember(conversationId) { mutableStateOf(false) }
-    LaunchedEffect(conversationId, messages.size) {
-        if (!hasScrolledToBottom && messages.isNotEmpty()) {
-            // Wait for layout to stabilize
-            kotlinx.coroutines.delay(100)
-            try {
-                // Verify layout is ready before scrolling
-                val expectedCount = filteredMessagesCount
-                val totalItems = listState.layoutInfo.totalItemsCount
-                if (totalItems > 0 && totalItems >= expectedCount) {
-                    listState.scrollToItem(totalItems - 1)
-                    hasScrolledToBottom = true
-                }
-            } catch (e: Exception) {
-                // Ignore layout exceptions
-            }
-        }
-    }
+    // With reverseLayout=true, no initial scroll needed - list starts at bottom automatically
 
     // Track if there are new messages when not at bottom
     var hasNewMessages by remember { mutableStateOf(false) }
@@ -242,24 +225,20 @@ fun ChatScreenContent(
     val swipeThreshold = 100f  // Minimum swipe distance to trigger back
 
     // Single auto-scroll effect: scroll to bottom when new content arrives (unless user scrolled up)
-    // Wait for layout to stabilize before scrolling to prevent jumps during message reload
+    // With reverseLayout=true, index 0 is at the bottom (most recent)
     LaunchedEffect(messages.size, streamingBlocks.size, isStreaming) {
         // Small delay to let LazyColumn layout stabilize after message list changes
         kotlinx.coroutines.delay(50)
 
-        // Calculate expected item count (filtered messages + streaming bubble if active)
-        val expectedCount = filteredMessagesCount + (if (isStreaming) 1 else 0) + queuedMessages.size
         val totalItems = listState.layoutInfo.totalItemsCount
-
-        // Only scroll if layout is consistent with expected count
-        if (totalItems > 0 && totalItems >= expectedCount - 1) {
+        if (totalItems > 0) {
             if (!userScrolledUp) {
-                // Auto-scroll to bottom
+                // Auto-scroll to bottom (index 0 with reverseLayout)
                 try {
-                    listState.animateScrollToItem(totalItems - 1)
+                    listState.animateScrollToItem(0)
                 } catch (e: Exception) {
                     try {
-                        listState.scrollToItem(totalItems - 1)
+                        listState.scrollToItem(0)
                     } catch (_: Exception) {}
                 }
                 hasNewMessages = false
@@ -278,7 +257,7 @@ fun ChatScreenContent(
     }
 
     // Scroll to bottom when ViewModel signals (on send message, streaming complete, etc.)
-    // This is a reliable scroll mechanism that doesn't depend on reactive state changes
+    // With reverseLayout=true, index 0 is at the bottom
     LaunchedEffect(scrollToBottomSignal) {
         if (scrollToBottomSignal > 0) {
             // Small delay for layout to stabilize
@@ -286,11 +265,11 @@ fun ChatScreenContent(
             val totalItems = listState.layoutInfo.totalItemsCount
             if (totalItems > 0) {
                 try {
-                    listState.animateScrollToItem(totalItems - 1)
+                    listState.animateScrollToItem(0)
                 } catch (e: Exception) {
                     println("ChatScreen: Animate scroll failed, falling back to immediate scroll. Error: ${e.message}")
                     try {
-                        listState.scrollToItem(totalItems - 1)
+                        listState.scrollToItem(0)
                     } catch (scrollError: Exception) {
                         println("ChatScreen: Immediate scroll also failed. Error: ${scrollError.message}")
                     }
@@ -532,22 +511,31 @@ fun ChatScreenContent(
                         detectTapGestures(onTap = { focusManager.clearFocus() })
                     }
             ) {
+                // reverseLayout=true: items stack from bottom, index 0 is at the bottom
+                // This eliminates the initial scroll animation when entering a chat room
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 16.dp),
                     state = listState,
+                    reverseLayout = true,
                     contentPadding = PaddingValues(
                         top = 16.dp,
                         bottom = 16.dp
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(
-                        items = filteredMessages,
-                        key = { it.id }
-                    ) { message ->
-                        MessageBubble(message = message)
+                    // With reverseLayout, we need to add items in reverse order
+                    // Most recent items (queued, streaming) go first (at index 0 = bottom)
+
+                    // Show queued messages (user messages waiting to be processed)
+                    if (queuedMessages.isNotEmpty()) {
+                        items(
+                            items = queuedMessages.reversed(),
+                            key = { "queued_${it.hashCode()}" }
+                        ) { queuedContent ->
+                            QueuedMessageBubble(content = queuedContent)
+                        }
                     }
 
                     // Show streaming bubble when receiving a response
@@ -561,14 +549,12 @@ fun ChatScreenContent(
                         }
                     }
 
-                    // Show queued messages (user messages waiting to be processed)
-                    if (queuedMessages.isNotEmpty()) {
-                        items(
-                            items = queuedMessages,
-                            key = { "queued_${it.hashCode()}" }
-                        ) { queuedContent ->
-                            QueuedMessageBubble(content = queuedContent)
-                        }
+                    // Messages in reverse order (newest at index 0 = bottom)
+                    items(
+                        items = filteredMessages.reversed(),
+                        key = { it.id }
+                    ) { message ->
+                        MessageBubble(message = message)
                     }
                 }
 
@@ -614,16 +600,16 @@ fun ChatScreenContent(
                             }
                         }
 
-                        // Scroll to bottom button
+                        // Scroll to bottom button (with reverseLayout, index 0 is bottom)
                         SmallFloatingActionButton(
                             onClick = {
                                 coroutineScope.launch {
                                     val totalItems = listState.layoutInfo.totalItemsCount
                                     if (totalItems > 0) {
                                         try {
-                                            listState.animateScrollToItem(totalItems - 1)
+                                            listState.animateScrollToItem(0)
                                         } catch (e: Exception) {
-                                            listState.scrollToItem(totalItems - 1)
+                                            listState.scrollToItem(0)
                                         }
                                     }
                                     hasNewMessages = false
