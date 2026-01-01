@@ -853,18 +853,24 @@ private fun ChatInputBar(
                     .weight(1f)
                     .focusProperties { this.canFocus = canFocus }
                     .onPreviewKeyEvent { keyEvent ->
-                        // Desktop: Enter to send (without Shift), Shift+Enter for newline
-                        if (keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown) {
-                            if (!keyEvent.isShiftPressed && inputText.isNotBlank() && isConnected) {
-                                onSend()
+                        when {
+                            // ESC to stop streaming (Desktop)
+                            keyEvent.key == Key.Escape && keyEvent.type == KeyEventType.KeyDown && isStreaming -> {
+                                onStop()
                                 true // Consume the event
-                            } else {
-                                // Shift+Enter or empty input: let TextField handle naturally
-                                // (singleLine=false allows TextField to insert newline at cursor position)
-                                false
                             }
-                        } else {
-                            false
+                            // Desktop: Enter to send (without Shift), Shift+Enter for newline
+                            keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown -> {
+                                if (!keyEvent.isShiftPressed && inputText.isNotBlank() && isConnected) {
+                                    onSend()
+                                    true // Consume the event
+                                } else {
+                                    // Shift+Enter or empty input: let TextField handle naturally
+                                    // (singleLine=false allows TextField to insert newline at cursor position)
+                                    false
+                                }
+                            }
+                            else -> false
                         }
                     },
                 placeholder = {
