@@ -54,8 +54,6 @@ import com.claudecode.native.ui.component.ProcessingIndicator
 import com.claudecode.native.ui.component.SlashCommand
 import com.claudecode.native.ui.component.SlashCommandMenu
 import com.claudecode.native.ui.component.StatusLine
-import com.claudecode.native.ui.component.StreamingBubble
-import com.claudecode.native.ui.component.ThinkingBubble
 import com.claudecode.native.ui.component.toSlashCommand
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.ContentBlock
@@ -169,9 +167,6 @@ fun ChatScreenContent(
 
     val messages by viewModel.messages.collectAsState()
     val isStreaming by viewModel.isStreaming.collectAsState()
-    val streamingContent by viewModel.streamingContent.collectAsState()
-    val streamingTools by viewModel.streamingTools.collectAsState()
-    val streamingBlocks by viewModel.streamingBlocks.collectAsState()
     val queuedMessages by viewModel.queuedMessages.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
@@ -251,7 +246,7 @@ fun ChatScreenContent(
 
     // Single auto-scroll effect: scroll to bottom when new content arrives (unless user scrolled up)
     // With reverseLayout=true, index 0 is at the bottom (most recent)
-    LaunchedEffect(messages.size, streamingBlocks.size, isStreaming) {
+    LaunchedEffect(messages.size, isStreaming) {
         // Small delay to let LazyColumn layout stabilize after message list changes
         kotlinx.coroutines.delay(50)
 
@@ -515,11 +510,9 @@ fun ChatScreenContent(
                 }
             }
 
-            // Messages list - filter out empty messages and current streaming message
-            val streamingMessageId = viewModel.currentStreamingMessageId
+            // Messages list - filter out empty messages
             val filteredMessages = messages.filter { msg ->
-                msg.blocks.isNotEmpty() &&
-                !(isStreaming && msg.id == streamingMessageId)  // Exclude streaming message to avoid duplicate
+                msg.blocks.isNotEmpty()
             }
 
             Box(
@@ -546,7 +539,7 @@ fun ChatScreenContent(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     // With reverseLayout, we need to add items in reverse order
-                    // Most recent items (queued, streaming) go first (at index 0 = bottom)
+                    // Most recent items (queued) go first (at index 0 = bottom)
 
                     // Show queued messages (user messages waiting to be processed)
                     if (queuedMessages.isNotEmpty()) {
@@ -567,38 +560,6 @@ fun ChatScreenContent(
                                     { viewModel.cancelQueuedMessage(queuedMsg.id) }
                                 } else null
                             )
-                        }
-                    }
-
-                    // Show streaming bubble when receiving a response
-                    // Only show if we have a valid UUID (from HistoryWatch) to avoid showing incomplete messages
-                    val streamingMessageId = viewModel.currentStreamingMessageId
-                    if (isStreaming && streamingMessageId != null) {
-                        item(key = "streaming") {
-                            // Filter out tool blocks that are already displayed in messages
-                            // to avoid duplicate tool display during streaming
-                            val existingToolIds = remember(messages) {
-                                messages.flatMap { msg ->
-                                    msg.blocks.filterIsInstance<ContentBlock.Tool>().map { it.info.id }
-                                }.toSet()
-                            }
-                            val filteredStreamingBlocks = streamingBlocks.filter { block ->
-                                when (block) {
-                                    is ContentBlock.Tool -> block.info.id !in existingToolIds
-                                    is ContentBlock.Text -> true
-                                }
-                            }
-                            val filteredStreamingTools = streamingTools.filter { it.id !in existingToolIds }
-
-                            // Only show streaming bubble if there's content to display
-                            if (streamingContent.isNotEmpty() || filteredStreamingBlocks.isNotEmpty()) {
-                                StreamingBubble(
-                                    content = streamingContent,
-                                    tools = filteredStreamingTools,
-                                    blocks = filteredStreamingBlocks,
-                                    messageId = streamingMessageId
-                                )
-                            }
                         }
                     }
 
@@ -625,8 +586,6 @@ fun ChatScreenContent(
                     // Get latest message preview for the button
                     val latestMessage = messages.lastOrNull()
                     val previewText = when {
-                        isStreaming && streamingContent.isNotEmpty() ->
-                            streamingContent.take(50).replace("\n", " ") + "..."
                         latestMessage != null ->
                             latestMessage.content.take(50).replace("\n", " ") + if (latestMessage.content.length > 50) "..." else ""
                         else -> null

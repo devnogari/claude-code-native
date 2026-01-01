@@ -60,7 +60,7 @@ class ChatViewModel(
 ) {
     /**
      * LOCK ORDERING (always acquire in this order to prevent deadlocks):
-     * 1. streamingMutex - protects streaming state (_isStreaming, _streamingContent, etc.)
+     * 1. streamingMutex - protects streaming state (_isStreaming, isStreamingFromHistoryWatch)
      * 2. mutex - protects message list (_messages)
      * 3. mapsMutex - protects tool tracking maps (sessionToolUses, sessionToolResults)
      *
@@ -77,17 +77,6 @@ class ChatViewModel(
     /** True when the assistant is actively streaming a response. */
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
-    private val _streamingContent = MutableStateFlow("")
-    /** Current content being streamed, updated incrementally. */
-    val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
-
-    private val _streamingTools = MutableStateFlow<List<ToolUseInfo>>(emptyList())
-    /** Current tools being used during streaming. */
-    val streamingTools: StateFlow<List<ToolUseInfo>> = _streamingTools.asStateFlow()
-
-    private val _streamingBlocks = MutableStateFlow<List<ContentBlock>>(emptyList())
-    /** Ordered content blocks during streaming (text and tools interleaved). */
-    val streamingBlocks: StateFlow<List<ContentBlock>> = _streamingBlocks.asStateFlow()
 
     private val _queuedMessages = MutableStateFlow<List<QueuedMessage>>(emptyList())
     /** Messages queued while streaming is in progress. */
@@ -161,13 +150,6 @@ class ChatViewModel(
     val connectionState: StateFlow<ConnectionState> = webSocketClient.connectionState
 
     private var currentConversationId: String? = null
-    private var _streamingMessageId: String? = null
-    private var streamingMessageId: String?
-        get() = _streamingMessageId
-        set(value) { _streamingMessageId = value }
-
-    /** Current streaming message ID for inspection */
-    val currentStreamingMessageId: String? get() = _streamingMessageId
     private var currentEncodedPath: String? = null
     private var currentClaudeSession: String? = null
     private var currentProjectPath: String? = null  // Original project path for API calls
@@ -309,15 +291,11 @@ class ChatViewModel(
 
                     // Only clear transient streaming state
                     _isStreaming.value = false
-                    _streamingContent.value = ""
-                    _streamingBlocks.value = emptyList()
-                    _streamingTools.value = emptyList()
                     _queuedMessages.value = emptyList()
                     _error.value = null
                     _conversationTitle.value = null
                     _isDraftSession.value = false
                     _sessionCreatedEvent.value = null
-                    streamingMessageId = null
                 }
 
                 // Set conversation ID immediately so subsequent connect() calls know to disconnect
@@ -641,22 +619,6 @@ class ChatViewModel(
             // These are locally added messages waiting for filesystem sync
             val pendingMessages = currentMessages.filter { it.isPending }
 
-            // Preserve streaming message if active - this prevents losing tool messages
-            // during filesystem reload while streaming is happening
-            val streamingMessage: ChatMessage? = if (_isStreaming.value) {
-                val blocks = _streamingBlocks.value
-                val msgId = streamingMessageId
-                if (blocks.isNotEmpty() && msgId != null) {
-                    println("ChatViewModel: Preserving streaming message with ${blocks.size} blocks during reload")
-                    ChatMessage(
-                        id = msgId,
-                        role = MessageRole.ASSISTANT,
-                        blocks = blocks,
-                        isStreaming = true
-                    )
-                } else null
-            } else null
-
             val messagesToAdd = mutableListOf<ChatMessage>()
 
             if (pendingMessages.isNotEmpty()) {
@@ -667,15 +629,6 @@ class ChatViewModel(
                     pending.content.hashCode() !in loadedContentHashes
                 }
                 messagesToAdd.addAll(uniquePendingMessages)
-            }
-
-            // Add streaming message if it wasn't already in loaded messages
-            if (streamingMessage != null) {
-                val streamingContentHash = streamingMessage.content.hashCode()
-                val alreadyLoaded = chatMessages.any { it.content.hashCode() == streamingContentHash }
-                if (!alreadyLoaded) {
-                    messagesToAdd.add(streamingMessage)
-                }
             }
 
             // Build a map of (normalized content + role + approximate position) -> existing ID
@@ -1105,13 +1058,8 @@ class ChatViewModel(
             webSocketClient.sendChat(content)
 
             // Prepare for streaming response (use streamingMutex for consistency with other handlers)
-            // Note: streamingMessageId will be set by HistoryWatch when it receives the actual message UUID
             streamingMutex.withLock {
                 _isStreaming.value = true
-                _streamingContent.value = ""
-                _streamingTools.value = emptyList()
-                _streamingBlocks.value = emptyList()
-                // Don't generate ID here - HistoryWatch will provide the actual message UUID
             }
 
             // Start progress tracking for status line
@@ -1423,9 +1371,6 @@ class ChatViewModel(
                     // This handles reconnection scenarios where ViewModel was recreated
                     if (!_isStreaming.value) {
                         _isStreaming.value = true
-                        // Note: Don't generate temporary ID here
-                        // streamingMessageId will be set by HistoryWatch when it receives the actual message UUID
-                        // This ensures streaming bubble only shows when we have a valid UUID
                         true
                     } else {
                         false
@@ -1435,10 +1380,7 @@ class ChatViewModel(
                 if (wasNotStreaming) {
                     startProgressTracking("Processing")
                 }
-                // Append streaming content atomically to avoid race conditions
-                message.content?.let { chunk ->
-                    _streamingContent.update { current -> current + chunk }
-                }
+                // Stream content is now handled via HistoryWatch messages
             }
 
             MessageType.COMPLETE -> {
@@ -1451,7 +1393,6 @@ class ChatViewModel(
                 streamingMutex.withLock {
                     _error.value = message.error ?: "Unknown error"
                     _isStreaming.value = false
-                    _streamingContent.value = ""
                 }
             }
 
@@ -1544,7 +1485,6 @@ class ChatViewModel(
                 }
 
                 // Check if any message is from assistant - this means Claude is processing
-                // Get the assistant message's UUID to use as streamingMessageId
                 val assistantMessage = event.messages.find { it.message?.role == "assistant" }
                 if (assistantMessage != null) {
                     // Synchronize streaming state changes to prevent race conditions with WebSocket
@@ -1554,10 +1494,6 @@ class ChatViewModel(
                             println("ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
                             _isStreaming.value = true
                             isStreamingFromHistoryWatch = true
-                        }
-                        // Always update streamingMessageId with the actual message UUID from HistoryWatch
-                        if (assistantMessage.uuid != null) {
-                            streamingMessageId = assistantMessage.uuid
                         }
                         wasNotStreaming
                     }
@@ -1604,146 +1540,6 @@ class ChatViewModel(
                         if (sessionToolUses.containsKey(toolId) && sessionToolUses[toolId]?.result == null) {
                             sessionToolUses[toolId] = sessionToolUses[toolId]!!.copy(result = result, isError = isError)
                         }
-                    }
-                }
-
-                // If we're streaming, update streaming blocks in order (text and tools interleaved)
-                // Use streamingMutex to prevent race conditions with finalizeStreamingMessage()
-                //
-                // IMPORTANT: HistoryWatch delivers messages with blocks in the correct order.
-                // When an assistant message has interleaved text and tools (e.g., [Tool1, Text, Tool2]),
-                // we should preserve this order. The key insight is that HistoryWatch provides the
-                // complete, properly-ordered message structure from the JSONL file.
-                //
-                // Strategy:
-                // - When HistoryWatch delivers a complete assistant message with blocks, use that order
-                // - Replace streaming blocks entirely with the properly-ordered blocks from HistoryWatch
-                // - This ensures real-time display matches what will be loaded on re-entry
-                streamingMutex.withLock {
-                    if (_isStreaming.value) {
-                        var blocksUpdated = false
-
-                        // Collect all blocks from all assistant messages in this event, preserving order
-                        val allOrderedBlocks = mutableListOf<ContentBlock>()
-
-                        for (claudeMsg in event.messages) {
-                            val msg = claudeMsg.message ?: continue
-                            if (msg.role != "assistant") continue
-
-                            val blocks = parseMessageContent(msg.content, claudeMsg.uuid)
-                            for (block in blocks) {
-                                when (block) {
-                                    is ContentBlock.Text -> {
-                                        // Always include text blocks to maintain proper interleaving order
-                                        // Check for duplicates by content
-                                        val exists = allOrderedBlocks.any {
-                                            it is ContentBlock.Text && it.content == block.content
-                                        }
-                                        if (!exists && block.content.isNotBlank()) {
-                                            allOrderedBlocks.add(block)
-                                        }
-                                    }
-                                    is ContentBlock.Tool -> {
-                                        // Check if tool already exists, update or add
-                                        val existingIndex = allOrderedBlocks.indexOfFirst {
-                                            it is ContentBlock.Tool && it.info.id == block.info.id
-                                        }
-                                        // Lock ordering: streamingMutex (#1) → mapsMutex (#3) is allowed
-                                        val toolWithResult = mapsMutex.withLock {
-                                            sessionToolUses[block.info.id]
-                                        } ?: block.info
-                                        if (existingIndex >= 0) {
-                                            allOrderedBlocks[existingIndex] = ContentBlock.Tool(toolWithResult)
-                                        } else {
-                                            allOrderedBlocks.add(ContentBlock.Tool(toolWithResult))
-                                        }
-                                    }
-                                }
-                            }
-                            blocksUpdated = true
-                        }
-
-                        if (blocksUpdated && allOrderedBlocks.isNotEmpty()) {
-                            // Merge with existing blocks: keep existing tool results, update order
-                            // Also preserve any blocks in currentBlocks that aren't in allOrderedBlocks
-                            // (e.g., tool results that arrived via different code path)
-                            val currentBlocks = _streamingBlocks.value
-
-                            // Start with properly-ordered blocks from HistoryWatch
-                            val mergedBlocks = allOrderedBlocks.map { newBlock ->
-                                when (newBlock) {
-                                    is ContentBlock.Tool -> {
-                                        // Check if we have a more complete version (with result) in current blocks
-                                        val existing = currentBlocks.find {
-                                            it is ContentBlock.Tool && it.info.id == newBlock.info.id
-                                        } as? ContentBlock.Tool
-                                        if (existing?.info?.result != null && newBlock.info.result == null) {
-                                            existing // Keep existing if it has result
-                                        } else {
-                                            newBlock
-                                        }
-                                    }
-                                    else -> newBlock
-                                }
-                            }.toMutableList()
-
-                            // Append any existing tool blocks that weren't in allOrderedBlocks
-                            // (preserves tool results that may have arrived separately)
-                            val mergedToolIds = mergedBlocks
-                                .filterIsInstance<ContentBlock.Tool>()
-                                .map { it.info.id }
-                                .toSet()
-
-                            currentBlocks.filterIsInstance<ContentBlock.Tool>()
-                                .filter { it.info.id !in mergedToolIds }
-                                .forEach { mergedBlocks.add(it) }
-
-                            _streamingBlocks.value = mergedBlocks
-                            println("ChatViewModel: Replaced streaming blocks with ${mergedBlocks.size} properly-ordered blocks")
-                        }
-
-                        // Update _streamingContent only if HistoryWatch has more complete text
-                        // WebSocket delivers text incrementally (responsive), HistoryWatch delivers
-                        // complete text blocks. Only update if HistoryWatch text is longer.
-                        // Performance: only compute when text blocks were actually updated
-                        val hasTextBlocks = allOrderedBlocks.any { it is ContentBlock.Text }
-                        if (blocksUpdated && hasTextBlocks) {
-                            val historyWatchTextContent = _streamingBlocks.value
-                                .filterIsInstance<ContentBlock.Text>()
-                                .joinToString("\n\n") { it.content }
-                            val currentWebSocketText = _streamingContent.value
-                            if (historyWatchTextContent.length > currentWebSocketText.length) {
-                                _streamingContent.value = historyWatchTextContent
-                            }
-                        }
-
-                        // Always update tools list
-                        _streamingTools.value = _streamingBlocks.value
-                            .filterIsInstance<ContentBlock.Tool>()
-                            .map { it.info }
-
-                        println("ChatViewModel: Updated streaming blocks: ${_streamingBlocks.value.size} blocks (historyWatch=$isStreamingFromHistoryWatch)")
-                    }
-
-                    // Update tool results in streaming blocks
-                    if (_isStreaming.value && newToolResults.isNotEmpty()) {
-                        val currentBlocks = _streamingBlocks.value.toMutableList()
-                        for ((toolId, resultPair) in newToolResults) {
-                            val (result, isError) = resultPair
-                            val existingIndex = currentBlocks.indexOfFirst {
-                                it is ContentBlock.Tool && it.info.id == toolId
-                            }
-                            if (existingIndex >= 0) {
-                                val existingTool = (currentBlocks[existingIndex] as ContentBlock.Tool).info
-                                currentBlocks[existingIndex] = ContentBlock.Tool(
-                                    existingTool.copy(result = result, isError = isError)
-                                )
-                            }
-                        }
-                        _streamingBlocks.value = currentBlocks
-                        _streamingTools.value = currentBlocks
-                            .filterIsInstance<ContentBlock.Tool>()
-                            .map { it.info }
                     }
                 }
 
@@ -1901,10 +1697,6 @@ class ChatViewModel(
         // Reset streaming state - message saving is handled by HistoryWatch
         streamingMutex.withLock {
             _isStreaming.value = false
-            _streamingContent.value = ""
-            _streamingTools.value = emptyList()
-            _streamingBlocks.value = emptyList()
-            streamingMessageId = null
             isStreamingFromHistoryWatch = false
         }
 
