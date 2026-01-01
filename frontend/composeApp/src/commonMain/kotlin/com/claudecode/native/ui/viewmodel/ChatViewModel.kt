@@ -483,7 +483,8 @@ class ChatViewModel(
 
             ChatMessage(
                 // Use timestamp + index for unique ID (sessionId is same for all messages in session)
-                id = "msg_${msg.timestamp?.toEpochMilliseconds() ?: index}_$index",
+                // Use "loaded_" prefix to avoid collision with generateMessageId() which uses "msg_" prefix
+                id = "loaded_${msg.timestamp?.toEpochMilliseconds() ?: index}_$index",
                 role = when (role) {
                     "user" -> MessageRole.USER
                     "assistant" -> MessageRole.ASSISTANT
@@ -538,20 +539,40 @@ class ChatViewModel(
                 }
             }
 
-            // Build normalized content -> existing ID map to preserve IDs across reload
-            // This prevents LazyColumn from losing scroll position due to key changes
-            // Use full normalized content (not just hash) to avoid hash collision issues
-            val existingByNormalizedContent = currentMessages.associateBy { msg ->
-                normalizeForComparison(msg.content)
+            // Build a map of (normalized content + role + approximate position) -> existing ID
+            // This preserves IDs across reload while handling duplicate content correctly
+            // We group by content+role and track all messages with that content to match by position
+            val existingByContentAndRole = currentMessages.groupBy { msg ->
+                "${msg.role}_${normalizeForComparison(msg.content)}"
             }
 
+            // Track which existing IDs have been used to avoid duplicates
+            val usedIds = mutableSetOf<String>()
+
             // Update loaded messages to preserve existing IDs where content matches
+            // For duplicate content, match by position within the duplicate group
+            val contentRoleCounters = mutableMapOf<String, Int>()
             val stableMessages = chatMessages.map { msg ->
-                val normalized = normalizeForComparison(msg.content)
-                val existing = existingByNormalizedContent[normalized]
-                if (existing != null) {
-                    msg.copy(id = existing.id)
+                val key = "${msg.role}_${normalizeForComparison(msg.content)}"
+                val existingList = existingByContentAndRole[key]
+
+                if (existingList != null && existingList.isNotEmpty()) {
+                    // Get the occurrence index for this content+role combination
+                    val occurrenceIndex = contentRoleCounters.getOrPut(key) { 0 }
+                    contentRoleCounters[key] = occurrenceIndex + 1
+
+                    // Find an existing message at this occurrence position that hasn't been used
+                    val existing = existingList.getOrNull(occurrenceIndex)
+                    if (existing != null && existing.id !in usedIds) {
+                        usedIds.add(existing.id)
+                        msg.copy(id = existing.id)
+                    } else {
+                        // No matching existing message at this position, keep generated ID
+                        usedIds.add(msg.id)
+                        msg
+                    }
                 } else {
+                    usedIds.add(msg.id)
                     msg
                 }
             }
