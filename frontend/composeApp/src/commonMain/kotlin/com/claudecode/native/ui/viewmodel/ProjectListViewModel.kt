@@ -94,12 +94,9 @@ class ProjectListViewModel(
             try {
                 val projects = claudeHistoryApi.getProjects()
 
-                // Filter out projects with no sessions (empty projects)
-                val filteredProjects = projects.filter { it.sessions.isNotEmpty() }
-
-                // Sort with favorites first
+                // Sort with favorites first (keep all projects including those without sessions)
                 val currentFavorites = favoriteRepository.favorites.value
-                val sortedProjects = sortProjects(filteredProjects, currentFavorites)
+                val sortedProjects = sortProjects(projects, currentFavorites)
 
                 _uiState.value = _uiState.value.copy(
                     projects = sortedProjects,
@@ -133,12 +130,9 @@ class ProjectListViewModel(
 
                 val projects = claudeHistoryApi.getProjects()
 
-                // Filter out projects with no sessions
-                val filteredProjects = projects.filter { it.sessions.isNotEmpty() }
-
-                // Sort with favorites first
+                // Sort with favorites first (keep all projects including those without sessions)
                 val currentFavorites = favoriteRepository.favorites.value
-                val sortedProjects = sortProjects(filteredProjects, currentFavorites)
+                val sortedProjects = sortProjects(projects, currentFavorites)
 
                 _uiState.value = _uiState.value.copy(
                     projects = sortedProjects,
