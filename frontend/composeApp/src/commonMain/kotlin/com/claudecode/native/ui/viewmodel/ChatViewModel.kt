@@ -379,21 +379,39 @@ class ChatViewModel(
             }
 
             // Load messages from file-based API (with summary=false for full content)
-            val response = claudeHistoryApi.getSessionMessages(
-                encodedPath = encodedPath,
-                sessionId = sessionId,
-                limit = 100,
-                offset = 0,
-                summary = false
-            )
-            println("ChatViewModel: Got ${response.messages.size} messages from API")
+            try {
+                val response = claudeHistoryApi.getSessionMessages(
+                    encodedPath = encodedPath,
+                    sessionId = sessionId,
+                    limit = 100,
+                    offset = 0,
+                    summary = false
+                )
+                println("ChatViewModel: Got ${response.messages.size} messages from API")
 
-            // Process messages using existing logic
-            processLoadedMessages(response.messages)
+                // Process messages using existing logic
+                processLoadedMessages(response.messages)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 404 Not Found is expected for new sessions without history
+                // This is normal - the session file doesn't exist yet
+                val isNotFound = e.message?.contains("Not found", ignoreCase = true) == true ||
+                        e.message?.contains("404", ignoreCase = true) == true ||
+                        e.message?.contains("resource not found", ignoreCase = true) == true
+                if (isNotFound) {
+                    println("ChatViewModel: No history found for session (this is normal for new chats)")
+                    // Start with empty messages - session will be created on first message send
+                } else {
+                    println("ChatViewModel: Failed to load messages from filesystem: ${e.message}")
+                    _error.value = e.toUserMessage()
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            println("ChatViewModel: Failed to load messages from filesystem: ${e.message}")
+            // Outer catch for project fetch errors
+            println("ChatViewModel: Failed during filesystem message loading: ${e.message}")
             _error.value = e.toUserMessage()
         }
     }
