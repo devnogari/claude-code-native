@@ -89,9 +89,9 @@ class ChatViewModel(
     /** Ordered content blocks during streaming (text and tools interleaved). */
     val streamingBlocks: StateFlow<List<ContentBlock>> = _streamingBlocks.asStateFlow()
 
-    private val _queuedMessages = MutableStateFlow<List<String>>(emptyList())
+    private val _queuedMessages = MutableStateFlow<List<QueuedMessage>>(emptyList())
     /** Messages queued while streaming is in progress. */
-    val queuedMessages: StateFlow<List<String>> = _queuedMessages.asStateFlow()
+    val queuedMessages: StateFlow<List<QueuedMessage>> = _queuedMessages.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     /** Current error message, if any. */
@@ -947,13 +947,27 @@ class ChatViewModel(
         }
 
         // If streaming is in progress, queue the message (with limit check)
+        // Use atomic update to prevent race conditions with concurrent queue operations
         if (_isStreaming.value) {
-            if (_queuedMessages.value.size >= maxQueuedMessages) {
-                _error.value = "Message queue is full. Please wait for current response to complete."
-                return
+            var wasQueueFull = false
+            _queuedMessages.update { queue ->
+                if (queue.size >= maxQueuedMessages) {
+                    wasQueueFull = true
+                    queue  // Return unchanged
+                } else {
+                    val queuedMessage = QueuedMessage(
+                        id = generateMessageId(),
+                        content = content,
+                        queuedAt = Clock.System.now().toEpochMilliseconds(),
+                        source = QueuedMessageSource.LOCAL
+                    )
+                    println("ChatViewModel: Queued message while streaming (id=${queuedMessage.id}): ${content.take(50)}...")
+                    queue + queuedMessage
+                }
             }
-            _queuedMessages.value = _queuedMessages.value + content
-            println("ChatViewModel: Queued message while streaming: ${content.take(50)}...")
+            if (wasQueueFull) {
+                _error.value = "Message queue is full ($maxQueuedMessages messages). Please wait for current response to complete."
+            }
             return
         }
 
@@ -1116,14 +1130,70 @@ class ChatViewModel(
     /**
      * Processes the next queued message, if any.
      * Called after streaming completes.
+     * Uses atomic update to prevent race conditions.
      */
     private suspend fun processNextQueuedMessage() {
-        val queue = _queuedMessages.value
-        if (queue.isNotEmpty()) {
-            val nextMessage = queue.first()
-            _queuedMessages.value = queue.drop(1)
-            println("ChatViewModel: Processing queued message: ${nextMessage.take(50)}...")
-            sendMessageInternal(nextMessage)
+        var nextMessageContent: String? = null
+        _queuedMessages.update { queue ->
+            if (queue.isNotEmpty()) {
+                val nextMessage = queue.first()
+                nextMessageContent = nextMessage.content
+                println("ChatViewModel: Processing queued message (id=${nextMessage.id}): ${nextMessage.content.take(50)}...")
+                queue.drop(1)
+            } else {
+                queue
+            }
+        }
+        // Send outside of update to avoid nested state modifications
+        nextMessageContent?.let { sendMessageInternal(it) }
+    }
+
+    /**
+     * Cancels a specific queued message by its ID.
+     * Only LOCAL messages can be cancelled from this app.
+     * Uses atomic update to prevent race conditions.
+     *
+     * @param messageId The ID of the queued message to cancel
+     */
+    fun cancelQueuedMessage(messageId: String) {
+        var errorMessage: String? = null
+        _queuedMessages.update { queue ->
+            val message = queue.find { it.id == messageId }
+            when {
+                message == null -> {
+                    println("ChatViewModel: Cannot cancel - message not found: $messageId")
+                    queue  // Return unchanged
+                }
+                message.source == QueuedMessageSource.CLI -> {
+                    println("ChatViewModel: Cannot cancel CLI message from app: $messageId")
+                    errorMessage = "Cannot cancel messages queued from terminal"
+                    queue  // Return unchanged
+                }
+                else -> {
+                    println("ChatViewModel: Cancelled queued message: $messageId")
+                    queue.filter { it.id != messageId }
+                }
+            }
+        }
+        // Set error outside of update to avoid nested state modifications
+        errorMessage?.let { _error.value = it }
+    }
+
+    /**
+     * Clears all locally queued messages.
+     * CLI-originated messages cannot be cleared from this app.
+     * Uses atomic update to prevent race conditions.
+     */
+    fun clearLocalQueuedMessages() {
+        _queuedMessages.update { queue ->
+            val cliMessages = queue.filter { it.source == QueuedMessageSource.CLI }
+            val localCount = queue.size - cliMessages.size
+            if (localCount > 0) {
+                println("ChatViewModel: Cleared $localCount locally queued messages")
+                cliMessages
+            } else {
+                queue
+            }
         }
     }
 
@@ -1428,6 +1498,7 @@ class ChatViewModel(
                 }
 
                 // Handle queue-operation events first (terminal queued messages)
+                // Use atomic updates to prevent race conditions with concurrent queue operations
                 for (claudeMsg in event.messages) {
                     if (claudeMsg.type == "queue-operation") {
                         val operation = claudeMsg.operation
@@ -1436,15 +1507,25 @@ class ChatViewModel(
                         when (operation) {
                             "enqueue" -> {
                                 // Add to queued messages (from Claude CLI's perspective)
-                                _queuedMessages.value = _queuedMessages.value + queueContent
-                                println("ChatViewModel: Queued message from CLI: ${queueContent.take(50)}...")
+                                // Use UUID-style ID to avoid timestamp collision
+                                val cliQueuedMessage = QueuedMessage(
+                                    id = "cli_${generateMessageId()}",
+                                    content = queueContent,
+                                    queuedAt = Clock.System.now().toEpochMilliseconds(),
+                                    source = QueuedMessageSource.CLI
+                                )
+                                _queuedMessages.update { queue -> queue + cliQueuedMessage }
+                                println("ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")
                             }
                             "dequeue", "clear" -> {
-                                // Remove from queued messages
-                                val current = _queuedMessages.value
-                                if (current.isNotEmpty()) {
-                                    _queuedMessages.value = current.drop(1)
-                                    println("ChatViewModel: Dequeued message from CLI")
+                                // Remove from queued messages (CLI processes in order)
+                                _queuedMessages.update { queue ->
+                                    if (queue.isNotEmpty()) {
+                                        println("ChatViewModel: Dequeued message from CLI")
+                                        queue.drop(1)
+                                    } else {
+                                        queue
+                                    }
                                 }
                             }
                         }
