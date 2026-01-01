@@ -1481,6 +1481,21 @@ class ChatViewModel(
                     }
                 }
 
+                // Update todos in progress status if available and changed
+                if (event.todos.isNotEmpty()) {
+                    currentConversationId?.let { convId ->
+                        val progressFlow = _progressStatusMap[convId]
+                        if (progressFlow != null) {
+                            val current = progressFlow.value
+                            // Only update if todos actually changed to avoid unnecessary recomposition
+                            if (current.todos != event.todos) {
+                                progressFlow.value = current.copy(todos = event.todos)
+                                println("ChatViewModel: Updated todos (${event.todos.size} items, ${event.todos.count { it.isCompleted }} completed)")
+                            }
+                        }
+                    }
+                }
+
                 // First, extract tools and results from all new messages and update session maps
                 val newToolUses = mutableMapOf<String, ToolUseInfo>()
                 val newToolResults = mutableMapOf<String, Pair<String, Boolean>>()
