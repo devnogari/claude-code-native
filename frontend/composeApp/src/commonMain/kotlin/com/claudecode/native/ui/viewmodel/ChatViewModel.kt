@@ -805,6 +805,34 @@ class ChatViewModel(
     }
 
     /**
+     * Syncs messages when app returns to foreground.
+     * Reloads messages from filesystem to catch any changes made while app was in background.
+     */
+    fun syncOnForeground() {
+        val convId = currentConversationId ?: return
+        val encodedPath = currentEncodedPath
+        val sessionId = currentClaudeSession
+
+        scope.launch {
+            try {
+                if (encodedPath != null && sessionId != null) {
+                    // Reload messages from filesystem
+                    println("ChatViewModel: Syncing messages on foreground for $encodedPath / $sessionId")
+                    loadMessagesFromFilesystem(encodedPath, sessionId)
+                } else {
+                    // Legacy flow - reload via conversation API
+                    println("ChatViewModel: Syncing messages on foreground (legacy) for $convId")
+                    loadMessages(convId)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("ChatViewModel: Failed to sync on foreground: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Disconnects from the current WebSocket connection.
      * This is a manual disconnect - auto-reconnection will NOT occur.
      */

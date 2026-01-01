@@ -99,6 +99,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.datetime)
+
+            // Lifecycle for background/foreground handling
+            implementation(libs.lifecycle.runtime.compose)
         }
 
         desktopMain.dependencies {
