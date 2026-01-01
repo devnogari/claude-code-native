@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -58,6 +59,7 @@ import com.claudecode.native.ui.component.ThinkingBubble
 import com.claudecode.native.ui.component.toSlashCommand
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.ContentBlock
+import com.claudecode.native.ui.viewmodel.QueuedMessageSource
 import org.koin.compose.koinInject
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.animation.AnimatedVisibility
@@ -548,11 +550,23 @@ fun ChatScreenContent(
 
                     // Show queued messages (user messages waiting to be processed)
                     if (queuedMessages.isNotEmpty()) {
-                        items(
-                            items = queuedMessages.reversed(),
-                            key = { "queued_${it.hashCode()}" }
-                        ) { queuedContent ->
-                            QueuedMessageBubble(content = queuedContent)
+                        val reversedQueue = queuedMessages.reversed()
+                        val totalQueueSize = queuedMessages.size
+                        itemsIndexed(
+                            items = reversedQueue,
+                            key = { _, msg -> "queued_${msg.id}" }
+                        ) { index, queuedMsg ->
+                            // Position in queue (1-based, from original order)
+                            // reversedQueue[0] is the last item in queue
+                            val queuePosition = totalQueueSize - index
+                            QueuedMessageBubble(
+                                content = queuedMsg.content,
+                                position = queuePosition,
+                                isFromCli = queuedMsg.source == QueuedMessageSource.CLI,
+                                onCancel = if (queuedMsg.source == QueuedMessageSource.LOCAL) {
+                                    { viewModel.cancelQueuedMessage(queuedMsg.id) }
+                                } else null
+                            )
                         }
                     }
 
