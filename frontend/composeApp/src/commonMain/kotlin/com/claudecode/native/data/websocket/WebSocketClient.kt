@@ -61,12 +61,7 @@ class WebSocketClient(
 
     /** Get the current WebSocket base URL from stored server host */
     private val baseUrl: String
-        get() {
-            val host = TokenStorage.getServerHost() ?: DEFAULT_HOST
-            // Use wss:// for non-localhost hosts (production), ws:// for localhost (development)
-            val protocol = if (host.startsWith("localhost") || host.startsWith("127.0.0.1")) "ws" else "wss"
-            return "$protocol://$host$API_PATH"
-        }
+        get() = "ws://${TokenStorage.getServerHost() ?: DEFAULT_HOST}$API_PATH"
     private var session: WebSocketSession? = null
     private var receiveJob: Job? = null
     private var reconnectJob: Job? = null
@@ -131,6 +126,8 @@ class WebSocketClient(
             ConnectionState.Connecting
         }
 
+        println("WebSocketClient: Connecting to $baseUrl/ws/$conversationId (attempt: ${reconnectAttempt + 1})")
+
         try {
             session = httpClient.webSocketSession("$baseUrl/ws/$conversationId")
 
@@ -140,6 +137,7 @@ class WebSocketClient(
             // Reset reconnection state on successful connection
             reconnectAttempt = 0
             _connectionState.value = ConnectionState.Connected
+            println("WebSocketClient: Connected successfully to conversation $conversationId")
 
             receiveJob = scope.launch {
                 session?.let { ws ->
@@ -162,22 +160,29 @@ class WebSocketClient(
                                     }
                                 }
                                 is Frame.Close -> {
+                                    println("WebSocketClient: Received Close frame")
                                     handleDisconnection()
                                 }
                                 else -> { /* Ignore binary and other frames */ }
                             }
                         }
                         // Receive loop ended - connection closed
+                        println("WebSocketClient: Receive loop ended, connection closed")
                         handleDisconnection()
                     } catch (e: CancellationException) {
                         // Normal cancellation, don't treat as error
+                        println("WebSocketClient: Connection cancelled")
                         throw e
                     } catch (e: Exception) {
+                        println("WebSocketClient: Receive error: ${e.message}")
+                        e.printStackTrace()
                         handleDisconnection(e.message ?: "Unknown error")
                     }
                 }
             }
         } catch (e: Exception) {
+            println("WebSocketClient: Connection error: ${e.message}")
+            e.printStackTrace()
             handleConnectionError(e.message ?: "Connection failed")
         }
     }
@@ -186,6 +191,7 @@ class WebSocketClient(
      * Handles disconnection, potentially triggering auto-reconnection.
      */
     private fun handleDisconnection(errorMessage: String? = null) {
+        println("WebSocketClient: handleDisconnection called, error=$errorMessage, manual=$isManualDisconnect")
         if (isManualDisconnect) {
             _connectionState.value = ConnectionState.Disconnected
             return
@@ -203,6 +209,7 @@ class WebSocketClient(
      * Handles connection errors and schedules reconnection if appropriate.
      */
     private fun handleConnectionError(errorMessage: String) {
+        println("WebSocketClient: handleConnectionError: $errorMessage")
         if (isManualDisconnect) {
             _connectionState.value = ConnectionState.Disconnected
             return
@@ -217,11 +224,13 @@ class WebSocketClient(
      */
     private fun scheduleReconnection() {
         if (!config.enableAutoReconnect) {
+            println("WebSocketClient: Auto-reconnect disabled, staying disconnected")
             _connectionState.value = ConnectionState.Disconnected
             return
         }
 
         if (reconnectAttempt >= config.maxReconnectAttempts) {
+            println("WebSocketClient: Max reconnect attempts (${config.maxReconnectAttempts}) reached, giving up")
             _connectionState.value = ConnectionState.Error(
                 "Failed to reconnect after ${config.maxReconnectAttempts} attempts"
             )
@@ -235,6 +244,8 @@ class WebSocketClient(
             config.initialDelayMs * (1L shl (reconnectAttempt - 1)),
             config.maxDelayMs
         )
+
+        println("WebSocketClient: Scheduling reconnection attempt $reconnectAttempt in ${delayMs}ms")
 
         reconnectJob = scope.launch {
             _connectionState.value = ConnectionState.Reconnecting(reconnectAttempt)

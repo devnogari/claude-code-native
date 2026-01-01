@@ -42,7 +42,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.ui.component.MessageBubble
 import com.claudecode.native.ui.component.QueuedMessageBubble
@@ -116,6 +118,14 @@ fun ChatScreenContent(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Prevent TextField from receiving focus during initial composition (iOS keyboard fix)
+    var canFocusInput by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(300)
+        canFocusInput = true
+    }
 
     // Track if user is at bottom of the list (for showing scroll button and auto-scroll)
     // With reverseLayout=true, index 0 is at the bottom (most recent messages)
@@ -684,6 +694,7 @@ fun ChatScreenContent(
                     }
                 },
                 onStop = { viewModel.stopGeneration() },
+                canFocus = canFocusInput,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp)
@@ -808,6 +819,7 @@ private fun ChatInputBar(
     isConnected: Boolean,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    canFocus: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -825,6 +837,7 @@ private fun ChatInputBar(
                 onValueChange = onInputChange,
                 modifier = Modifier
                     .weight(1f)
+                    .focusProperties { this.canFocus = canFocus }
                     .onPreviewKeyEvent { keyEvent ->
                         // Desktop: Enter to send (without Shift), Shift+Enter for newline
                         if (keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown) {

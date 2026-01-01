@@ -351,23 +351,13 @@ private fun formatTokenCount(tokens: Int): String {
         tokens < 1000 -> "$tokens"
         tokens < 1_000_000 -> {
             val k = tokens / 1000.0
-            if (k >= 10) "${k.toInt()}k" else "${formatOneDecimal(k)}k"
+            if (k >= 10) "${k.toInt()}k" else "${(k * 10).toInt() / 10.0}k"
         }
         else -> {
             val m = tokens / 1_000_000.0
-            "${formatOneDecimal(m)}M"
+            "${(m * 10).toInt() / 10.0}M"
         }
     }
-}
-
-/**
- * Format a double to one decimal place (multiplatform compatible)
- */
-private fun formatOneDecimal(value: Double): String {
-    val rounded = kotlin.math.round(value * 10) / 10
-    val intPart = rounded.toInt()
-    val decimalPart = ((rounded - intPart) * 10).toInt()
-    return "$intPart.$decimalPart"
 }
 
 /**
