@@ -61,7 +61,12 @@ class WebSocketClient(
 
     /** Get the current WebSocket base URL from stored server host */
     private val baseUrl: String
-        get() = "ws://${TokenStorage.getServerHost() ?: DEFAULT_HOST}$API_PATH"
+        get() {
+            val host = TokenStorage.getServerHost() ?: DEFAULT_HOST
+            // Use wss:// for non-localhost hosts (production), ws:// for localhost (development)
+            val protocol = if (host.startsWith("localhost") || host.startsWith("127.0.0.1")) "ws" else "wss"
+            return "$protocol://$host$API_PATH"
+        }
     private var session: WebSocketSession? = null
     private var receiveJob: Job? = null
     private var reconnectJob: Job? = null
@@ -127,11 +132,10 @@ class WebSocketClient(
         }
 
         try {
-            session = httpClient.webSocketSession("$baseUrl/ws/$conversationId") {
-                url {
-                    parameters.append("token", token)
-                }
-            }
+            session = httpClient.webSocketSession("$baseUrl/ws/$conversationId")
+
+            // Send authentication token as first message (more secure than URL parameter)
+            session?.send(Frame.Text(json.encodeToString(OutgoingMessage.auth(token))))
 
             // Reset reconnection state on successful connection
             reconnectAttempt = 0

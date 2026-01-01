@@ -71,24 +71,48 @@ func TestRegisterRequest_Validate(t *testing.T) {
 	}{
 		{
 			name:    "valid request",
-			req:     RegisterRequest{Username: "testuser", Password: "password123", ConfirmPassword: "password123"},
+			req:     RegisterRequest{Username: "testuser", Password: "Password123", ConfirmPassword: "Password123"},
 			wantErr: false,
 		},
 		{
 			name:    "passwords don't match",
-			req:     RegisterRequest{Username: "testuser", Password: "password123", ConfirmPassword: "different"},
+			req:     RegisterRequest{Username: "testuser", Password: "Password123", ConfirmPassword: "Different123"},
 			wantErr: true,
 			errMsg:  "passwords do not match",
 		},
 		{
 			name:    "password too short",
-			req:     RegisterRequest{Username: "testuser", Password: "short", ConfirmPassword: "short"},
+			req:     RegisterRequest{Username: "testuser", Password: "Short1", ConfirmPassword: "Short1"},
 			wantErr: true,
 			errMsg:  "password must be at least 8 characters",
 		},
 		{
+			name:    "password missing uppercase",
+			req:     RegisterRequest{Username: "testuser", Password: "password123", ConfirmPassword: "password123"},
+			wantErr: true,
+			errMsg:  "password must contain at least one uppercase letter, one lowercase letter, and one number",
+		},
+		{
+			name:    "password missing lowercase",
+			req:     RegisterRequest{Username: "testuser", Password: "PASSWORD123", ConfirmPassword: "PASSWORD123"},
+			wantErr: true,
+			errMsg:  "password must contain at least one uppercase letter, one lowercase letter, and one number",
+		},
+		{
+			name:    "password missing number",
+			req:     RegisterRequest{Username: "testuser", Password: "Passwordxyz", ConfirmPassword: "Passwordxyz"},
+			wantErr: true,
+			errMsg:  "password must contain at least one uppercase letter, one lowercase letter, and one number",
+		},
+		{
+			name:    "password too long",
+			req:     RegisterRequest{Username: "testuser", Password: "Password123abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefg", ConfirmPassword: "Password123abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefg"},
+			wantErr: true,
+			errMsg:  "password must be at most 72 characters",
+		},
+		{
 			name:    "empty username",
-			req:     RegisterRequest{Username: "", Password: "password123", ConfirmPassword: "password123"},
+			req:     RegisterRequest{Username: "", Password: "Password123", ConfirmPassword: "Password123"},
 			wantErr: true,
 			errMsg:  "username is required",
 		},

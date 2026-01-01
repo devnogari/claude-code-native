@@ -3,7 +3,6 @@ package claude
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -146,7 +145,20 @@ func GetSessionState(messages []ClaudeMessage) SessionState {
 // HistoryReader reads Claude Code history from ~/.claude/projects/
 type HistoryReader struct {
 	basePath string
+	logger   Logger
 }
+
+// Logger interface for HistoryReader (minimal interface to avoid zap dependency)
+type Logger interface {
+	Debug(msg string, fields ...interface{})
+	Warn(msg string, fields ...interface{})
+}
+
+// noopLogger is a no-op logger for when no logger is provided
+type noopLogger struct{}
+
+func (n noopLogger) Debug(msg string, fields ...interface{}) {}
+func (n noopLogger) Warn(msg string, fields ...interface{})  {}
 
 // NewHistoryReader creates a new history reader
 func NewHistoryReader(basePath string) *HistoryReader {
@@ -154,7 +166,16 @@ func NewHistoryReader(basePath string) *HistoryReader {
 		home, _ := os.UserHomeDir()
 		basePath = filepath.Join(home, ".claude", "projects")
 	}
-	return &HistoryReader{basePath: basePath}
+	return &HistoryReader{basePath: basePath, logger: noopLogger{}}
+}
+
+// NewHistoryReaderWithLogger creates a new history reader with a logger
+func NewHistoryReaderWithLogger(basePath string, logger Logger) *HistoryReader {
+	reader := NewHistoryReader(basePath)
+	if logger != nil {
+		reader.logger = logger
+	}
+	return reader
 }
 
 // GetProjects returns all discovered Claude Code projects
@@ -180,7 +201,8 @@ func (h *HistoryReader) GetProjects() ([]ClaudeProject, error) {
 		// Get sessions for this project
 		sessions, lastAccessed, err := h.getProjectSessions(projectDir)
 		if err != nil {
-			continue // Skip projects we can't read
+			h.logger.Debug("skipping project due to error", "dir", projectDir, "error", err)
+			continue
 		}
 
 		// Extract project name from path
@@ -207,13 +229,6 @@ func (h *HistoryReader) GetProjects() ([]ClaudeProject, error) {
 	sort.Slice(projects, func(i, j int) bool {
 		return projects[i].LastAccessed.After(projects[j].LastAccessed)
 	})
-
-	// Debug: print project order
-	fmt.Println("[DEBUG] Projects sorted by LastAccessed:")
-	for i, p := range projects {
-		fmt.Printf("[DEBUG] Project %d: %s - LastAccessed: %s\n",
-			i, p.Name, p.LastAccessed.Format(time.RFC3339))
-	}
 
 	return projects, nil
 }
@@ -357,12 +372,6 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
 	})
-
-	// Debug: print session order
-	for i, s := range sessions {
-		fmt.Printf("[DEBUG] Session %d: %s - UpdatedAt: %s - FirstMsg: %s\n",
-			i, s.ID[:8], s.UpdatedAt.Format(time.RFC3339), truncateString(s.FirstMessage, 30))
-	}
 
 	return sessions, lastAccessed, nil
 }

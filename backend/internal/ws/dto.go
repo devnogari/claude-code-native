@@ -2,6 +2,9 @@ package ws
 
 // Message type constants for WebSocket communication
 const (
+	// MessageTypeAuth is sent by client as first message to authenticate
+	// More secure than query parameter as tokens aren't logged in URLs
+	MessageTypeAuth = "auth"
 	// MessageTypeChat is sent by client to send a chat message
 	MessageTypeChat = "chat"
 	// MessageTypeStream is sent by server with streaming response content

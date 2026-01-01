@@ -95,8 +95,8 @@ func TestRegister_Success(t *testing.T) {
 
 	reqBody := auth.RegisterRequest{
 		Username:        "testuser",
-		Password:        "password123",
-		ConfirmPassword: "password123",
+		Password:        "Password123",
+		ConfirmPassword: "Password123",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -123,8 +123,8 @@ func TestRegister_ValidationError_MissingUsername(t *testing.T) {
 
 	reqBody := auth.RegisterRequest{
 		Username:        "",
-		Password:        "password123",
-		ConfirmPassword: "password123",
+		Password:        "Password123",
+		ConfirmPassword: "Password123",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -147,8 +147,8 @@ func TestRegister_ValidationError_PasswordMismatch(t *testing.T) {
 
 	reqBody := auth.RegisterRequest{
 		Username:        "testuser",
-		Password:        "password123",
-		ConfirmPassword: "different123",
+		Password:        "Password123",
+		ConfirmPassword: "Different123",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -202,8 +202,8 @@ func TestRegister_DuplicateUsername(t *testing.T) {
 
 	reqBody := auth.RegisterRequest{
 		Username:        "existinguser",
-		Password:        "password123",
-		ConfirmPassword: "password123",
+		Password:        "Password123",
+		ConfirmPassword: "Password123",
 	}
 	body, _ := json.Marshal(reqBody)
 

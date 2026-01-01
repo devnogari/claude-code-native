@@ -46,6 +46,27 @@ func (r *RegisterRequest) Validate() error {
 	if len(r.Password) < 8 {
 		return errors.New("password must be at least 8 characters")
 	}
+	// Maximum password length to prevent bcrypt DoS (bcrypt truncates at 72 bytes)
+	if len(r.Password) > 72 {
+		return errors.New("password must be at most 72 characters")
+	}
+	// Check for password complexity: at least one uppercase, lowercase, and number
+	hasUpper := false
+	hasLower := false
+	hasNumber := false
+	for _, c := range r.Password {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		case c >= 'a' && c <= 'z':
+			hasLower = true
+		case c >= '0' && c <= '9':
+			hasNumber = true
+		}
+	}
+	if !hasUpper || !hasLower || !hasNumber {
+		return errors.New("password must contain at least one uppercase letter, one lowercase letter, and one number")
+	}
 	if r.Password != r.ConfirmPassword {
 		return errors.New("passwords do not match")
 	}
