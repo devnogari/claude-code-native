@@ -43,6 +43,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.ui.component.MessageBubble
 import com.claudecode.native.ui.component.QueuedMessageBubble
@@ -116,10 +117,12 @@ fun ChatScreenContent(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Clear focus on initial composition to prevent keyboard from showing
+    // Clear focus and hide keyboard on initial composition
     LaunchedEffect(Unit) {
         focusManager.clearFocus()
+        keyboardController?.hide()
     }
 
     // Track if user is at bottom of the list (for showing scroll button and auto-scroll)

@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,10 +81,12 @@ fun ProjectListScreenContent(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Clear focus on initial composition to prevent keyboard from showing
+    // Clear focus and hide keyboard on initial composition
     LaunchedEffect(Unit) {
         focusManager.clearFocus()
+        keyboardController?.hide()
     }
 
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -172,7 +175,10 @@ fun ProjectListScreenContent(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .pointerInput(Unit) {
-                    detectTapGestures(onTap = { focusManager.clearFocus() })
+                    detectTapGestures(onTap = {
+                        focusManager.clearFocus()
+                        keyboardController?.hide()
+                    })
                 }
         ) {
             // Search bar
