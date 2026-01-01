@@ -44,6 +44,10 @@ func (s *Server) setupRoutes() {
 	// Message routes
 	protected.Get("/conversations/:conversationId/messages", s.msgHandler.ListByConversation)
 
+	// Command routes (slash commands)
+	protected.Post("/commands/list", s.commandHandler.List)
+	protected.Post("/commands/execute", s.commandHandler.Execute)
+
 	// WebSocket route for real-time conversation streaming
 	// Auth is handled via query params within the handler for WebSocket connections
 	protected.Get("/ws/:conversationID", s.wsHandler.Upgrade, websocket.New(s.wsHandler.HandleConnection))

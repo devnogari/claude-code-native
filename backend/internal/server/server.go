@@ -7,6 +7,7 @@ import (
 
 	"github.com/devnogari/claude-code-native/backend/internal/auth"
 	"github.com/devnogari/claude-code-native/backend/internal/claude"
+	"github.com/devnogari/claude-code-native/backend/internal/command"
 	"github.com/devnogari/claude-code-native/backend/internal/config"
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
 	"github.com/devnogari/claude-code-native/backend/internal/message"
@@ -41,6 +42,7 @@ type Server struct {
 	historyHandler      *claude.HistoryHandler
 	historyWatchHandler *claude.HistoryWatchHandler
 	syncHandler         *claude.SyncHandler
+	commandHandler      *command.Handler
 }
 
 type ServerParams struct {
@@ -58,6 +60,7 @@ type ServerParams struct {
 	HistoryHandler      *claude.HistoryHandler
 	HistoryWatchHandler *claude.HistoryWatchHandler
 	ClaudeMgr           *claude.Manager
+	CommandHandler      *command.Handler
 }
 
 func New(p ServerParams) *Server {
@@ -102,6 +105,7 @@ func New(p ServerParams) *Server {
 		historyHandler:      p.HistoryHandler,
 		historyWatchHandler: p.HistoryWatchHandler,
 		syncHandler:         p.SyncHandler,
+		commandHandler:      p.CommandHandler,
 	}
 
 	s.setupRoutes()

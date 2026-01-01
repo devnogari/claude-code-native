@@ -5,6 +5,7 @@ package main
 import (
 	"github.com/devnogari/claude-code-native/backend/internal/auth"
 	"github.com/devnogari/claude-code-native/backend/internal/claude"
+	"github.com/devnogari/claude-code-native/backend/internal/command"
 	"github.com/devnogari/claude-code-native/backend/internal/config"
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
 	"github.com/devnogari/claude-code-native/backend/internal/database"
@@ -36,6 +37,9 @@ func main() {
 		// Real-time modules
 		claude.Module,
 		ws.Module,
+
+		// Command module
+		command.Module,
 
 		// Server (starts on OnStart, stops on OnStop)
 		server.Module,

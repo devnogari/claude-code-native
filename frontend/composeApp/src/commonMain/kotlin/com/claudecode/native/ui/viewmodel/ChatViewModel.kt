@@ -2,8 +2,12 @@ package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.ApiClient
 import com.claudecode.native.data.api.ClaudeHistoryApi
+import com.claudecode.native.data.api.CommandApi
 import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.ProjectApi
+import com.claudecode.native.data.model.Command
+import com.claudecode.native.data.model.ExecuteCommandResponse
+import com.claudecode.native.data.model.ExecuteContext
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.data.websocket.HistoryWatchClient
@@ -107,6 +111,7 @@ class ChatViewModel(
     private val projectApi: ProjectApi,
     private val claudeHistoryApi: ClaudeHistoryApi,
     private val historyWatchClient: HistoryWatchClient,
+    private val commandApi: CommandApi,
     private val scope: CoroutineScope
 ) {
     private val mutex = Mutex()
@@ -138,6 +143,14 @@ class ChatViewModel(
     private val _error = MutableStateFlow<String?>(null)
     /** Current error message, if any. */
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _availableCommands = MutableStateFlow<List<Command>>(emptyList())
+    /** Available slash commands (builtin + custom). */
+    val availableCommands: StateFlow<List<Command>> = _availableCommands.asStateFlow()
+
+    private val _commandsLoading = MutableStateFlow(false)
+    /** True when commands are being loaded from the server. */
+    val commandsLoading: StateFlow<Boolean> = _commandsLoading.asStateFlow()
 
     /** Connection state exposed from the WebSocket client. */
     val connectionState: StateFlow<ConnectionState> = webSocketClient.connectionState
@@ -994,6 +1007,118 @@ class ChatViewModel(
         scope.launch {
             mutex.withLock {
                 _messages.value = emptyList()
+            }
+        }
+    }
+
+    /**
+     * Loads available commands from the server for the current project.
+     *
+     * @param projectPath Path to the project for project-level commands
+     */
+    fun loadCommands(projectPath: String = "") {
+        scope.launch {
+            _commandsLoading.value = true
+            try {
+                val response = commandApi.listCommands(projectPath)
+                _availableCommands.value = response.builtIn + response.custom
+                println("ChatViewModel: Loaded ${response.count} commands (${response.builtIn.size} builtin, ${response.custom.size} custom)")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("ChatViewModel: Failed to load commands: ${e.message}")
+                // Don't show error to user - just use empty list
+                _availableCommands.value = emptyList()
+            } finally {
+                _commandsLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Executes a slash command via the API.
+     *
+     * @param commandName The command name (e.g., "/help")
+     * @param commandPath Optional path for custom commands
+     * @param args Command arguments
+     * @param onBuiltinResult Callback for builtin command result handling
+     */
+    fun executeCommand(
+        commandName: String,
+        commandPath: String? = null,
+        args: List<String> = emptyList(),
+        onBuiltinResult: (ExecuteCommandResponse) -> Unit = {}
+    ) {
+        scope.launch {
+            try {
+                val projectPath = currentProjectPath ?: ""
+                val response = commandApi.executeCommand(
+                    commandName = commandName,
+                    commandPath = commandPath,
+                    args = args,
+                    context = ExecuteContext(projectPath = projectPath)
+                )
+
+                when (response.type) {
+                    "builtin" -> handleBuiltinCommandResult(response, onBuiltinResult)
+                    "custom" -> handleCustomCommandResult(response)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _error.value = "Command failed: ${e.message}"
+            }
+        }
+    }
+
+    /**
+     * Handles the result of a builtin command.
+     */
+    private fun handleBuiltinCommandResult(
+        response: ExecuteCommandResponse,
+        onBuiltinResult: (ExecuteCommandResponse) -> Unit
+    ) {
+        when (response.action) {
+            "clear" -> {
+                scope.launch {
+                    mutex.withLock {
+                        _messages.value = emptyList()
+                    }
+                }
+            }
+            "help" -> {
+                // Add help content as a system message
+                val helpContent = response.data?.get("content")?.toString()?.removeSurrounding("\"") ?: ""
+                if (helpContent.isNotEmpty()) {
+                    scope.launch {
+                        mutex.withLock {
+                            val helpMessage = ChatMessage(
+                                id = generateMessageId(),
+                                role = MessageRole.ASSISTANT,
+                                blocks = listOf(ContentBlock.Text(helpContent)),
+                                isStreaming = false
+                            )
+                            _messages.value = _messages.value + helpMessage
+                        }
+                    }
+                }
+            }
+            else -> {
+                // Delegate to caller for other actions (config, model, etc.)
+                onBuiltinResult(response)
+            }
+        }
+    }
+
+    /**
+     * Handles the result of a custom command.
+     * Custom commands return content that should be sent to Claude.
+     */
+    private fun handleCustomCommandResult(response: ExecuteCommandResponse) {
+        response.content?.let { content ->
+            if (content.isNotEmpty()) {
+                // Send the processed command content as a message to Claude
+                sendMessage(content)
             }
         }
     }
