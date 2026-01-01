@@ -188,6 +188,7 @@ class ChatViewModel(
     // completion by observing that no new assistant messages arrive for a period
     private var historyWatchStreamingDebounceJob: Job? = null
     private var loadCommandsJob: Job? = null
+    private var currentConnectJob: Job? = null  // Track current connect job to cancel on room switch
     private var isStreamingFromHistoryWatch = false
     private val historyWatchStreamingTimeout = 3000L // 3 seconds - accounts for tool execution delays
 
@@ -258,7 +259,10 @@ class ChatViewModel(
      *   - Legacy format: UUID conversation ID (from database)
      */
     fun connect(conversationId: String) {
-        scope.launch {
+        // Cancel any previous connect job to prevent race conditions when switching rooms quickly
+        currentConnectJob?.cancel()
+
+        currentConnectJob = scope.launch {
             try {
                 // Disconnect from previous conversation if any
                 if (currentConversationId != null && currentConversationId != conversationId) {
@@ -283,14 +287,17 @@ class ChatViewModel(
                     _conversationTitle.value = null
                     streamingMessageId = null
 
-                    // Clear tool tracking and dedup state
-                    sessionToolUses.clear()
-                    sessionToolResults.clear()
-                    pendingUserMessages.clear()
-                    finalizedAssistantMessages.clear()
-                    processedHistoryWatchTimestamps.clear()
+                    // Clear tool tracking and dedup state with proper synchronization
+                    mapsMutex.withLock {
+                        sessionToolUses.clear()
+                        sessionToolResults.clear()
+                        pendingUserMessages.clear()
+                        finalizedAssistantMessages.clear()
+                        processedHistoryWatchTimestamps.clear()
+                    }
                 }
 
+                // Set conversation ID immediately so subsequent connect() calls know to disconnect
                 currentConversationId = conversationId
                 val token = apiClient.getAuthToken() ?: run {
                     _error.value = "Not authenticated"
@@ -309,6 +316,13 @@ class ChatViewModel(
                     // Load messages directly from filesystem API
                     loadMessagesFromFilesystem(encodedPath, sessionId)
 
+                    // Guard: Check if we're still the active conversation after async load
+                    // If user switched rooms during loading, abort this connection
+                    if (currentConversationId != conversationId) {
+                        println("ChatViewModel: Aborting connect - room switched during message load")
+                        return@launch
+                    }
+
                     // Connect to history watch for real-time file changes
                     println("ChatViewModel: Connecting history watch for $encodedPath / $sessionId")
                     historyWatchClient.connect(encodedPath, sessionId, token)
@@ -320,6 +334,13 @@ class ChatViewModel(
                 } else {
                     // Legacy database-based flow (fallback)
                     loadMessages(conversationId)
+
+                    // Guard: Check if we're still the active conversation after async load
+                    if (currentConversationId != conversationId) {
+                        println("ChatViewModel: Aborting connect - room switched during message load")
+                        return@launch
+                    }
+
                     webSocketClient.connect(conversationId, token)
                     connectHistoryWatch(conversationId, token)
                 }
@@ -428,26 +449,30 @@ class ChatViewModel(
         // 2. Kotlin's sortedWith() doesn't guarantee stable ordering for equal elements
         // Trust the file order - it's the source of truth.
 
-        // Clear and rebuild session-level tool tracking
-        sessionToolUses.clear()
-        sessionToolResults.clear()
+        // Clear and rebuild session-level tool tracking with proper synchronization
+        // Copy tool uses for later use outside the lock to avoid holding lock during message processing
+        val allToolUses: Map<String, ToolUseInfo>
+        mapsMutex.withLock {
+            sessionToolUses.clear()
+            sessionToolResults.clear()
 
-        // Pass 1: Collect all tool_uses and tool_results
-        for (msg in messages) {
-            val message = msg.message ?: continue
-            extractToolsFromContent(message.content, sessionToolUses, sessionToolResults)
-        }
-
-        // Match tool_results to tool_uses
-        for ((toolId, resultPair) in sessionToolResults) {
-            val (result, isError) = resultPair
-            if (sessionToolUses.containsKey(toolId)) {
-                sessionToolUses[toolId] = sessionToolUses[toolId]!!.copy(result = result, isError = isError)
+            // Pass 1: Collect all tool_uses and tool_results
+            for (msg in messages) {
+                val message = msg.message ?: continue
+                extractToolsFromContent(message.content, sessionToolUses, sessionToolResults)
             }
-        }
 
-        // Use session-level maps for local reference
-        val allToolUses = sessionToolUses
+            // Match tool_results to tool_uses
+            for ((toolId, resultPair) in sessionToolResults) {
+                val (result, isError) = resultPair
+                if (sessionToolUses.containsKey(toolId)) {
+                    sessionToolUses[toolId] = sessionToolUses[toolId]!!.copy(result = result, isError = isError)
+                }
+            }
+
+            // Create a snapshot of tool uses for use outside the lock
+            allToolUses = sessionToolUses.toMap()
+        }
 
         // Pass 2: Create chat messages with matched tools (using original file order)
         val chatMessages = messages.mapIndexedNotNull { index, msg ->
@@ -1141,12 +1166,14 @@ class ChatViewModel(
 
             // Track this pending user message to prevent duplicate from history watch
             // Use normalized content hash to handle whitespace differences in serialization
-            // Both pendingUserMessages and _messages must be modified under mutex for thread safety
+            // Lock ordering: mutex (#2) → mapsMutex (#3) to prevent deadlocks
             val normalizedHash = normalizeForComparison(content).hashCode()
             println("ChatViewModel: Added pending user message (hash=$normalizedHash): ${content.take(50)}...")
 
             mutex.withLock {
-                pendingUserMessages[normalizedHash] = messageId
+                mapsMutex.withLock {
+                    pendingUserMessages[normalizedHash] = messageId
+                }
                 _messages.value = _messages.value + userMessage
             }
 
@@ -1553,15 +1580,17 @@ class ChatViewModel(
 
                 println("ChatViewModel: Found ${newToolUses.size} tool_uses, ${newToolResults.size} tool_results")
 
-                // Add new tools to session maps
-                sessionToolUses.putAll(newToolUses)
-                sessionToolResults.putAll(newToolResults)
+                // Add new tools to session maps with proper synchronization
+                mapsMutex.withLock {
+                    sessionToolUses.putAll(newToolUses)
+                    sessionToolResults.putAll(newToolResults)
 
-                // Match any new tool_results with existing tool_uses
-                for ((toolId, resultPair) in sessionToolResults) {
-                    val (result, isError) = resultPair
-                    if (sessionToolUses.containsKey(toolId) && sessionToolUses[toolId]?.result == null) {
-                        sessionToolUses[toolId] = sessionToolUses[toolId]!!.copy(result = result, isError = isError)
+                    // Match any new tool_results with existing tool_uses
+                    for ((toolId, resultPair) in sessionToolResults) {
+                        val (result, isError) = resultPair
+                        if (sessionToolUses.containsKey(toolId) && sessionToolUses[toolId]?.result == null) {
+                            sessionToolUses[toolId] = sessionToolUses[toolId]!!.copy(result = result, isError = isError)
+                        }
                     }
                 }
 
@@ -1593,7 +1622,10 @@ class ChatViewModel(
                                         val existingIndex = currentBlocks.indexOfFirst {
                                             it is ContentBlock.Tool && it.info.id == block.info.id
                                         }
-                                        val toolWithResult = sessionToolUses[block.info.id] ?: block.info
+                                        // Lock ordering: streamingMutex (#1) → mapsMutex (#3) is allowed
+                                        val toolWithResult = mapsMutex.withLock {
+                                            sessionToolUses[block.info.id]
+                                        } ?: block.info
                                         if (existingIndex >= 0) {
                                             currentBlocks[existingIndex] = ContentBlock.Tool(toolWithResult)
                                         } else {
@@ -1641,19 +1673,27 @@ class ChatViewModel(
 
                 // Convert ClaudeMessages to ChatMessages with matched tools
                 // Filter out already processed messages based on timestamp
+                // Take a snapshot of sessionToolUses for use in the map operation
+                val toolUsesSnapshot = mapsMutex.withLock { sessionToolUses.toMap() }
+
                 val newChatMessages = event.messages.mapNotNull { claudeMsg ->
                     // Skip messages we've already processed (timestamp-based dedup)
                     val timestamp = claudeMsg.timestamp?.toEpochMilliseconds() ?: 0L
-                    if (timestamp > 0 && processedHistoryWatchTimestamps.contains(timestamp)) {
+                    val alreadyProcessed = mapsMutex.withLock {
+                        processedHistoryWatchTimestamps.contains(timestamp)
+                    }
+                    if (timestamp > 0 && alreadyProcessed) {
                         return@mapNotNull null
                     }
                     // Track this timestamp as processed with bounded set size
                     if (timestamp > 0) {
-                        processedHistoryWatchTimestamps.add(timestamp)
-                        // Prevent unbounded growth: remove oldest timestamps when limit exceeded
-                        if (processedHistoryWatchTimestamps.size > MAX_PROCESSED_TIMESTAMPS) {
-                            val oldest = processedHistoryWatchTimestamps.minOrNull()
-                            oldest?.let { processedHistoryWatchTimestamps.remove(it) }
+                        mapsMutex.withLock {
+                            processedHistoryWatchTimestamps.add(timestamp)
+                            // Prevent unbounded growth: remove oldest timestamps when limit exceeded
+                            if (processedHistoryWatchTimestamps.size > MAX_PROCESSED_TIMESTAMPS) {
+                                val oldest = processedHistoryWatchTimestamps.minOrNull()
+                                oldest?.let { processedHistoryWatchTimestamps.remove(it) }
+                            }
                         }
                     }
 
@@ -1661,11 +1701,11 @@ class ChatViewModel(
                     val role = msg.role
                     val blocks = parseMessageContent(msg.content)
 
-                    // Update tool blocks with results from session maps
+                    // Update tool blocks with results from session maps (using snapshot)
                     val blocksWithResults = blocks.map { block ->
                         when (block) {
                             is ContentBlock.Tool -> {
-                                val toolWithResult = sessionToolUses[block.info.id]
+                                val toolWithResult = toolUsesSnapshot[block.info.id]
                                 if (toolWithResult != null) ContentBlock.Tool(toolWithResult) else block
                             }
                             else -> block
@@ -1711,11 +1751,13 @@ class ChatViewModel(
                             block is ContentBlock.Tool && block.info.result == null
                         }
                         if (hasToolsWithoutResults) {
+                            // Take snapshot of tool uses for updating blocks
+                            val toolUsesSnap = mapsMutex.withLock { sessionToolUses.toMap() }
                             val updatedBlocks = msg.blocks.map { block ->
                                 when (block) {
                                     is ContentBlock.Tool -> {
                                         val toolId = block.info.id
-                                        val updatedTool = sessionToolUses[toolId]
+                                        val updatedTool = toolUsesSnap[toolId]
                                         if (updatedTool != null && updatedTool.result != null) {
                                             ContentBlock.Tool(updatedTool)
                                         } else {
@@ -1747,8 +1789,9 @@ class ChatViewModel(
                             // Check if this is a pending user message we already added locally
                             // Use normalized content hash to handle whitespace differences
                             val normalizedContentHash = normalizeForComparison(newMsg.content).hashCode()
+                            // Lock ordering: mutex (#2) → mapsMutex (#3) is allowed
                             val pendingMsgId = if (newMsg.role == MessageRole.USER) {
-                                pendingUserMessages.remove(normalizedContentHash)
+                                mapsMutex.withLock { pendingUserMessages.remove(normalizedContentHash) }
                             } else null
 
                             if (pendingMsgId != null) {
@@ -1769,10 +1812,12 @@ class ChatViewModel(
                                     .map { it.info.id }
 
                                 // Check if content or any tool IDs are already finalized
-                                val isAlreadyFinalized = finalizedAssistantMessages.containsKey(contentHash) ||
-                                    newMsgToolIds.any { toolId ->
-                                        finalizedAssistantMessages.containsKey(toolId.hashCode())
-                                    }
+                                val isAlreadyFinalized = mapsMutex.withLock {
+                                    finalizedAssistantMessages.containsKey(contentHash) ||
+                                        newMsgToolIds.any { toolId ->
+                                            finalizedAssistantMessages.containsKey(toolId.hashCode())
+                                        }
+                                }
 
                                 if (isAlreadyFinalized) {
                                     println("ChatViewModel: Skipping already finalized assistant message: ${newMsg.content.take(30)}... (${newMsgToolIds.size} tools)")
@@ -1934,11 +1979,14 @@ class ChatViewModel(
                     if (!isDuplicate) {
                         _messages.value = _messages.value + assistantMessage
                         // Track this finalized message to prevent duplicate from history watch
+                        // Lock ordering: mutex (#2) → mapsMutex (#3) is allowed
                         val contentHash = content.take(200).hashCode()
-                        finalizedAssistantMessages[contentHash] = messageId
-                        // Also track tool IDs to prevent duplicates
-                        streamingToolIds.forEach { toolId ->
-                            finalizedAssistantMessages[toolId.hashCode()] = messageId
+                        mapsMutex.withLock {
+                            finalizedAssistantMessages[contentHash] = messageId
+                            // Also track tool IDs to prevent duplicates
+                            streamingToolIds.forEach { toolId ->
+                                finalizedAssistantMessages[toolId.hashCode()] = messageId
+                            }
                         }
                         println("ChatViewModel: Finalized streaming message: ${content.take(50)}... (${streamingToolIds.size} tools)")
                     } else {
@@ -1962,13 +2010,21 @@ class ChatViewModel(
 
         // Clear any remaining pending user messages as fallback
         // When streaming completes, we assume all user messages have been processed
-        // Use mutex lock for thread-safe access to pendingUserMessages
+        // Lock ordering: mutex (#2) → mapsMutex (#3) for thread-safe access
         mutex.withLock {
-            if (pendingUserMessages.isNotEmpty()) {
+            // Get pending entries with mapsMutex protection
+            val pendingEntries = mapsMutex.withLock {
+                if (pendingUserMessages.isEmpty()) {
+                    return@withLock emptyList()
+                }
+                pendingUserMessages.toList().also {
+                    pendingUserMessages.clear()
+                }
+            }
+
+            if (pendingEntries.isNotEmpty()) {
                 val currentMessages = _messages.value.toMutableList()
                 var updated = false
-                // Copy entries to avoid concurrent modification during iteration
-                val pendingEntries = pendingUserMessages.toList()
                 for ((_, pendingMsgId) in pendingEntries) {
                     val index = currentMessages.indexOfFirst { it.id == pendingMsgId }
                     if (index >= 0 && currentMessages[index].isPending) {
@@ -1980,7 +2036,6 @@ class ChatViewModel(
                 if (updated) {
                     _messages.value = currentMessages
                 }
-                pendingUserMessages.clear()
             }
         }
 
@@ -1998,7 +2053,9 @@ class ChatViewModel(
     private suspend fun finalizeHistoryWatchStreaming() {
         // Guard: Only finalize if still in HistoryWatch streaming mode
         // This prevents race conditions with WebSocket COMPLETE message
-        if (!isStreamingFromHistoryWatch) {
+        // Use streamingMutex for thread-safe read of isStreamingFromHistoryWatch
+        val shouldFinalize = streamingMutex.withLock { isStreamingFromHistoryWatch }
+        if (!shouldFinalize) {
             println("ChatViewModel: HistoryWatch streaming already finalized, skipping")
             return
         }
