@@ -156,16 +156,23 @@ class ChatViewModel(
     private val historyWatchStreamingTimeout = 3000L // 3 seconds - accounts for tool execution delays
 
     // Session-level tool tracking for matching tool_use with tool_result across messages
-    private val sessionToolUses = mutableMapOf<String, ToolUseInfo>()
-    private val sessionToolResults = mutableMapOf<String, Pair<String, Boolean>>()
+    // Using synchronized maps for thread safety across WebSocket and HistoryWatch handlers
+    private val sessionToolUses = java.util.concurrent.ConcurrentHashMap<String, ToolUseInfo>()
+    private val sessionToolResults = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Boolean>>()
 
     // Track pending user messages to properly handle duplicates from history watch
     // Key: content hash, Value: message ID
-    private val pendingUserMessages = mutableMapOf<Int, String>()
+    private val pendingUserMessages = java.util.concurrent.ConcurrentHashMap<Int, String>()
 
     // Track finalized assistant messages to prevent duplicates from history watch
     // Key: content hash (first 200 chars), Value: message ID
-    private val finalizedAssistantMessages = mutableMapOf<Int, String>()
+    private val finalizedAssistantMessages = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
+    // Mutex for streaming state changes to prevent race conditions between WebSocket and HistoryWatch
+    private val streamingMutex = Mutex()
+
+    // Maximum number of queued messages to prevent memory pressure
+    private val maxQueuedMessages = 10
 
 
     init {
@@ -863,8 +870,10 @@ class ChatViewModel(
     fun disconnect() {
         scope.launch {
             try {
+                // Disconnect both clients (HistoryWatch is now suspend, properly awaits)
                 webSocketClient.disconnect()
                 historyWatchClient.disconnect()
+
                 currentConversationId = null
                 currentEncodedPath = null
                 currentClaudeSession = null
@@ -912,8 +921,12 @@ class ChatViewModel(
             return
         }
 
-        // If streaming is in progress, queue the message
+        // If streaming is in progress, queue the message (with limit check)
         if (_isStreaming.value) {
+            if (_queuedMessages.value.size >= maxQueuedMessages) {
+                _error.value = "Message queue is full. Please wait for current response to complete."
+                return
+            }
             _queuedMessages.value = _queuedMessages.value + content
             println("ChatViewModel: Queued message while streaming: ${content.take(50)}...")
             return
@@ -1076,12 +1089,15 @@ class ChatViewModel(
     private suspend fun handleIncomingMessage(message: IncomingMessage) {
         when (message.type) {
             MessageType.STREAM -> {
-                // If we receive stream chunks, ensure streaming state is active
-                // This handles reconnection scenarios where ViewModel was recreated
-                if (!_isStreaming.value) {
-                    _isStreaming.value = true
-                    if (streamingMessageId == null) {
-                        streamingMessageId = generateMessageId()
+                // Synchronize streaming state changes to prevent race conditions with HistoryWatch
+                streamingMutex.withLock {
+                    // If we receive stream chunks, ensure streaming state is active
+                    // This handles reconnection scenarios where ViewModel was recreated
+                    if (!_isStreaming.value) {
+                        _isStreaming.value = true
+                        if (streamingMessageId == null) {
+                            streamingMessageId = generateMessageId()
+                        }
                     }
                 }
                 // Append streaming content atomically to avoid race conditions
@@ -1097,9 +1113,11 @@ class ChatViewModel(
 
             MessageType.ERROR -> {
                 // Handle error from server
-                _error.value = message.error ?: "Unknown error"
-                _isStreaming.value = false
-                _streamingContent.value = ""
+                streamingMutex.withLock {
+                    _error.value = message.error ?: "Unknown error"
+                    _isStreaming.value = false
+                    _streamingContent.value = ""
+                }
             }
 
             MessageType.STATUS -> {
@@ -1165,16 +1183,19 @@ class ChatViewModel(
                 // Check if any message is from assistant - this means Claude is processing
                 val hasAssistantMessage = event.messages.any { it.message?.role == "assistant" }
                 if (hasAssistantMessage) {
-                    if (!_isStreaming.value) {
-                        println("ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
-                        _isStreaming.value = true
-                        isStreamingFromHistoryWatch = true
-                        if (streamingMessageId == null) {
-                            streamingMessageId = generateMessageId()
+                    // Synchronize streaming state changes to prevent race conditions with WebSocket
+                    streamingMutex.withLock {
+                        if (!_isStreaming.value) {
+                            println("ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
+                            _isStreaming.value = true
+                            isStreamingFromHistoryWatch = true
+                            if (streamingMessageId == null) {
+                                streamingMessageId = generateMessageId()
+                            }
                         }
                     }
 
-                    // Reset debounce timer - if no new messages for 2 seconds, finalize streaming
+                    // Reset debounce timer - if no new messages for timeout period, finalize streaming
                     if (isStreamingFromHistoryWatch) {
                         historyWatchStreamingDebounceJob?.cancel()
                         historyWatchStreamingDebounceJob = scope.launch {
