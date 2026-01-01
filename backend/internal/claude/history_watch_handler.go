@@ -19,6 +19,12 @@ const (
 
 	// watchPingPeriod is the period for sending ping messages
 	watchPingPeriod = (watchPongWait * 9) / 10
+
+	// watchSendTimeout is the maximum time to wait when sending a message to a client
+	watchSendTimeout = 100 * time.Millisecond
+
+	// watchMaxSendRetries is the number of times to retry sending a message
+	watchMaxSendRetries = 3
 )
 
 // WatchMessageType constants for WebSocket communication
@@ -197,12 +203,25 @@ func (h *HistoryWatchHandler) handleSessionChange(encodedPath, sessionID string,
 		zap.Int("messageCount", len(newMessages)),
 		zap.Int("clientCount", len(clients)))
 
-	// Broadcast to all clients watching this session
+	// Broadcast to all clients watching this session with retry logic
 	for _, client := range clients {
-		select {
-		case client.send <- data:
-		default:
-			// Buffer full, skip
+		sent := false
+		for retry := 0; retry < watchMaxSendRetries && !sent; retry++ {
+			select {
+			case client.send <- data:
+				sent = true
+			case <-time.After(watchSendTimeout):
+				// Timeout, will retry if retries remaining
+				if retry == watchMaxSendRetries-1 {
+					h.logger.Warn("dropped message for watch client (buffer full after retries)",
+						zap.String("sessionID", sessionID),
+						zap.Int("retries", watchMaxSendRetries),
+						zap.Int("msgLen", len(data)))
+				}
+			case <-client.done:
+				// Client is disconnecting, skip
+				sent = true
+			}
 		}
 	}
 }
