@@ -5,6 +5,8 @@ import com.claudecode.native.data.model.ClaudeProject
 import com.claudecode.native.data.model.ClaudeSession
 import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.util.toUserMessage
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -298,5 +300,18 @@ class ProjectListViewModel(
         _uiState.value = _uiState.value.copy(
             error = "Projects are automatically discovered from Claude CLI usage. Start using Claude Code in '$path' to see it here."
         )
+    }
+
+    /**
+     * Starts a new session for a project.
+     * Generates a new UUID for the session and navigates to chat screen.
+     *
+     * @param encodedPath The encoded project path
+     * @param onNavigate Callback with session ID and encoded path for navigation
+     */
+    @OptIn(ExperimentalUuidApi::class)
+    fun startNewSession(encodedPath: String, onNavigate: (String, String) -> Unit) {
+        val newSessionId = Uuid.random().toString()
+        onNavigate(newSessionId, encodedPath)
     }
 }

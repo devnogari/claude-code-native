@@ -200,10 +200,25 @@ class ChatViewModel(
                 if (currentConversationId != null && currentConversationId != conversationId) {
                     webSocketClient.disconnect()
                     historyWatchClient.disconnect()
-                    // Clear previous messages and tool tracking
+
+                    // Cancel pending debounce job from previous session
+                    historyWatchStreamingDebounceJob?.cancel()
+                    historyWatchStreamingDebounceJob = null
+                    isStreamingFromHistoryWatch = false
+
+                    // Clear ALL previous state
                     mutex.withLock {
                         _messages.value = emptyList()
                     }
+                    _isStreaming.value = false
+                    _streamingContent.value = ""
+                    _streamingBlocks.value = emptyList()
+                    _streamingTools.value = emptyList()
+                    _queuedMessages.value = emptyList()
+                    _error.value = null
+                    streamingMessageId = null
+
+                    // Clear tool tracking
                     sessionToolUses.clear()
                     sessionToolResults.clear()
                     pendingUserMessages.clear()
