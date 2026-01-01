@@ -289,6 +289,11 @@ fun ProjectListScreenContent(
                                     },
                                     onDeleteSession = { session ->
                                         deleteSessionTarget = session.id to project.path
+                                    },
+                                    onNewSession = {
+                                        viewModel.startNewSession(project.encodedPath) { sessionId, encodedPath ->
+                                            onConversationSelected("$sessionId?project=$encodedPath")
+                                        }
                                     }
                                 )
                             }
@@ -364,7 +369,8 @@ private fun ProjectItem(
     onToggleFavorite: () -> Unit,
     onSessionClick: (ClaudeSession) -> Unit,
     onToggleSessionFavorite: (ClaudeSession) -> Unit,
-    onDeleteSession: (ClaudeSession) -> Unit
+    onDeleteSession: (ClaudeSession) -> Unit,
+    onNewSession: () -> Unit
 ) {
     val sessions = project.sessions
 
@@ -446,8 +452,40 @@ private fun ProjectItem(
             }
 
             // Expanded sessions list
-            if (isExpanded && sessions.isNotEmpty()) {
+            if (isExpanded) {
                 HorizontalDivider()
+
+                // New Session button
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isLoading, onClick = onNewSession),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Text(
+                            text = "New Session",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                if (sessions.isNotEmpty()) {
+                    HorizontalDivider()
+                }
 
                 sessions.forEach { session ->
                     SessionItem(
