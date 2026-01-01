@@ -193,11 +193,19 @@ fun ChatScreenContent(
     // Track if initial connection is complete to avoid duplicate sync on first resume
     var hasInitialized by remember { mutableStateOf(false) }
 
+    // Track if we're in the initial loading phase (before first connect attempt completes)
+    // This prevents showing "Disconnected" status bar briefly on session start
+    var isInitialLoading by remember(conversationId) { mutableStateOf(true) }
+
     // Connect when screen is displayed
     LaunchedEffect(conversationId) {
         println("ChatScreen: LaunchedEffect(${conversationId.take(20)}) - calling connect()")
         viewModel.connect(conversationId)
         hasInitialized = true
+        // Mark initial loading complete after connection attempt starts
+        // Small delay to let connection state transition to Connecting
+        kotlinx.coroutines.delay(100)
+        isInitialLoading = false
         println("ChatScreen: LaunchedEffect(${conversationId.take(20)}) - connect() returned")
     }
 
@@ -424,12 +432,14 @@ fun ChatScreenContent(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Connection status bar
-            ConnectionStatusBar(
-                connectionState = connectionState,
-                modifier = Modifier.fillMaxWidth(),
-                onRetry = { viewModel.retryConnection() }
-            )
+            // Connection status bar (hide during initial loading to avoid "Disconnected" flash)
+            if (!isInitialLoading) {
+                ConnectionStatusBar(
+                    connectionState = connectionState,
+                    modifier = Modifier.fillMaxWidth(),
+                    onRetry = { viewModel.retryConnection() }
+                )
+            }
 
             // Delete result message
             if (deleteMessage != null) {
@@ -528,13 +538,15 @@ fun ChatScreenContent(
                     }
 
                     // Show streaming bubble when receiving a response
-                    if (isStreaming) {
+                    // Only show if we have a valid UUID (from HistoryWatch) to avoid showing incomplete messages
+                    val streamingMessageId = viewModel.currentStreamingMessageId
+                    if (isStreaming && streamingMessageId != null) {
                         item(key = "streaming") {
                             StreamingBubble(
                                 content = streamingContent,
                                 tools = streamingTools,
                                 blocks = streamingBlocks,
-                                messageId = viewModel.currentStreamingMessageId
+                                messageId = streamingMessageId
                             )
                         }
                     }

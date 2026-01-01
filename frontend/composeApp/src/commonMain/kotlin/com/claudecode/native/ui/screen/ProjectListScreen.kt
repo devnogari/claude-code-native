@@ -98,7 +98,10 @@ fun ProjectListScreenContent(
     // Refresh projects when refreshTrigger changes (e.g., when a new session is created)
     LaunchedEffect(refreshTrigger) {
         if (refreshTrigger > 0) {
-            println("ProjectListScreen: Refreshing due to external trigger")
+            // Add delay to allow filesystem to sync before refreshing
+            // New sessions need time to be written to disk before they can be read
+            println("ProjectListScreen: Refreshing due to external trigger (with delay)")
+            kotlinx.coroutines.delay(500)
             viewModel.refresh()
         }
     }
