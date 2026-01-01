@@ -61,6 +61,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /**
  * Chat screen for real-time messaging with Claude.
@@ -154,14 +157,27 @@ fun ChatScreenContent(
     val connectionState by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
 
+    // Track if initial connection is complete to avoid duplicate sync on first resume
+    var hasInitialized by remember { mutableStateOf(false) }
+
     // Connect when screen is displayed
     LaunchedEffect(conversationId) {
         viewModel.connect(conversationId)
+        hasInitialized = true
     }
 
-    // Disconnect when leaving the screen
-    DisposableEffect(Unit) {
+    // Sync messages when app returns to foreground (skip initial resume)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, conversationId) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && hasInitialized) {
+                println("ChatScreen: ON_RESUME - syncing messages")
+                viewModel.syncOnForeground()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.disconnect()
         }
     }
