@@ -70,10 +70,3 @@ func TestProcessStartWithPrompt_Integration(t *testing.T) {
 	// We should have received some output
 	assert.Greater(t, len(outputs), 0, "Should receive at least some output")
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
