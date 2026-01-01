@@ -432,8 +432,10 @@ fun ChatScreenContent(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Connection status bar (hide during initial loading to avoid "Disconnected" flash)
-            if (!isInitialLoading) {
+            // Connection status bar
+            // - Hide during initial loading to avoid "Disconnected" flash
+            // - Hide for draft sessions (not connected until first message sent)
+            if (!isInitialLoading && !isDraftSession) {
                 ConnectionStatusBar(
                     connectionState = connectionState,
                     modifier = Modifier.fillMaxWidth(),
