@@ -157,6 +157,7 @@ fun ChatScreenContent(
     val connectionState by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
     val conversationTitle by viewModel.conversationTitle.collectAsState()
+    val scrollToBottomSignal by viewModel.scrollToBottomSignal.collectAsState()
 
     // Command state
     val availableCommands by viewModel.availableCommands.collectAsState()
@@ -254,6 +255,27 @@ fun ChatScreenContent(
     LaunchedEffect(isAtBottom) {
         if (isAtBottom) {
             hasNewMessages = false
+        }
+    }
+
+    // Scroll to bottom when ViewModel signals (on send message, streaming complete, etc.)
+    // This is a reliable scroll mechanism that doesn't depend on reactive state changes
+    LaunchedEffect(scrollToBottomSignal) {
+        if (scrollToBottomSignal > 0) {
+            // Small delay for layout to stabilize
+            kotlinx.coroutines.delay(50)
+            val totalItems = listState.layoutInfo.totalItemsCount
+            if (totalItems > 0) {
+                try {
+                    listState.animateScrollToItem(totalItems - 1)
+                } catch (e: Exception) {
+                    try {
+                        listState.scrollToItem(totalItems - 1)
+                    } catch (_: Exception) {}
+                }
+                userScrolledUp = false
+                hasNewMessages = false
+            }
         }
     }
 

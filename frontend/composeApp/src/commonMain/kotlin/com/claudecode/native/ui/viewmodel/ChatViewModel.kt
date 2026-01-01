@@ -165,6 +165,15 @@ class ChatViewModel(
     /** True when commands are being loaded from the server. */
     val commandsLoading: StateFlow<Boolean> = _commandsLoading.asStateFlow()
 
+    private val _scrollToBottomSignal = MutableStateFlow(0)
+    /**
+     * Signal for UI to scroll to bottom. Incremented when:
+     * - Streaming completes (finalizeStreamingMessage)
+     * - User sends a message
+     * UI should observe and scroll when value changes.
+     */
+    val scrollToBottomSignal: StateFlow<Int> = _scrollToBottomSignal.asStateFlow()
+
     /** Connection state exposed from the WebSocket client. */
     val connectionState: StateFlow<ConnectionState> = webSocketClient.connectionState
 
@@ -203,6 +212,16 @@ class ChatViewModel(
     private companion object {
         const val MAX_PROCESSED_TIMESTAMPS = 500
         val WHITESPACE_REGEX = Regex("\\s+")
+
+        /**
+         * Normalizes content for hash comparison.
+         * Trims whitespace and normalizes internal whitespace to single spaces.
+         * This ensures hash comparison works even when content is modified
+         * during serialization/deserialization (e.g., trailing spaces removed).
+         */
+        fun normalizeForComparison(content: String): String {
+            return content.trim().replace(WHITESPACE_REGEX, " ")
+        }
     }
 
     private val mapsMutex = Mutex()  // Lock #3: protects sessionToolUses, sessionToolResults
@@ -459,9 +478,10 @@ class ChatViewModel(
         println("ChatViewModel: Converted to ${chatMessages.size} chat messages")
 
         mutex.withLock {
+            val currentMessages = _messages.value
             // Preserve pending messages that haven't been confirmed by history watch yet
             // These are locally added messages waiting for filesystem sync
-            val pendingMessages = _messages.value.filter { it.isPending }
+            val pendingMessages = currentMessages.filter { it.isPending }
 
             // Preserve streaming message if active - this prevents losing tool messages
             // during filesystem reload while streaming is happening
@@ -500,7 +520,25 @@ class ChatViewModel(
                 }
             }
 
-            _messages.value = chatMessages + messagesToAdd
+            // Build normalized content -> existing ID map to preserve IDs across reload
+            // This prevents LazyColumn from losing scroll position due to key changes
+            // Use full normalized content (not just hash) to avoid hash collision issues
+            val existingByNormalizedContent = currentMessages.associateBy { msg ->
+                normalizeForComparison(msg.content)
+            }
+
+            // Update loaded messages to preserve existing IDs where content matches
+            val stableMessages = chatMessages.map { msg ->
+                val normalized = normalizeForComparison(msg.content)
+                val existing = existingByNormalizedContent[normalized]
+                if (existing != null) {
+                    msg.copy(id = existing.id)
+                } else {
+                    msg
+                }
+            }
+
+            _messages.value = stableMessages + messagesToAdd
         }
     }
 
@@ -1063,12 +1101,17 @@ class ChatViewModel(
             )
 
             // Track this pending user message to prevent duplicate from history watch
-            pendingUserMessages[content.hashCode()] = messageId
-            println("ChatViewModel: Added pending user message: ${content.take(50)}...")
+            // Use normalized content hash to handle whitespace differences in serialization
+            val normalizedHash = normalizeForComparison(content).hashCode()
+            pendingUserMessages[normalizedHash] = messageId
+            println("ChatViewModel: Added pending user message (hash=$normalizedHash): ${content.take(50)}...")
 
             mutex.withLock {
                 _messages.value = _messages.value + userMessage
             }
+
+            // Trigger scroll to bottom for the new user message (atomic update)
+            _scrollToBottomSignal.update { it + 1 }
 
             // Send via WebSocket
             webSocketClient.sendChat(content)
@@ -1654,9 +1697,10 @@ class ChatViewModel(
 
                         for (newMsg in newChatMessages) {
                             // Check if this is a pending user message we already added locally
-                            val contentHash = newMsg.content.hashCode()
+                            // Use normalized content hash to handle whitespace differences
+                            val normalizedContentHash = normalizeForComparison(newMsg.content).hashCode()
                             val pendingMsgId = if (newMsg.role == MessageRole.USER) {
-                                pendingUserMessages.remove(contentHash)
+                                pendingUserMessages.remove(normalizedContentHash)
                             } else null
 
                             if (pendingMsgId != null) {
@@ -1665,7 +1709,7 @@ class ChatViewModel(
                                 if (pendingIndex >= 0) {
                                     currentMessages[pendingIndex] = currentMessages[pendingIndex].copy(isPending = false)
                                     updated = true
-                                    println("ChatViewModel: Confirmed pending user message: ${newMsg.content.take(30)}...")
+                                    println("ChatViewModel: Confirmed pending user message (hash=$normalizedContentHash): ${newMsg.content.take(30)}...")
                                 }
                                 continue
                             }
@@ -1867,6 +1911,33 @@ class ChatViewModel(
             historyWatchStreamingDebounceJob?.cancel()
             historyWatchStreamingDebounceJob = null
         }
+
+        // Clear any remaining pending user messages as fallback
+        // When streaming completes, we assume all user messages have been processed
+        // Use mutex lock for thread-safe access to pendingUserMessages
+        mutex.withLock {
+            if (pendingUserMessages.isNotEmpty()) {
+                val currentMessages = _messages.value.toMutableList()
+                var updated = false
+                // Copy entries to avoid concurrent modification during iteration
+                val pendingEntries = pendingUserMessages.toList()
+                for ((_, pendingMsgId) in pendingEntries) {
+                    val index = currentMessages.indexOfFirst { it.id == pendingMsgId }
+                    if (index >= 0 && currentMessages[index].isPending) {
+                        currentMessages[index] = currentMessages[index].copy(isPending = false)
+                        updated = true
+                        println("ChatViewModel: Cleared pending flag on streaming complete: ${currentMessages[index].content.take(30)}...")
+                    }
+                }
+                if (updated) {
+                    _messages.value = currentMessages
+                }
+                pendingUserMessages.clear()
+            }
+        }
+
+        // Trigger scroll to bottom signal for UI (atomic update)
+        _scrollToBottomSignal.update { it + 1 }
 
         // Process next queued message if any (outside the lock to avoid deadlock)
         processNextQueuedMessage()
