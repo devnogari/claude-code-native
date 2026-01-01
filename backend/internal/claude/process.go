@@ -136,11 +136,13 @@ func (p *Process) StartWithPrompt(prompt string) error {
 	// --print: non-interactive mode, outputs response and exits
 	// --output-format stream-json: stream JSON chunks for real-time updates
 	// --verbose: required when using --print with stream-json
+	// --dangerously-skip-permissions: skip permission prompts for automated usage
 	// --resume: continue existing session, or --session-id for new session
 	args := []string{
 		"--print",
 		"--output-format", "stream-json",
 		"--verbose",
+		"--dangerously-skip-permissions",
 	}
 
 	// Check if a Claude session file already exists for this conversation
