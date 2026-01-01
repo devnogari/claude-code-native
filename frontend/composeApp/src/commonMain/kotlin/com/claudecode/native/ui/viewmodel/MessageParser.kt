@@ -4,18 +4,24 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * Utility object for parsing Claude message content into structured ContentBlocks.
  * Handles various content formats: strings, JSON primitives, arrays, and objects.
  */
+@OptIn(ExperimentalUuidApi::class)
 object MessageParser {
 
     /**
      * Extracts content blocks from message content, preserving the order of text and tool usages.
      * Returns an ordered list of ContentBlock items (Text and Tool interleaved as they appear).
+     *
+     * @param content The message content to parse
+     * @param messageUuid Optional message UUID for generating fallback tool IDs
      */
-    fun parseMessageContent(content: Any?): List<ContentBlock> {
+    fun parseMessageContent(content: Any?, messageUuid: String? = null): List<ContentBlock> {
         if (content == null) return emptyList()
 
         val blocks = mutableListOf<ContentBlock>()
@@ -36,12 +42,12 @@ object MessageParser {
                             val cleaned = cleanThinkingTags(element.content)
                             if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
                         }
-                        is JsonObject -> processJsonElementToBlocks(element, blocks)
+                        is JsonObject -> processJsonElementToBlocks(element, blocks, messageUuid)
                         else -> {} // Ignore other JSON element types
                     }
                 }
             }
-            is JsonObject -> processJsonElementToBlocks(content, blocks)
+            is JsonObject -> processJsonElementToBlocks(content, blocks, messageUuid)
             is List<*> -> {
                 for (item in content) {
                     when (item) {
@@ -49,7 +55,7 @@ object MessageParser {
                             val cleaned = cleanThinkingTags(item)
                             if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
                         }
-                        is Map<*, *> -> processMapElementToBlocks(item, blocks)
+                        is Map<*, *> -> processMapElementToBlocks(item, blocks, messageUuid)
                         else -> {} // Ignore other item types
                     }
                 }
@@ -69,7 +75,8 @@ object MessageParser {
      */
     private fun processJsonElementToBlocks(
         element: JsonObject,
-        blocks: MutableList<ContentBlock>
+        blocks: MutableList<ContentBlock>,
+        messageUuid: String? = null
     ) {
         val type = element["type"]?.jsonPrimitive?.content
         when (type) {
@@ -80,7 +87,8 @@ object MessageParser {
                 }
             }
             "tool_use" -> {
-                val id = element["id"]?.jsonPrimitive?.content ?: "tool_${blocks.size}"
+                val fallbackId = messageUuid?.let { "tool_${it}_${blocks.size}" } ?: "tool_${Uuid.random()}"
+                val id = element["id"]?.jsonPrimitive?.content ?: fallbackId
                 val name = element["name"]?.jsonPrimitive?.content ?: "Unknown"
                 val input = element["input"]
                 val summary = extractToolSummary(name, input)
@@ -96,7 +104,8 @@ object MessageParser {
      */
     private fun processMapElementToBlocks(
         item: Map<*, *>,
-        blocks: MutableList<ContentBlock>
+        blocks: MutableList<ContentBlock>,
+        messageUuid: String? = null
     ) {
         val type = item["type"] as? String
         when (type) {
@@ -107,7 +116,8 @@ object MessageParser {
                 }
             }
             "tool_use" -> {
-                val id = (item["id"] as? String) ?: "tool_${blocks.size}"
+                val fallbackId = messageUuid?.let { "tool_${it}_${blocks.size}" } ?: "tool_${Uuid.random()}"
+                val id = (item["id"] as? String) ?: fallbackId
                 val name = (item["name"] as? String) ?: "Unknown"
                 val input = item["input"]
                 val summary = extractToolSummaryFromMap(name, input)

@@ -3,10 +3,8 @@ package com.claudecode.native.ui.component
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -15,10 +13,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -54,12 +56,11 @@ import com.claudecode.native.ui.viewmodel.ToolUseInfo
  * User messages are right-aligned with primary color background (plain text).
  * Assistant messages are left-aligned with surface variant background (markdown rendered).
  * Content blocks (text and tools) are rendered in their original order for assistant messages.
- * Double-click on any message to inspect its payload.
+ * Click the info icon to inspect message payload.
  *
  * @param message The chat message to display
  * @param modifier Optional modifier for the component
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(
     message: ChatMessage,
@@ -70,6 +71,7 @@ fun MessageBubble(
 
     val isUser = message.role == MessageRole.USER
     var showInspectDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
 
     // Inspect Payload Dialog
     if (showInspectDialog) {
@@ -80,12 +82,7 @@ fun MessageBubble(
     }
 
     BoxWithConstraints(
-        modifier = modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = { /* normal click does nothing */ },
-                onDoubleClick = { showInspectDialog = true }
-            )
+        modifier = modifier.fillMaxWidth()
     ) {
         // Calculate max width based on available space
         // User messages: smaller (up to 70% or 500dp max)
@@ -93,12 +90,26 @@ fun MessageBubble(
         val userMaxWidth = minOf(maxWidth * 0.7f, 500.dp)
         val assistantMaxWidth = maxWidth * 0.95f
 
-        Column(
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.Top
         ) {
-            if (isUser) {
+            // Menu button on the left for assistant messages
+            if (!isUser) {
+                MessageMenuButton(
+                    showMenu = showMenu,
+                    onShowMenuChange = { showMenu = it },
+                    onInspectClick = { showInspectDialog = true }
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f, fill = false),
+                horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (isUser) {
                 // User messages: render all text blocks as a single bubble
                 val textContent = message.blocks
                     .filterIsInstance<ContentBlock.Text>()
@@ -189,9 +200,76 @@ fun MessageBubble(
                     }
                 }
             }
+            }
+
+            // Menu button on the right for user messages
+            if (isUser) {
+                MessageMenuButton(
+                    showMenu = showMenu,
+                    onShowMenuChange = { showMenu = it },
+                    onInspectClick = { showInspectDialog = true }
+                )
+            }
         }
     }
 }
+
+/**
+ * Menu button with dropdown for message actions.
+ */
+/**
+ * Reusable inspect menu button component.
+ *
+ * @param showMenu Whether the dropdown menu is currently shown
+ * @param onShowMenuChange Callback when menu visibility changes
+ * @param onInspectClick Callback when "Inspect Payload" is clicked
+ * @param compact If true, uses smaller sizing suitable for tool items
+ */
+@Composable
+private fun InspectMenuButton(
+    showMenu: Boolean,
+    onShowMenuChange: (Boolean) -> Unit,
+    onInspectClick: () -> Unit,
+    compact: Boolean = false
+) {
+    val iconSize = if (compact) 18.dp else 20.dp
+    val buttonSize = if (compact) 28.dp else 40.dp
+
+    Box {
+        IconButton(
+            onClick = { onShowMenuChange(true) },
+            modifier = Modifier.size(buttonSize)
+        ) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More options",
+                modifier = Modifier.size(iconSize),
+                tint = MaterialTheme.colorScheme.outline
+            )
+        }
+
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { onShowMenuChange(false) }
+        ) {
+            DropdownMenuItem(
+                text = { Text("Inspect Payload") },
+                onClick = {
+                    onShowMenuChange(false)
+                    onInspectClick()
+                }
+            )
+        }
+    }
+}
+
+// Backwards compatibility alias
+@Composable
+private fun MessageMenuButton(
+    showMenu: Boolean,
+    onShowMenuChange: (Boolean) -> Unit,
+    onInspectClick: () -> Unit
+) = InspectMenuButton(showMenu, onShowMenuChange, onInspectClick, compact = false)
 
 /**
  * Dialog to inspect message payload details.
@@ -364,9 +442,18 @@ fun ToolUseItem(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var showInspectDialog by remember { mutableStateOf(false) }
     val hasResult = !tool.result.isNullOrBlank()
     val isSubagent = tool.name == "Task"
     val subagentColor = Color(0xFFBA68C8)  // Purple for subagents
+
+    // Inspect Dialog for tool
+    if (showInspectDialog) {
+        ToolInspectDialog(
+            tool = tool,
+            onDismiss = { showInspectDialog = false }
+        )
+    }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -463,6 +550,15 @@ fun ToolUseItem(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                // More button for inspect (always at the end for consistent positioning)
+                var showMenu by remember { mutableStateOf(false) }
+                InspectMenuButton(
+                    showMenu = showMenu,
+                    onShowMenuChange = { showMenu = it },
+                    onInspectClick = { showInspectDialog = true },
+                    compact = true
+                )
             }
 
             // Expandable result content
@@ -586,6 +682,7 @@ fun DiffHighlightedText(
  * @param content Current streaming content (may be empty during initial load)
  * @param tools List of tools being used during streaming
  * @param blocks Ordered list of content blocks (text and tools interleaved). If provided, renders in order.
+ * @param messageId Optional message ID for inspection
  * @param modifier Optional modifier for the component
  */
 @Composable
@@ -593,13 +690,40 @@ fun StreamingBubble(
     content: String,
     tools: List<ToolUseInfo> = emptyList(),
     blocks: List<ContentBlock> = emptyList(),
+    messageId: String? = null,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    var showInspectDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+
+    // Inspect Dialog for streaming message
+    if (showInspectDialog) {
+        StreamingInspectDialog(
+            messageId = messageId,
+            content = content,
+            tools = tools,
+            blocks = blocks,
+            onDismiss = { showInspectDialog = false }
+        )
+    }
+
+    Row(
         modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.Start,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.Top
     ) {
+        // Menu button
+        MessageMenuButton(
+            showMenu = showMenu,
+            onShowMenuChange = { showMenu = it },
+            onInspectClick = { showInspectDialog = true }
+        )
+
+        Column(
+            modifier = Modifier.weight(1f, fill = false),
+            horizontalAlignment = Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
         // If ordered blocks are provided, render them in order
         if (blocks.isNotEmpty()) {
             blocks.forEach { block ->
@@ -678,7 +802,219 @@ fun StreamingBubble(
                 }
             }
         }
+        }
     }
+}
+
+/**
+ * Dialog to inspect streaming message payload.
+ */
+@Composable
+private fun StreamingInspectDialog(
+    messageId: String?,
+    content: String,
+    tools: List<ToolUseInfo>,
+    blocks: List<ContentBlock>,
+    onDismiss: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Streaming Message",
+                style = MaterialTheme.typography.titleMedium
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Message ID
+                PayloadField("ID", messageId ?: "(streaming)")
+
+                // Status
+                PayloadField("Status", "Streaming")
+
+                // Content length
+                PayloadField("Content Length", "${content.length} chars")
+
+                // Tools count
+                PayloadField("Tools Count", tools.size.toString())
+
+                // Blocks count
+                PayloadField("Blocks Count", blocks.size.toString())
+
+                // Blocks details
+                if (blocks.isNotEmpty()) {
+                    Text(
+                        text = "Blocks:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    blocks.forEachIndexed { index, block ->
+                        when (block) {
+                            is ContentBlock.Text -> {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(8.dp)
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "[$index] Text Block",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = block.content.take(200) + if (block.content.length > 200) "..." else "",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = FontFamily.Monospace
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            is ContentBlock.Tool -> {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(8.dp)
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "[$index] Tool: ${block.info.name}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = "Summary: ${block.info.summary}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "Has Result: ${block.info.result != null}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+/**
+ * Dialog to inspect tool payload details.
+ */
+@Composable
+private fun ToolInspectDialog(
+    tool: ToolUseInfo,
+    onDismiss: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Tool Payload",
+                style = MaterialTheme.typography.titleMedium
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PayloadField("Tool ID", tool.id)
+                PayloadField("Name", tool.name)
+                PayloadField("Is Error", tool.isError.toString())
+                PayloadField("Has Result", (tool.result != null).toString())
+
+                // Summary (tool input summary)
+                if (tool.summary.isNotEmpty()) {
+                    Text(
+                        text = "Summary:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(8.dp)
+                    ) {
+                        Text(
+                            text = tool.summary.take(2000) + if (tool.summary.length > 2000) "..." else "",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Result
+                tool.result?.let { result ->
+                    Text(
+                        text = "Result:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(8.dp)
+                    ) {
+                        Text(
+                            text = result.take(1000) + if (result.length > 1000) "..." else "",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            color = if (tool.isError) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 /**
@@ -690,11 +1026,20 @@ private fun StreamingToolItem(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var showInspectDialog by remember { mutableStateOf(false) }
     val hasResult = !tool.result.isNullOrBlank()
     val isInProgress = !hasResult
 
     val isSubagent = tool.name == "Task"
     val subagentColor = Color(0xFFBA68C8)  // Purple for subagents
+
+    // Inspect Dialog
+    if (showInspectDialog) {
+        ToolInspectDialog(
+            tool = tool,
+            onDismiss = { showInspectDialog = false }
+        )
+    }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -798,6 +1143,15 @@ private fun StreamingToolItem(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                // More button for inspect (always at the end for consistent positioning)
+                var showMenu by remember { mutableStateOf(false) }
+                InspectMenuButton(
+                    showMenu = showMenu,
+                    onShowMenuChange = { showMenu = it },
+                    onInspectClick = { showInspectDialog = true },
+                    compact = true
+                )
             }
 
             // Expandable result content
@@ -848,21 +1202,46 @@ fun QueuedMessageBubble(
     content: String,
     modifier: Modifier = Modifier
 ) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showInspectDialog by remember { mutableStateOf(false) }
+
+    // Inspect Dialog
+    if (showInspectDialog) {
+        QueuedInspectDialog(
+            content = content,
+            onDismiss = { showInspectDialog = false }
+        )
+    }
+
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.End
     ) {
-        Box(
-            modifier = Modifier
-                .widthIn(max = 500.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
-                .padding(12.dp)
+        Row(
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.End
         ) {
-            Text(
-                text = content,
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.bodyMedium
+            Box(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .widthIn(max = 500.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                    .padding(12.dp)
+            ) {
+                Text(
+                    text = content,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            // Menu button
+            InspectMenuButton(
+                showMenu = showMenu,
+                onShowMenuChange = { showMenu = it },
+                onInspectClick = { showInspectDialog = true },
+                compact = true
             )
         }
 
@@ -884,6 +1263,62 @@ fun QueuedMessageBubble(
             )
         }
     }
+}
+
+/**
+ * Inspect dialog for queued messages.
+ */
+@Composable
+private fun QueuedInspectDialog(
+    content: String,
+    onDismiss: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Queued Message Payload") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PayloadField("Status", "Queued")
+                PayloadField("Content Length", "${content.length} chars")
+
+                // Content
+                Text(
+                    text = "Content:",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(8.dp)
+                ) {
+                    Text(
+                        text = content.take(2000) + if (content.length > 2000) "..." else "",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 /**
