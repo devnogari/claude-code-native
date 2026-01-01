@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
  * @param selectedConversationId The currently selected conversation ID, or null if none selected
  * @param onConversationSelected Callback when a conversation is selected from the list
  * @param onSettingsClick Callback when settings is clicked
+ * @param onSessionCreated Callback when a new session is created from draft mode (for refreshing sidebar)
  * @param listContent Composable content for the project list pane
  * @param detailContent Composable content for the chat detail pane, receives the conversation ID
  */
@@ -48,13 +49,15 @@ fun AdaptiveProjectLayout(
     selectedConversationId: String?,
     onConversationSelected: (String) -> Unit,
     onSettingsClick: () -> Unit,
+    onSessionCreated: () -> Unit = {},
     listContent: @Composable (
         onConversationSelected: (String) -> Unit,
         onSettingsClick: () -> Unit
     ) -> Unit,
     detailContent: @Composable (
         conversationId: String,
-        onBack: () -> Unit
+        onBack: () -> Unit,
+        onSessionCreated: () -> Unit
     ) -> Unit
 ) {
     val navigator = rememberListDetailPaneScaffoldNavigator<String>()
@@ -106,7 +109,7 @@ fun AdaptiveProjectLayout(
             AnimatedPane {
                 val conversationId = currentConversation
                 if (conversationId != null) {
-                    detailContent(conversationId, handleBack)
+                    detailContent(conversationId, handleBack, onSessionCreated)
                 } else {
                     // Empty state when no conversation is selected
                     EmptyDetailPane()

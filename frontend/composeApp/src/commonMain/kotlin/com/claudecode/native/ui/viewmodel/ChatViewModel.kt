@@ -16,6 +16,7 @@ import com.claudecode.native.data.websocket.IncomingMessage
 import com.claudecode.native.data.websocket.MessageType
 import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.util.toUserMessage
+import kotlin.uuid.ExperimentalUuidApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -157,6 +158,17 @@ class ChatViewModel(
     /** Current conversation title for display in UI. */
     val conversationTitle: StateFlow<String?> = _conversationTitle.asStateFlow()
 
+    private val _isDraftSession = MutableStateFlow(false)
+    /** True when this is a draft session (not yet created on server). */
+    val isDraftSession: StateFlow<Boolean> = _isDraftSession.asStateFlow()
+
+    private val _sessionCreatedEvent = MutableStateFlow<String?>(null)
+    /**
+     * Emits the new session ID when a draft session is converted to a real session.
+     * UI can observe this to update the sidebar/project list.
+     */
+    val sessionCreatedEvent: StateFlow<String?> = _sessionCreatedEvent.asStateFlow()
+
     private val _availableCommands = MutableStateFlow<List<Command>>(emptyList())
     /** Available slash commands (builtin + custom). */
     val availableCommands: StateFlow<List<Command>> = _availableCommands.asStateFlow()
@@ -210,9 +222,15 @@ class ChatViewModel(
     // This is more reliable than content-based dedup for rapid message sequences
     // Limited to MAX_PROCESSED_TIMESTAMPS entries to prevent unbounded growth
     private val processedHistoryWatchTimestamps = mutableSetOf<Long>()
-    private companion object {
-        const val MAX_PROCESSED_TIMESTAMPS = 500
-        val WHITESPACE_REGEX = Regex("\\s+")
+    companion object {
+        /** Marker for draft sessions that haven't been created yet. */
+        const val DRAFT_SESSION_MARKER = "draft"
+        /** Number of attempts to wait for WebSocket connection. */
+        private const val CONNECTION_TIMEOUT_ATTEMPTS = 50
+        /** Interval between connection checks in milliseconds. */
+        private const val CONNECTION_CHECK_INTERVAL_MS = 100L
+        private const val MAX_PROCESSED_TIMESTAMPS = 500
+        private val WHITESPACE_REGEX = Regex("\\s+")
 
         /**
          * Normalizes content for hash comparison.
@@ -255,6 +273,7 @@ class ChatViewModel(
      * Also loads existing messages from the filesystem-based Claude history.
      *
      * @param conversationId The conversation identifier, either:
+     *   - Draft format: "draft?project=encodedPath" (new session, not yet created)
      *   - New format: "sessionId?project=encodedPath" (from filesystem-based ProjectList)
      *   - Legacy format: UUID conversation ID (from database)
      */
@@ -304,6 +323,9 @@ class ChatViewModel(
                     _streamingTools.value = emptyList()
                     _queuedMessages.value = emptyList()
                     _error.value = null
+                    _conversationTitle.value = null
+                    _isDraftSession.value = false
+                    _sessionCreatedEvent.value = null
                     streamingMessageId = null
                 }
 
@@ -317,12 +339,35 @@ class ChatViewModel(
                 }
 
                 // Parse conversationId to extract session info
-                // Format: "sessionId?project=encodedPath" or legacy UUID
+                // Format: "draft?project=encodedPath", "sessionId?project=encodedPath", or legacy UUID
                 val (sessionId, encodedPath) = parseConversationId(conversationId)
                 println("[$connectCallId] Parsed: sessionId=${sessionId?.take(15)}, encodedPath=${encodedPath?.take(30)}")
 
                 if (sessionId != null && encodedPath != null) {
-                    // New filesystem-based flow
+                    // Check if this is a draft session (not yet created)
+                    if (sessionId == DRAFT_SESSION_MARKER) {
+                        println("ChatViewModel: Draft session mode for $encodedPath")
+                        _isDraftSession.value = true
+                        currentEncodedPath = encodedPath
+                        currentClaudeSession = null  // No session ID yet
+                        _conversationTitle.value = "New Chat"
+
+                        // Fetch project info for project path and commands
+                        try {
+                            val project = claudeHistoryApi.getProject(encodedPath)
+                            currentProjectPath = project.path
+                            loadCommands(project.path)
+                        } catch (e: Exception) {
+                            println("ChatViewModel: Failed to fetch project info for draft: ${e.message}")
+                        }
+
+                        // Connect WebSocket in draft mode (will be ready when session is created)
+                        // The WebSocket will be reconnected with actual session ID when first message is sent
+                        println("ChatViewModel: Draft mode - WebSocket will connect on first message")
+                        return@launch  // Don't connect WebSocket yet for draft sessions
+                    }
+
+                    // New filesystem-based flow (existing session)
                     currentEncodedPath = encodedPath
                     currentClaudeSession = sessionId
 
@@ -1235,11 +1280,21 @@ class ChatViewModel(
      * Sends a chat message to the server.
      * Creates a user message locally and sends it via WebSocket.
      * If streaming is in progress, queues the message for later.
+     * For draft sessions, creates the actual session on first message.
      *
      * @param content The message text to send
      */
     fun sendMessage(content: String) {
         if (content.isBlank()) return
+
+        // For draft sessions, we need to create the session first
+        if (_isDraftSession.value) {
+            scope.launch {
+                createSessionAndSendMessage(content)
+            }
+            return
+        }
+
         if (connectionState.value != ConnectionState.Connected) {
             _error.value = "Not connected"
             return
@@ -1259,6 +1314,97 @@ class ChatViewModel(
         scope.launch {
             sendMessageInternal(content)
         }
+    }
+
+    /**
+     * Creates a new session from draft mode and sends the first message.
+     * This is called when user sends the first message in a draft session.
+     */
+    @OptIn(ExperimentalUuidApi::class)
+    private suspend fun createSessionAndSendMessage(content: String) {
+        val encodedPath = currentEncodedPath ?: run {
+            _error.value = "No project path available"
+            return
+        }
+
+        try {
+            // Generate a new session ID
+            val newSessionId = kotlin.uuid.Uuid.random().toString()
+            println("ChatViewModel: Creating session from draft: $newSessionId for $encodedPath")
+
+            // Update internal state
+            currentClaudeSession = newSessionId
+            val newConversationId = "$newSessionId?project=$encodedPath"
+            currentConversationId = newConversationId
+
+            // Mark as no longer draft
+            _isDraftSession.value = false
+
+            // Set title based on first message (truncated)
+            val title = content.take(50).let { if (content.length > 50) "$it..." else it }
+            _conversationTitle.value = title
+
+            // Get auth token and connect WebSocket
+            val token = apiClient.getAuthToken() ?: run {
+                _error.value = "Not authenticated"
+                _isDraftSession.value = true  // Revert to draft mode
+                return
+            }
+
+            // Connect WebSocket with the new session ID
+            println("ChatViewModel: Connecting WebSocket for new session: $newConversationId")
+            webSocketClient.connect(newConversationId, token)
+
+            // Wait for connection to be established
+            var attempts = 0
+            while (connectionState.value != ConnectionState.Connected && attempts < CONNECTION_TIMEOUT_ATTEMPTS) {
+                kotlinx.coroutines.delay(CONNECTION_CHECK_INTERVAL_MS)
+                attempts++
+                // Handle error or disconnected states - fail fast
+                val currentState = connectionState.value
+                if (currentState is ConnectionState.Error || currentState is ConnectionState.Disconnected) {
+                    val errorMsg = if (currentState is ConnectionState.Error) {
+                        "Failed to connect: ${currentState.message}"
+                    } else {
+                        "Connection lost"
+                    }
+                    _error.value = errorMsg
+                    _isDraftSession.value = true  // Revert to draft mode
+                    return
+                }
+            }
+
+            if (connectionState.value != ConnectionState.Connected) {
+                _error.value = "Connection timeout"
+                _isDraftSession.value = true  // Revert to draft mode
+                return
+            }
+
+            // Connect history watch for real-time updates
+            println("ChatViewModel: Connecting history watch for new session: $encodedPath / $newSessionId")
+            historyWatchClient.connect(encodedPath, newSessionId, token)
+
+            // Now send the message
+            sendMessageInternal(content)
+
+            // Emit session created event for UI to refresh sidebar
+            println("ChatViewModel: Session created, emitting event: $newSessionId")
+            _sessionCreatedEvent.value = newSessionId
+
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("ChatViewModel: Failed to create session from draft: ${e.message}")
+            _error.value = e.toUserMessage()
+            _isDraftSession.value = true  // Revert to draft mode
+        }
+    }
+
+    /**
+     * Clears the session created event after it has been consumed by the UI.
+     */
+    fun clearSessionCreatedEvent() {
+        _sessionCreatedEvent.value = null
     }
 
     /**

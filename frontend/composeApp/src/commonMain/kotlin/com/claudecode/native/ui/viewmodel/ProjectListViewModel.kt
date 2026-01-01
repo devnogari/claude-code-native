@@ -5,8 +5,6 @@ import com.claudecode.native.data.model.ClaudeProject
 import com.claudecode.native.data.model.ClaudeSession
 import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.util.toUserMessage
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -303,15 +301,16 @@ class ProjectListViewModel(
     }
 
     /**
-     * Starts a new session for a project.
-     * Generates a new UUID for the session and navigates to chat screen.
+     * Starts a new session for a project in draft mode.
+     * The actual session will be created when the user sends the first message.
+     * This prevents empty sessions from appearing in the sidebar.
      *
      * @param encodedPath The encoded project path
      * @param onNavigate Callback with session ID and encoded path for navigation
      */
-    @OptIn(ExperimentalUuidApi::class)
     fun startNewSession(encodedPath: String, onNavigate: (String, String) -> Unit) {
-        val newSessionId = Uuid.random().toString()
-        onNavigate(newSessionId, encodedPath)
+        // Use "draft" as a special marker instead of generating a UUID
+        // The actual session ID will be created when the first message is sent
+        onNavigate(ChatViewModel.DRAFT_SESSION_MARKER, encodedPath)
     }
 }
