@@ -15,6 +15,7 @@ import com.claudecode.native.data.websocket.HistoryWatchEvent
 import com.claudecode.native.data.websocket.IncomingMessage
 import com.claudecode.native.data.websocket.MessageType
 import com.claudecode.native.data.websocket.WebSocketClient
+import com.claudecode.native.ui.component.ProgressStatus
 import com.claudecode.native.util.toUserMessage
 import kotlin.uuid.ExperimentalUuidApi
 import kotlinx.coroutines.CancellationException
@@ -131,6 +132,19 @@ class ChatViewModel(
      * UI should observe and scroll when value changes.
      */
     val scrollToBottomSignal: StateFlow<Int> = _scrollToBottomSignal.asStateFlow()
+
+    private val _progressStatus = MutableStateFlow(ProgressStatus())
+    /**
+     * Progress status for the status line UI (Claude Code style).
+     * Tracks elapsed time, status text, tokens, and thinking time during streaming.
+     */
+    val progressStatus: StateFlow<ProgressStatus> = _progressStatus.asStateFlow()
+
+    /** Job for tracking elapsed time during streaming. */
+    private var elapsedTimeJob: Job? = null
+
+    /** Timestamp when streaming started (for elapsed time calculation). */
+    private var streamingStartTime: Long = 0L
 
     /** Connection state exposed from the WebSocket client. */
     val connectionState: StateFlow<ConnectionState> = webSocketClient.connectionState
@@ -1090,6 +1104,9 @@ class ChatViewModel(
                 _streamingBlocks.value = emptyList()
                 streamingMessageId = generateMessageId()
             }
+
+            // Start progress tracking for status line
+            startProgressTracking("Processing")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1097,6 +1114,7 @@ class ChatViewModel(
             streamingMutex.withLock {
                 _isStreaming.value = false
             }
+            stopProgressTracking()
         }
     }
 
@@ -1334,7 +1352,7 @@ class ChatViewModel(
         when (message.type) {
             MessageType.STREAM -> {
                 // Synchronize streaming state changes to prevent race conditions with HistoryWatch
-                streamingMutex.withLock {
+                val wasNotStreaming = streamingMutex.withLock {
                     // If we receive stream chunks, ensure streaming state is active
                     // This handles reconnection scenarios where ViewModel was recreated
                     if (!_isStreaming.value) {
@@ -1342,7 +1360,14 @@ class ChatViewModel(
                         if (streamingMessageId == null) {
                             streamingMessageId = generateMessageId()
                         }
+                        true
+                    } else {
+                        false
                     }
+                }
+                // Start progress tracking if streaming just started (from WebSocket reconnection)
+                if (wasNotStreaming) {
+                    startProgressTracking("Processing")
                 }
                 // Append streaming content atomically to avoid race conditions
                 message.content?.let { chunk ->
@@ -1446,7 +1471,7 @@ class ChatViewModel(
                 if (hasAssistantMessage) {
                     // Synchronize streaming state changes to prevent race conditions with WebSocket
                     // Also manage debounce job inside lock to avoid reading stale isStreamingFromHistoryWatch
-                    streamingMutex.withLock {
+                    val shouldStartProgress = streamingMutex.withLock {
                         if (!_isStreaming.value) {
                             println("ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
                             _isStreaming.value = true
@@ -1454,7 +1479,16 @@ class ChatViewModel(
                             if (streamingMessageId == null) {
                                 streamingMessageId = generateMessageId()
                             }
+                            true
+                        } else {
+                            false
                         }
+                    }
+                    // Start progress tracking if streaming just started (from HistoryWatch)
+                    if (shouldStartProgress) {
+                        startProgressTracking("Processing")
+                    }
+                    streamingMutex.withLock {
 
                         // Reset debounce timer - if no new messages for timeout period, finalize streaming
                         // Must be inside lock to read isStreamingFromHistoryWatch safely
@@ -2036,6 +2070,9 @@ class ChatViewModel(
             historyWatchStreamingDebounceJob = null
         }
 
+        // Stop progress tracking for status line
+        stopProgressTracking()
+
         // Clear any remaining pending user messages as fallback
         // When streaming completes, we assume all user messages have been processed
         // Lock ordering: mutex (#2) → mapsMutex (#3) for thread-safe access
@@ -2098,4 +2135,50 @@ class ChatViewModel(
     private fun generateMessageId(): String {
         return "msg_${Clock.System.now().toEpochMilliseconds()}_${(0..9999).random()}"
     }
+
+    // ============================================================================
+    // Progress Status Line Methods
+    // ============================================================================
+
+    /**
+     * Starts progress tracking for the status line UI.
+     * Called when streaming begins - starts elapsed time counter and shows the status line.
+     *
+     * @param statusText Initial status text to display (e.g., "Thinking", "Processing")
+     */
+    private fun startProgressTracking(statusText: String = "Processing") {
+        streamingStartTime = Clock.System.now().toEpochMilliseconds()
+
+        // Initialize progress status
+        _progressStatus.value = ProgressStatus(
+            statusText = statusText,
+            elapsedSeconds = 0,
+            tokenCount = null,
+            thinkingSeconds = null,
+            isActive = true
+        )
+
+        // Start elapsed time counter job
+        elapsedTimeJob?.cancel()
+        elapsedTimeJob = scope.launch {
+            while (true) {
+                delay(1000)
+                val elapsed = ((Clock.System.now().toEpochMilliseconds() - streamingStartTime) / 1000).toInt()
+                _progressStatus.update { current ->
+                    current.copy(elapsedSeconds = elapsed)
+                }
+            }
+        }
+    }
+
+    /**
+     * Stops progress tracking and hides the status line.
+     * Called when streaming ends (complete, error, or stop).
+     */
+    private fun stopProgressTracking() {
+        elapsedTimeJob?.cancel()
+        elapsedTimeJob = null
+        _progressStatus.value = ProgressStatus(isActive = false)
+    }
+
 }
