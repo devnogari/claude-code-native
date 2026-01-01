@@ -323,6 +323,12 @@ func (c *HistoryCache) loadSessions(projectDir string, encodedPath string) ([]Cl
 			continue
 		}
 
+		modTime := info.ModTime()
+		// Update lastAccessed BEFORE filtering - directory timestamp matters for project visibility
+		if modTime.After(lastAccessed) {
+			lastAccessed = modTime
+		}
+
 		messages, err := parseJsonlFile(filePath)
 		if err != nil {
 			continue
@@ -331,16 +337,11 @@ func (c *HistoryCache) loadSessions(projectDir string, encodedPath string) ([]Cl
 		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
 		firstMsg := extractFirstUserMessage(messages)
 		createdAt := extractCreatedAt(messages)
-		modTime := info.ModTime()
 		messageCount := countUserAssistantMessages(messages)
 
-		// Skip sessions with 0 messages
+		// Skip sessions with 0 messages (but lastAccessed is already updated above)
 		if messageCount == 0 {
 			continue
-		}
-
-		if modTime.After(lastAccessed) {
-			lastAccessed = modTime
 		}
 
 		sessions = append(sessions, ClaudeSession{
