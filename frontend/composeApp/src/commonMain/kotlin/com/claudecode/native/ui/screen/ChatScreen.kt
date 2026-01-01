@@ -627,7 +627,8 @@ fun ChatScreenContent(
                         args = commandArgs,
                         viewModel = viewModel,
                         onClearInput = { inputText = "" },
-                        onShowDeleteDialog = { showDeleteDialog = true }
+                        onShowDeleteDialog = { showDeleteDialog = true },
+                        onResetScroll = { userScrolledUp = false }
                     )
                 },
                 modifier = Modifier.padding(bottom = 8.dp)
@@ -652,16 +653,19 @@ fun ChatScreenContent(
                                 args = commandArgs,
                                 viewModel = viewModel,
                                 onClearInput = { inputText = "" },
-                                onShowDeleteDialog = { showDeleteDialog = true }
+                                onShowDeleteDialog = { showDeleteDialog = true },
+                                onResetScroll = { userScrolledUp = false }
                             )
                         } else {
                             // Unknown command - send as regular message to Claude
                             viewModel.sendMessage(inputText)
                             inputText = ""
+                            userScrolledUp = false  // Reset to enable auto-scroll for response
                         }
                     } else {
                         viewModel.sendMessage(inputText)
                         inputText = ""
+                        userScrolledUp = false  // Reset to enable auto-scroll for response
                     }
                 },
                 onStop = { viewModel.stopGeneration() },
@@ -896,13 +900,15 @@ private fun ChatInputBar(
  * @param viewModel The chat view model for actions
  * @param onClearInput Callback to clear the input field
  * @param onShowDeleteDialog Callback to show the delete session dialog
+ * @param onResetScroll Callback to reset scroll state for auto-scroll
  */
 private fun handleSlashCommand(
     command: SlashCommand,
     args: List<String>,
     viewModel: ChatViewModel,
     onClearInput: () -> Unit,
-    onShowDeleteDialog: () -> Unit
+    onShowDeleteDialog: () -> Unit,
+    onResetScroll: () -> Unit
 ) {
     // Handle local-only commands that don't need API
     when (command.name.lowercase()) {
@@ -932,4 +938,5 @@ private fun handleSlashCommand(
         }
     )
     onClearInput()
+    onResetScroll()  // Reset scroll state to enable auto-scroll for command results
 }
