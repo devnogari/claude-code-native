@@ -61,3 +61,29 @@ data class ChatMessage(
     val tools: List<ToolUseInfo>
         get() = blocks.filterIsInstance<ContentBlock.Tool>().map { it.info }
 }
+
+/**
+ * Source of the queued message - tracks where the message originated from.
+ */
+enum class QueuedMessageSource {
+    /** Message queued locally from this app */
+    LOCAL,
+    /** Message queued from Claude CLI (terminal) */
+    CLI
+}
+
+/**
+ * Queued message waiting to be processed.
+ * Tracks both content and metadata for queue management.
+ *
+ * @param id Unique identifier for the queued message
+ * @param content The message content
+ * @param queuedAt Timestamp when the message was queued (epoch milliseconds)
+ * @param source Where the message originated from
+ */
+data class QueuedMessage(
+    val id: String,
+    val content: String,
+    val queuedAt: Long,
+    val source: QueuedMessageSource = QueuedMessageSource.LOCAL
+)
