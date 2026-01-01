@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Session Start (IMPORTANT)
+
+**Serena Auto-Activation**: At session start, activate the Serena project for semantic code analysis:
+```bash
+mcp-cli call serena/activate_project '{"project": "claude-code-native"}'
+```
+
 ## Project Overview
 
 Claude Code Native is a cross-platform desktop/web application providing a native UI for Claude Code CLI. It consists of a Go backend with real-time WebSocket streaming and a Kotlin Multiplatform frontend (Compose).
