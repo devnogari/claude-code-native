@@ -847,11 +847,9 @@ private fun ChatInputBar(
                             if (!keyEvent.isShiftPressed && inputText.isNotBlank() && isConnected) {
                                 onSend()
                                 true // Consume the event
-                            } else if (keyEvent.isShiftPressed) {
-                                // Manually insert newline for Shift+Enter
-                                onInputChange(inputText + "\n")
-                                true // Consume the event
                             } else {
+                                // Shift+Enter or empty input: let TextField handle naturally
+                                // (singleLine=false allows TextField to insert newline at cursor position)
                                 false
                             }
                         } else {
