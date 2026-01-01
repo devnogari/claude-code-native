@@ -2,6 +2,7 @@ package com.claudecode.native.data.api
 
 import com.claudecode.native.data.model.ClaudeProject
 import com.claudecode.native.data.model.PaginatedClaudeMessagesResponse
+import io.ktor.http.encodeURLParameter
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -112,15 +113,8 @@ class ClaudeHistoryApi(private val client: ApiClient) {
      * @param projectPath The project path where the session resides
      */
     suspend fun deleteSession(sessionId: String, projectPath: String) {
-        // URL encode the project path for multiplatform compatibility
-        val encodedPath = projectPath
-            .replace("%", "%25")  // Must be first
-            .replace(" ", "%20")
-            .replace("/", "%2F")
-            .replace("#", "%23")
-            .replace("?", "%3F")
-            .replace("&", "%26")
-            .replace("+", "%2B")
+        // Use Ktor's built-in URL encoding for consistency
+        val encodedPath = projectPath.encodeURLParameter()
         client.delete("/sessions/$sessionId?path=$encodedPath")
     }
 }

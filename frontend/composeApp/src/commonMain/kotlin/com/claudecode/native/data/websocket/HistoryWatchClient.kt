@@ -75,13 +75,14 @@ class HistoryWatchClient(
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     /**
-     * Connect to watch a specific session for file changes
+     * Connect to watch a specific session for file changes.
+     * Disconnects from any existing session before connecting.
      *
      * @param encodedPath The encoded project path
      * @param sessionId The session ID to watch
      * @param token JWT token for authentication
      */
-    fun connect(encodedPath: String, sessionId: String, token: String) {
+    suspend fun connect(encodedPath: String, sessionId: String, token: String) {
         disconnect()
 
         watchJob = scope.launch {
@@ -119,13 +120,21 @@ class HistoryWatchClient(
     }
 
     /**
-     * Disconnect from the watch session
+     * Disconnect from the watch session.
+     * Properly awaits job cancellation to prevent resource leaks.
      */
-    fun disconnect() {
-        watchJob?.cancel()
+    suspend fun disconnect() {
+        val job = watchJob
         watchJob = null
-        scope.launch {
+
+        // Cancel and wait for the job to complete
+        job?.cancelAndJoin()
+
+        // Close the session after job is cancelled
+        try {
             session?.close()
+        } catch (e: Exception) {
+            // Ignore close errors
         }
         session = null
         _isConnected.value = false
