@@ -36,13 +36,20 @@ func (m *AuthMiddleware) Authenticate(c *fiber.Ctx) error {
 		tokenString = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
-	// If no header, try query parameter (for WebSocket connections)
+	// If no header, try query parameter (for WebSocket connections - backward compatibility)
+	// Note: Query params are less secure as they appear in logs. Prefer auth message for WebSocket.
 	if tokenString == "" {
 		tokenString = c.Query("token")
 	}
 
-	// If still no token, return error
+	// For WebSocket upgrade requests, if no token provided, allow connection
+	// and let handler authenticate via first message (more secure approach)
 	if tokenString == "" {
+		// Use case-insensitive comparison since HTTP headers are case-insensitive
+		if strings.EqualFold(c.Get("Upgrade"), "websocket") {
+			// Let the WebSocket handler handle authentication via first message
+			return c.Next()
+		}
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"error": "missing authorization token",
 		})

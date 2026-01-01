@@ -153,6 +153,15 @@ func (h *HistoryHandler) GetProject(c *fiber.Ctx) error {
 		})
 	}
 
+	// Validate encodedPath to prevent path traversal attacks
+	if !validateEncodedPath(encodedPath) {
+		h.logger.Warn("invalid encoded path rejected",
+			zap.String("encodedPath", encodedPath))
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "invalid encoded path format",
+		})
+	}
+
 	project, ok := h.cache.GetProject(encodedPath)
 	if !ok {
 		return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
@@ -172,6 +181,24 @@ func (h *HistoryHandler) GetSessionMessages(c *fiber.Ctx) error {
 	if encodedPath == "" || sessionID == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
 			Error: "encoded path and session ID are required",
+		})
+	}
+
+	// Validate encodedPath to prevent path traversal attacks
+	if !validateEncodedPath(encodedPath) {
+		h.logger.Warn("invalid encoded path rejected",
+			zap.String("encodedPath", encodedPath))
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "invalid encoded path format",
+		})
+	}
+
+	// Validate sessionID is a valid UUID format
+	if !validateSessionID(sessionID) {
+		h.logger.Warn("invalid session ID rejected",
+			zap.String("sessionID", sessionID))
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "invalid session ID format",
 		})
 	}
 

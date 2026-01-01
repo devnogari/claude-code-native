@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/devnogari/claude-code-native/backend/internal/claude"
@@ -13,6 +14,7 @@ import (
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofrs/uuid/v5"
+	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 )
 
@@ -95,29 +97,42 @@ func (h *Handler) Upgrade(c *fiber.Ctx) error {
 // HandleConnection is the main WebSocket handler
 // It creates a client, registers with the hub, and manages read/write pumps
 func (h *Handler) HandleConnection(c *websocket.Conn) {
-	// Extract user ID and conversation ID from context (set by middleware/route params)
-	userIDStr := c.Locals("userID")
 	convIDStr := c.Params("conversationID")
 
-	if userIDStr == nil || convIDStr == "" {
-		h.logger.Error("missing required parameters",
-			zap.Any("userID", userIDStr),
-			zap.String("conversationID", convIDStr))
-		h.sendError(c, "missing required parameters")
-		return
+	// Try to get userID from middleware (query param auth - backward compatibility)
+	userIDStr := c.Locals("userID")
+
+	// If no userID from middleware, wait for auth message (more secure approach)
+	var userID uuid.UUID
+	if userIDStr == nil {
+		// Wait for first message which should be auth
+		authUserID, err := h.waitForAuthMessage(c)
+		if err != nil {
+			h.logger.Error("auth failed", zap.Error(err))
+			h.sendError(c, "authentication failed: "+err.Error())
+			return
+		}
+		userID = authUserID
+	} else {
+		userIDString, ok := userIDStr.(string)
+		if !ok {
+			h.logger.Error("invalid user ID type", zap.Any("userID", userIDStr))
+			h.sendError(c, "invalid user ID")
+			return
+		}
+
+		var err error
+		userID, err = uuid.FromString(userIDString)
+		if err != nil {
+			h.logger.Error("invalid user ID format", zap.String("userID", userIDString), zap.Error(err))
+			h.sendError(c, "invalid user ID format")
+			return
+		}
 	}
 
-	userIDString, ok := userIDStr.(string)
-	if !ok {
-		h.logger.Error("invalid user ID type", zap.Any("userID", userIDStr))
-		h.sendError(c, "invalid user ID")
-		return
-	}
-
-	userID, err := uuid.FromString(userIDString)
-	if err != nil {
-		h.logger.Error("invalid user ID format", zap.String("userID", userIDString), zap.Error(err))
-		h.sendError(c, "invalid user ID format")
+	if convIDStr == "" {
+		h.logger.Error("missing conversation ID")
+		h.sendError(c, "missing conversation ID")
 		return
 	}
 
@@ -155,6 +170,7 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 	} else {
 		// Legacy database-based session (UUID only)
 		isFilesystemSession = false
+		var err error
 		convID, err = uuid.FromString(convIDStr)
 		if err != nil {
 			h.logger.Error("invalid conversation ID", zap.String("conversationID", convIDStr), zap.Error(err))
@@ -589,4 +605,63 @@ func (h *Handler) sendCompleteToClient(client *Client) {
 func decodeProjectPath(encoded string) string {
 	// Import claude.EncodeProjectPath logic here to avoid circular dependencies
 	return claude.DecodeProjectPath(encoded)
+}
+
+// waitForAuthMessage waits for the first message to be an auth message with JWT token
+// Returns the authenticated user ID or error
+func (h *Handler) waitForAuthMessage(c *websocket.Conn) (uuid.UUID, error) {
+	// Set a timeout for auth message
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+
+	_, data, err := c.ReadMessage()
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("failed to read auth message: %w", err)
+	}
+
+	// Reset read deadline
+	_ = c.SetReadDeadline(time.Time{})
+
+	// Parse the message
+	var msg IncomingMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return uuid.Nil, fmt.Errorf("invalid message format: %w", err)
+	}
+
+	if msg.Type != MessageTypeAuth {
+		return uuid.Nil, fmt.Errorf("expected auth message, got: %s", msg.Type)
+	}
+
+	if msg.Content == "" {
+		return uuid.Nil, fmt.Errorf("missing token in auth message")
+	}
+
+	// Validate JWT token
+	token, err := jwt.Parse(msg.Content, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("invalid signing method")
+		}
+		return []byte(h.config.Auth.JWTSecret), nil
+	})
+
+	if err != nil || !token.Valid {
+		return uuid.Nil, fmt.Errorf("invalid or expired token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("invalid token claims")
+	}
+
+	userIDStr, ok := claims["sub"].(string)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("missing user ID in token")
+	}
+
+	userID, err := uuid.FromString(userIDStr)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("invalid user ID format: %w", err)
+	}
+
+	h.logger.Debug("user authenticated via auth message", zap.String("userID", userID.String()))
+	return userID, nil
 }

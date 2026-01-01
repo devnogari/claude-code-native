@@ -27,6 +27,12 @@ data class OutgoingMessage(
          * Creates a ping message to keep the connection alive.
          */
         fun ping() = OutgoingMessage("ping")
+
+        /**
+         * Creates an auth message to authenticate after connection.
+         * This is more secure than passing token as URL parameter.
+         */
+        fun auth(token: String) = OutgoingMessage("auth", token)
     }
 }
 
@@ -64,4 +70,6 @@ object MessageType {
     const val PING = "ping"
     /** Keep-alive pong response from server */
     const val PONG = "pong"
+    /** Authentication message */
+    const val AUTH = "auth"
 }

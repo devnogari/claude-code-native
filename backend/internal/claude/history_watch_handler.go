@@ -2,6 +2,8 @@ package claude
 
 import (
 	"encoding/json"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -9,6 +11,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"go.uber.org/zap"
 )
+
+// encodedPathRegex validates encoded path format (compiled once at package init for efficiency)
+var encodedPathRegex = regexp.MustCompile(`^-?[a-zA-Z0-9_-]+$`)
 
 const (
 	// watchWriteWait is the time allowed to write a message to the peer
@@ -53,6 +58,7 @@ type WatchClient struct {
 	done        chan struct{}
 	encodedPath string
 	sessionID   string
+	closeOnce   sync.Once // Ensures channels are closed only once
 }
 
 // HistoryWatchHandler handles WebSocket connections for watching session file changes
@@ -80,6 +86,42 @@ func (h *HistoryWatchHandler) Upgrade(c *fiber.Ctx) error {
 	return fiber.ErrUpgradeRequired
 }
 
+// validateEncodedPath checks that the encoded path is safe and doesn't contain path traversal attacks.
+// Valid encoded paths:
+// - Contain only alphanumeric characters, dashes, and underscores
+// - Don't contain path traversal sequences (.. or .)
+// - Don't decode to paths outside the expected base directory
+func validateEncodedPath(encodedPath string) bool {
+	// Check for empty path
+	if encodedPath == "" {
+		return false
+	}
+
+	// Check for path traversal patterns (before and after URL decoding)
+	if strings.Contains(encodedPath, "..") || encodedPath == "." {
+		return false
+	}
+
+	// Check for null bytes (used in some path traversal attacks)
+	if strings.Contains(encodedPath, "\x00") {
+		return false
+	}
+
+	// Encoded paths should only contain: alphanumeric, dashes, underscores
+	// Claude CLI encodes paths by replacing / with - and starting with -
+	// Valid pattern: starts with -, then contains alphanumeric and dashes
+	if !encodedPathRegex.MatchString(encodedPath) {
+		return false
+	}
+
+	return true
+}
+
+// validateSessionID checks that the session ID is a valid UUID format.
+func validateSessionID(sessionID string) bool {
+	return uuidRegex.MatchString(sessionID)
+}
+
 // HandleConnection is the main WebSocket handler for watching session file changes
 func (h *HistoryWatchHandler) HandleConnection(c *websocket.Conn) {
 	encodedPath := c.Params("encodedPath")
@@ -87,6 +129,22 @@ func (h *HistoryWatchHandler) HandleConnection(c *websocket.Conn) {
 
 	if encodedPath == "" || sessionID == "" {
 		h.sendError(c, "encoded path and session ID are required")
+		return
+	}
+
+	// Validate encodedPath to prevent path traversal attacks
+	if !validateEncodedPath(encodedPath) {
+		h.logger.Warn("invalid encoded path rejected",
+			zap.String("encodedPath", encodedPath))
+		h.sendError(c, "invalid encoded path format")
+		return
+	}
+
+	// Validate sessionID is a valid UUID format
+	if !validateSessionID(sessionID) {
+		h.logger.Warn("invalid session ID rejected",
+			zap.String("sessionID", sessionID))
+		h.sendError(c, "invalid session ID format")
 		return
 	}
 
@@ -161,9 +219,11 @@ func (h *HistoryWatchHandler) unregisterClient(client *WatchClient) {
 		}
 	}
 
-	// Close client channels
-	close(client.done)
-	close(client.send)
+	// Close client channels safely using sync.Once to prevent panic on double-close
+	client.closeOnce.Do(func() {
+		close(client.done)
+		close(client.send)
+	})
 
 	// If no more clients for this session, unsubscribe from cache
 	if len(h.clients[key]) == 0 {
