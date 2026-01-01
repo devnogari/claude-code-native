@@ -1353,9 +1353,9 @@ class ChatViewModel(
                     // This handles reconnection scenarios where ViewModel was recreated
                     if (!_isStreaming.value) {
                         _isStreaming.value = true
-                        if (streamingMessageId == null) {
-                            streamingMessageId = generateMessageId()
-                        }
+                        // Note: Don't generate temporary ID here
+                        // streamingMessageId will be set by HistoryWatch when it receives the actual message UUID
+                        // This ensures streaming bubble only shows when we have a valid UUID
                         true
                     } else {
                         false
