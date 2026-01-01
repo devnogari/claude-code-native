@@ -1589,17 +1589,9 @@ class ChatViewModel(
 
         println("ChatViewModel: Finalizing HistoryWatch streaming")
 
-        // Reset streaming state
-        _isStreaming.value = false
-        _streamingContent.value = ""
-        _streamingTools.value = emptyList()
-        _streamingBlocks.value = emptyList()
-        streamingMessageId = null
-        isStreamingFromHistoryWatch = false
-        historyWatchStreamingDebounceJob = null
-
-        // Process next queued message if any
-        processNextQueuedMessage()
+        // Reuse finalizeStreamingMessage() to properly save streaming blocks as a message
+        // before clearing the streaming state. This prevents chat logs from disappearing.
+        finalizeStreamingMessage()
     }
 
     private fun generateMessageId(): String {
