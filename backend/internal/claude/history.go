@@ -101,6 +101,15 @@ type ToolUseResult struct {
 	IsImage     bool   `json:"isImage,omitempty"`
 }
 
+// TodoItem represents a single todo item from Claude Code's TodoWrite tool
+type TodoItem struct {
+	Content    string `json:"content"`              // Task description (imperative form)
+	Status     string `json:"status"`               // pending, in_progress, completed
+	ActiveForm string `json:"activeForm,omitempty"` // Present continuous form shown during execution
+	Priority   string `json:"priority,omitempty"`   // Optional: high, medium, low
+	ID         string `json:"id,omitempty"`         // Optional: task ID
+}
+
 // SessionState represents the current state of a Claude session
 type SessionState string
 
@@ -609,4 +618,53 @@ func truncateMapValues(m map[string]interface{}, maxLen int) {
 			}
 		}
 	}
+}
+
+// GetSessionTodos reads todo items for a session from ~/.claude/todos/{sessionId}*.json
+// Returns nil if no todos file exists (not an error condition)
+func GetSessionTodos(sessionID string) ([]TodoItem, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil
+	}
+
+	todosDir := filepath.Join(home, ".claude", "todos")
+
+	// Find todo files matching the session ID pattern
+	pattern := filepath.Join(todosDir, sessionID+"*.json")
+	files, err := filepath.Glob(pattern)
+	if err != nil || len(files) == 0 {
+		return nil, nil
+	}
+
+	// Use the most recently modified todo file
+	var latestFile string
+	var latestTime time.Time
+	for _, file := range files {
+		info, err := os.Stat(file)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(latestTime) {
+			latestTime = info.ModTime()
+			latestFile = file
+		}
+	}
+
+	if latestFile == "" {
+		return nil, nil
+	}
+
+	// Read and parse the todo file
+	data, err := os.ReadFile(latestFile)
+	if err != nil {
+		return nil, nil
+	}
+
+	var todos []TodoItem
+	if err := json.Unmarshal(data, &todos); err != nil {
+		return nil, nil
+	}
+
+	return todos, nil
 }

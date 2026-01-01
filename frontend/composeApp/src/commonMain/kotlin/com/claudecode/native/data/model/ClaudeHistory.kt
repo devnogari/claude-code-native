@@ -113,6 +113,33 @@ enum class SessionState {
 }
 
 /**
+ * Represents a todo item from Claude Code's TodoWrite tool
+ */
+@Serializable
+data class TodoItem(
+    /** Task description (imperative form, e.g., "Run tests") */
+    val content: String,
+    /** Task status: pending, in_progress, completed */
+    val status: String,
+    /** Present continuous form shown during execution (e.g., "Running tests") */
+    val activeForm: String? = null,
+    /** Optional priority: high, medium, low */
+    val priority: String? = null,
+    /** Optional task ID */
+    val id: String? = null
+) {
+    companion object {
+        const val STATUS_PENDING = "pending"
+        const val STATUS_IN_PROGRESS = "in_progress"
+        const val STATUS_COMPLETED = "completed"
+    }
+
+    val isPending: Boolean get() = status == STATUS_PENDING
+    val isInProgress: Boolean get() = status == STATUS_IN_PROGRESS
+    val isCompleted: Boolean get() = status == STATUS_COMPLETED
+}
+
+/**
  * Paginated response for Claude session messages
  */
 @Serializable

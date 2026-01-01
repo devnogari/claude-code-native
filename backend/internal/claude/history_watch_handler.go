@@ -48,6 +48,7 @@ type WatchOutgoingMessage struct {
 	EncodedPath  string          `json:"encoded_path,omitempty"`
 	Messages     []ClaudeMessage `json:"messages,omitempty"`
 	SessionState SessionState    `json:"session_state,omitempty"`
+	Todos        []TodoItem      `json:"todos,omitempty"`
 	Error        string          `json:"error,omitempty"`
 }
 
@@ -251,6 +252,9 @@ func (h *HistoryWatchHandler) handleSessionChange(encodedPath, sessionID string,
 		sessionState = GetSessionState(allMessages)
 	}
 
+	// Get todos for this session
+	todos, _ := GetSessionTodos(sessionID)
+
 	// Create outgoing message
 	msg := &WatchOutgoingMessage{
 		Type:         WatchMessageTypeNewMessages,
@@ -258,6 +262,7 @@ func (h *HistoryWatchHandler) handleSessionChange(encodedPath, sessionID string,
 		EncodedPath:  encodedPath,
 		Messages:     newMessages,
 		SessionState: sessionState,
+		Todos:        todos,
 	}
 
 	data, err := json.Marshal(msg)
