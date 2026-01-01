@@ -19,12 +19,24 @@ import kotlinx.serialization.json.Json
  *
  * Thread-safety: Auth token access is protected by a mutex for safe concurrent access.
  * Token persistence: Uses TokenStorage for platform-specific persistence (localStorage on WASM).
+ * Server host persistence: Uses TokenStorage for saving/loading server host across sessions.
  */
 class ApiClient(
-    baseUrl: String = "http://localhost:8080/api/v1"
+    defaultHost: String = "localhost:8083"
 ) {
-    @PublishedApi internal var baseUrl: String = baseUrl
-        private set
+    companion object {
+        private const val API_PATH = "/api/v1"
+        private const val DEFAULT_PROTOCOL = "http"
+    }
+
+    // Load server host from storage, or use default
+    private var _serverHost: String = TokenStorage.getServerHost() ?: defaultHost
+
+    /** Current server host (e.g., "localhost:8083" or "192.168.1.100:8080") */
+    val serverHost: String get() = _serverHost
+
+    /** Constructed base URL from server host */
+    @PublishedApi internal val baseUrl: String get() = "$DEFAULT_PROTOCOL://$_serverHost$API_PATH"
     private val tokenMutex = Mutex()
     // Load token from storage on initialization
     @PublishedApi internal var currentAuthToken: String? = TokenStorage.getToken()
@@ -107,13 +119,14 @@ class ApiClient(
     }
 
     /**
-     * Updates the base URL for API requests.
-     * Note: This affects all subsequent requests.
+     * Updates the server host for API requests.
+     * Note: This affects all subsequent requests and persists across sessions.
      *
-     * @param url The new base URL
+     * @param host The new server host (e.g., "localhost:8083" or "192.168.1.100:8080")
      */
-    fun updateBaseUrl(url: String) {
-        baseUrl = url
+    fun updateServerHost(host: String) {
+        _serverHost = host
+        TokenStorage.saveServerHost(host)
     }
 
     /**

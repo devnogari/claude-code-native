@@ -1,33 +1,22 @@
 package com.claudecode.native.ui.viewmodel
 
-import com.claudecode.native.data.api.ConversationApi
-import com.claudecode.native.data.api.ProjectApi
-import com.claudecode.native.data.model.Conversation
-import com.claudecode.native.data.model.Project
+import com.claudecode.native.data.api.ClaudeHistoryApi
+import com.claudecode.native.data.model.ClaudeProject
+import com.claudecode.native.data.model.ClaudeSession
 import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.util.toUserMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Project with its conversations for display.
- */
-data class ProjectWithConversations(
-    val project: Project,
-    val conversations: List<Conversation> = emptyList()
-)
-
-/**
  * UI state for the project list screen.
  */
 data class ProjectListUiState(
-    val projects: List<ProjectWithConversations> = emptyList(),
+    val projects: List<ClaudeProject> = emptyList(),
     val favorites: Set<String> = emptySet(),
     val expandedProjects: Set<String> = emptySet(),
     val searchQuery: String = "",
@@ -39,21 +28,21 @@ data class ProjectListUiState(
 /**
  * ViewModel for the project list screen.
  *
- * Displays projects from database (synced from Claude CLI history on login).
+ * Displays projects directly from Claude CLI history (filesystem-based).
+ * No database sync needed - reads directly from ~/.claude/projects/
+ *
  * Supports:
- * - Loading projects from database
- * - Expanding projects to show conversations
- * - Favoriting projects (star icon)
+ * - Loading projects from filesystem via ClaudeHistoryApi
+ * - Expanding projects to show sessions
+ * - Favoriting sessions
  * - Search/filter projects
  *
- * @param projectApi API client for project operations
- * @param conversationApi API client for conversation operations
+ * @param claudeHistoryApi API client for Claude history operations (filesystem-based)
  * @param favoriteRepository Repository for managing favorites
  * @param scope Injected coroutine scope for lifecycle management
  */
 class ProjectListViewModel(
-    private val projectApi: ProjectApi,
-    private val conversationApi: ConversationApi,
+    private val claudeHistoryApi: ClaudeHistoryApi,
     private val favoriteRepository: FavoriteRepository,
     private val scope: CoroutineScope
 ) {
@@ -61,44 +50,56 @@ class ProjectListViewModel(
     val uiState: StateFlow<ProjectListUiState> = _uiState.asStateFlow()
 
     init {
-        // Observe favorites changes
+        // Observe favorites changes and re-sort projects
         scope.launch {
             favoriteRepository.favorites.collect { favorites ->
-                _uiState.value = _uiState.value.copy(favorites = favorites)
+                val currentProjects = _uiState.value.projects
+                val sortedProjects = sortProjects(currentProjects, favorites)
+                _uiState.value = _uiState.value.copy(
+                    favorites = favorites,
+                    projects = sortedProjects
+                )
             }
         }
         loadProjects()
     }
 
     /**
-     * Loads all projects from database.
+     * Sorts projects: favorites first, then by most recent session update.
+     */
+    private fun sortProjects(projects: List<ClaudeProject>, favorites: Set<String>): List<ClaudeProject> {
+        if (projects.isEmpty()) return projects
+
+        return projects.map { project ->
+            // Sort sessions within each project: favorites first, then by updatedAt
+            val sortedSessions = project.sessions.sortedWith(
+                compareByDescending<ClaudeSession> { it.isFavorite }
+                    .thenByDescending { it.updatedAt }
+            )
+            project.copy(sessions = sortedSessions)
+        }.sortedWith(
+            compareByDescending<ClaudeProject> { it.path in favorites }
+                .thenByDescending { project ->
+                    project.sessions.firstOrNull()?.updatedAt ?: project.lastAccessed
+                }
+        )
+    }
+
+    /**
+     * Loads all projects from filesystem via ClaudeHistoryApi.
      */
     fun loadProjects() {
         scope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                val projects = projectApi.getProjects()
-                // Fetch conversations for each project in parallel
-                val projectsWithConversations = projects.map { project ->
-                    async {
-                        val conversations = try {
-                            conversationApi.getConversations(project.id)
-                        } catch (e: Exception) {
-                            emptyList()
-                        }
-                        // Sort conversations: favorites first, then by updatedAt
-                        val sortedConversations = conversations.sortedWith(
-                            compareByDescending<Conversation> { it.isFavorite }
-                                .thenByDescending { it.updatedAt }
-                        )
-                        ProjectWithConversations(project, sortedConversations)
-                    }
-                }.awaitAll()
+                val projects = claudeHistoryApi.getProjects()
 
-                // Sort projects by most recent conversation or project update
-                val sortedProjects = projectsWithConversations.sortedByDescending { pwc ->
-                    pwc.conversations.maxOfOrNull { it.updatedAt } ?: pwc.project.updatedAt
-                }
+                // Filter out projects with no sessions (empty projects)
+                val filteredProjects = projects.filter { it.sessions.isNotEmpty() }
+
+                // Sort with favorites first
+                val currentFavorites = favoriteRepository.favorites.value
+                val sortedProjects = sortProjects(filteredProjects, currentFavorites)
 
                 _uiState.value = _uiState.value.copy(
                     projects = sortedProjects,
@@ -117,31 +118,27 @@ class ProjectListViewModel(
 
     /**
      * Refreshes the project list (for pull-to-refresh).
+     * Calls backend to refresh cache, then reloads projects.
      */
     fun refresh() {
         scope.launch {
             _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
             try {
-                val projects = projectApi.getProjects()
-                val projectsWithConversations = projects.map { project ->
-                    async {
-                        val conversations = try {
-                            conversationApi.getConversations(project.id)
-                        } catch (e: Exception) {
-                            emptyList()
-                        }
-                        // Sort conversations: favorites first, then by updatedAt
-                        val sortedConversations = conversations.sortedWith(
-                            compareByDescending<Conversation> { it.isFavorite }
-                                .thenByDescending { it.updatedAt }
-                        )
-                        ProjectWithConversations(project, sortedConversations)
-                    }
-                }.awaitAll()
-
-                val sortedProjects = projectsWithConversations.sortedByDescending { pwc ->
-                    pwc.conversations.maxOfOrNull { it.updatedAt } ?: pwc.project.updatedAt
+                // Tell backend to refresh its cache
+                try {
+                    claudeHistoryApi.refresh()
+                } catch (e: Exception) {
+                    // Log but continue - cache refresh failure shouldn't block
                 }
+
+                val projects = claudeHistoryApi.getProjects()
+
+                // Filter out projects with no sessions
+                val filteredProjects = projects.filter { it.sessions.isNotEmpty() }
+
+                // Sort with favorites first
+                val currentFavorites = favoriteRepository.favorites.value
+                val sortedProjects = sortProjects(filteredProjects, currentFavorites)
 
                 _uiState.value = _uiState.value.copy(
                     projects = sortedProjects,
@@ -188,81 +185,67 @@ class ProjectListViewModel(
     }
 
     /**
-     * Returns filtered projects based on search query.
+     * Returns filtered projects based on search query, sorted with favorites first.
      */
-    fun getFilteredProjects(): List<ProjectWithConversations> {
+    fun getFilteredProjects(): List<ClaudeProject> {
         val query = _uiState.value.searchQuery.lowercase()
         val projects = _uiState.value.projects
+        val currentFavorites = _uiState.value.favorites
 
-        if (query.isEmpty()) return projects
-
-        return projects.filter { pwc ->
-            pwc.project.name.lowercase().contains(query) ||
-            pwc.project.path.lowercase().contains(query) ||
-            pwc.conversations.any { it.title?.lowercase()?.contains(query) == true }
-        }
-    }
-
-    /**
-     * Handles conversation click - navigates to chat screen.
-     *
-     * @param conversationId The conversation ID to navigate to
-     * @param onNavigate Callback with conversation ID for navigation
-     */
-    fun onConversationClick(conversationId: String, onNavigate: (String) -> Unit) {
-        onNavigate(conversationId)
-    }
-
-    /**
-     * Creates a new project manually (for FAB action).
-     *
-     * @param name The project name
-     * @param path The local filesystem path
-     */
-    fun createProject(name: String, path: String) {
-        if (name.isBlank() || path.isBlank()) {
-            _uiState.value = _uiState.value.copy(error = "Name and path are required")
-            return
-        }
-
-        scope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-            try {
-                projectApi.createProject(name, path)
-                // Refresh to show the new project
-                refresh()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = e.toUserMessage()
-                )
+        val filteredProjects = if (query.isEmpty()) {
+            projects
+        } else {
+            projects.filter { project ->
+                project.name.lowercase().contains(query) ||
+                project.path.lowercase().contains(query) ||
+                project.sessions.any { it.firstMessage.lowercase().contains(query) }
             }
         }
+
+        return sortProjects(filteredProjects, currentFavorites)
     }
 
     /**
-     * Creates a new conversation in a project.
+     * Handles session click - navigates to chat screen.
      *
-     * @param projectId The project ID
-     * @param title The conversation title
-     * @param onCreated Callback with conversation ID when created
+     * @param sessionId The session ID to navigate to
+     * @param encodedPath The encoded project path
+     * @param onNavigate Callback with session ID and encoded path for navigation
      */
-    fun createConversation(projectId: String, title: String, onCreated: (String) -> Unit) {
+    fun onSessionClick(sessionId: String, encodedPath: String, onNavigate: (String, String) -> Unit) {
+        onNavigate(sessionId, encodedPath)
+    }
+
+    /**
+     * Toggles the favorite status of a session.
+     *
+     * @param sessionId The session ID
+     * @param projectPath The project path
+     */
+    fun toggleSessionFavorite(sessionId: String, projectPath: String) {
         scope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                val conversation = conversationApi.createConversation(projectId, title)
-                _uiState.value = _uiState.value.copy(isLoading = false)
-                onCreated(conversation.id)
+                val response = claudeHistoryApi.toggleSessionFavorite(sessionId, projectPath)
+
+                // Update local state
+                val updatedProjects = _uiState.value.projects.map { project ->
+                    if (project.path == projectPath) {
+                        val updatedSessions = project.sessions.map { session ->
+                            if (session.id == sessionId) {
+                                session.copy(isFavorite = response.isFavorite)
+                            } else session
+                        }.sortedWith(
+                            compareByDescending<ClaudeSession> { it.isFavorite }
+                                .thenByDescending { it.updatedAt }
+                        )
+                        project.copy(sessions = updatedSessions)
+                    } else project
+                }
+                _uiState.value = _uiState.value.copy(projects = updatedProjects)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = e.toUserMessage()
-                )
+                _uiState.value = _uiState.value.copy(error = e.toUserMessage())
             }
         }
     }
@@ -275,41 +258,9 @@ class ProjectListViewModel(
     }
 
     /**
-     * Toggles the favorite status of a conversation.
+     * Deletes a session's files.
      *
-     * @param conversationId The conversation ID
-     */
-    fun toggleConversationFavorite(conversationId: String) {
-        scope.launch {
-            try {
-                val updatedConversation = conversationApi.toggleFavorite(conversationId)
-
-                // Update local state and re-sort conversations
-                val updatedProjects = _uiState.value.projects.map { pwc ->
-                    val updatedConversations = pwc.conversations.map { conv ->
-                        if (conv.id == conversationId) {
-                            conv.copy(isFavorite = updatedConversation.isFavorite)
-                        } else conv
-                    }.sortedWith(
-                        compareByDescending<Conversation> { it.isFavorite }
-                            .thenByDescending { it.updatedAt }
-                    )
-                    pwc.copy(conversations = updatedConversations)
-                }
-                _uiState.value = _uiState.value.copy(projects = updatedProjects)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(error = e.toUserMessage())
-            }
-        }
-    }
-
-    /**
-     * Deletes the Claude CLI session for a conversation.
-     * Uses the direct deletion endpoint that works with project path.
-     *
-     * @param conversationId The conversation/session ID
+     * @param conversationId The session ID to delete (aliased as conversationId for compatibility)
      * @param projectPath The project path
      * @param onSuccess Callback when deletion succeeds
      * @param onError Callback when deletion fails
@@ -317,12 +268,12 @@ class ProjectListViewModel(
     fun deleteSession(
         conversationId: String,
         projectPath: String,
-        onSuccess: () -> Unit = {},
-        onError: (String) -> Unit = {}
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
     ) {
         scope.launch {
             try {
-                conversationApi.deleteSessionDirect(conversationId, projectPath)
+                claudeHistoryApi.deleteSession(conversationId, projectPath)
                 onSuccess()
             } catch (e: CancellationException) {
                 throw e
@@ -330,5 +281,22 @@ class ProjectListViewModel(
                 onError(e.toUserMessage())
             }
         }
+    }
+
+    /**
+     * Creates a new project.
+     * Note: With filesystem-based API, projects are discovered from Claude CLI usage.
+     * This method is kept for manual project registration if needed.
+     *
+     * @param name The project name
+     * @param path The project path
+     */
+    fun createProject(name: String, path: String) {
+        // With the filesystem-based approach, projects are auto-discovered.
+        // This method could be used for manual registration if the backend supports it.
+        // For now, just show a message that projects are auto-discovered.
+        _uiState.value = _uiState.value.copy(
+            error = "Projects are automatically discovered from Claude CLI usage. Start using Claude Code in '$path' to see it here."
+        )
     }
 }

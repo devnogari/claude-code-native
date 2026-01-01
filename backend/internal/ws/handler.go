@@ -121,70 +121,108 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 		return
 	}
 
-	convID, err := uuid.FromString(convIDStr)
-	if err != nil {
-		h.logger.Error("invalid conversation ID", zap.String("conversationID", convIDStr), zap.Error(err))
-		h.sendError(c, "invalid conversation ID")
-		return
-	}
-
-	// Verify the conversation exists
-	ctx := context.Background()
-	conv, err := h.convRepo.FindByID(ctx, convID)
-	if err != nil {
-		h.logger.Error("conversation not found", zap.String("conversationID", convIDStr), zap.Error(err))
-		h.sendError(c, "conversation not found")
-		return
-	}
-
-	// Verify the project exists and get the working directory
-	proj, err := h.projRepo.FindByID(ctx, conv.ProjectID)
-	if err != nil {
-		h.logger.Error("project not found", zap.String("projectID", conv.ProjectID.String()), zap.Error(err))
-		h.sendError(c, "project not found")
-		return
-	}
-
-	// Verify the user owns the project (authorization check)
-	if proj.UserID != userID {
-		h.logger.Warn("unauthorized access attempt",
-			zap.String("userID", userID.String()),
-			zap.String("projectUserID", proj.UserID.String()),
-			zap.String("conversationID", convIDStr))
-		h.sendError(c, "unauthorized")
-		return
-	}
-
-	// Determine the Claude session ID to use
-	// If conversation was synced from Claude history, use the original session ID
-	// Otherwise, use the conversation ID as session ID
+	// Check if this is a filesystem-based session
+	// Filesystem sessions have a 'project' query parameter with the encoded project path
+	var convID uuid.UUID
 	var claudeSessionID uuid.UUID
-	if conv.ClaudeSession != nil && *conv.ClaudeSession != "" {
-		parsedID, err := uuid.FromString(*conv.ClaudeSession)
-		if err == nil {
-			claudeSessionID = parsedID
-			h.logger.Debug("using claude session from sync",
-				zap.String("conversationID", convID.String()),
-				zap.String("claudeSession", claudeSessionID.String()))
+	var projectPath string
+	var isFilesystemSession bool
+
+	encodedPath := c.Query("project")
+	if encodedPath != "" {
+		// Filesystem-based session: sessionId with ?project=encodedPath query param
+		isFilesystemSession = true
+
+		// Parse session ID as UUID
+		sessionID, err := uuid.FromString(convIDStr)
+		if err != nil {
+			h.logger.Error("invalid session ID", zap.String("sessionID", convIDStr), zap.Error(err))
+			h.sendError(c, "invalid session ID")
+			return
+		}
+
+		// Decode project path (replace - with /)
+		projectPath = decodeProjectPath(encodedPath)
+
+		// Use session ID for both conversation and claude session
+		convID = sessionID
+		claudeSessionID = sessionID
+
+		h.logger.Info("filesystem session connected",
+			zap.String("sessionID", sessionID.String()),
+			zap.String("encodedPath", encodedPath),
+			zap.String("projectPath", projectPath))
+	} else {
+		// Legacy database-based session (UUID only)
+		isFilesystemSession = false
+		convID, err = uuid.FromString(convIDStr)
+		if err != nil {
+			h.logger.Error("invalid conversation ID", zap.String("conversationID", convIDStr), zap.Error(err))
+			h.sendError(c, "invalid conversation ID")
+			return
+		}
+
+		// Verify the conversation exists
+		ctx := context.Background()
+		conv, err := h.convRepo.FindByID(ctx, convID)
+		if err != nil {
+			h.logger.Error("conversation not found", zap.String("conversationID", convIDStr), zap.Error(err))
+			h.sendError(c, "conversation not found")
+			return
+		}
+
+		// Verify the project exists and get the working directory
+		proj, err := h.projRepo.FindByID(ctx, conv.ProjectID)
+		if err != nil {
+			h.logger.Error("project not found", zap.String("projectID", conv.ProjectID.String()), zap.Error(err))
+			h.sendError(c, "project not found")
+			return
+		}
+
+		// Verify the user owns the project (authorization check)
+		if proj.UserID != userID {
+			h.logger.Warn("unauthorized access attempt",
+				zap.String("userID", userID.String()),
+				zap.String("projectUserID", proj.UserID.String()),
+				zap.String("conversationID", convIDStr))
+			h.sendError(c, "unauthorized")
+			return
+		}
+
+		projectPath = proj.Path
+
+		// Determine the Claude session ID to use
+		// If conversation was synced from Claude history, use the original session ID
+		// Otherwise, use the conversation ID as session ID
+		if conv.ClaudeSession != nil && *conv.ClaudeSession != "" {
+			parsedID, err := uuid.FromString(*conv.ClaudeSession)
+			if err == nil {
+				claudeSessionID = parsedID
+				h.logger.Debug("using claude session from sync",
+					zap.String("conversationID", convID.String()),
+					zap.String("claudeSession", claudeSessionID.String()))
+			} else {
+				claudeSessionID = convID
+			}
 		} else {
 			claudeSessionID = convID
 		}
-	} else {
-		claudeSessionID = convID
 	}
 
 	// Create a new client
 	client := NewClient(userID, convID, c)
 
 	// Store the project path and claude session ID in client for later use
-	c.Locals("projectPath", proj.Path)
+	c.Locals("projectPath", projectPath)
 	c.Locals("claudeSessionID", claudeSessionID.String())
+	c.Locals("isFilesystemSession", isFilesystemSession)
 
 	h.logger.Info("client connected",
 		zap.String("clientID", client.ID.String()),
 		zap.String("userID", userID.String()),
 		zap.String("conversationID", convID.String()),
-		zap.String("projectPath", proj.Path))
+		zap.String("projectPath", projectPath),
+		zap.Bool("isFilesystemSession", isFilesystemSession))
 
 	// Register client with hub
 	h.hub.Register(client)
@@ -202,12 +240,12 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 
 	// Start read and write pumps
 	go h.writePump(client)
-	h.readPump(client, proj.Path, claudeSessionID)
+	h.readPump(client, projectPath, claudeSessionID, isFilesystemSession)
 }
 
 // readPump reads messages from the WebSocket connection
 // Note: Client unregistration is handled by HandleConnection's defer, not here
-func (h *Handler) readPump(client *Client, projectPath string, claudeSessionID uuid.UUID) {
+func (h *Handler) readPump(client *Client, projectPath string, claudeSessionID uuid.UUID, isFilesystemSession bool) {
 	client.Conn.SetReadLimit(maxMessageSize)
 	_ = client.Conn.SetReadDeadline(time.Now().Add(pongWait))
 	client.Conn.SetPongHandler(func(string) error {
@@ -237,7 +275,7 @@ func (h *Handler) readPump(client *Client, projectPath string, claudeSessionID u
 		}
 
 		// Handle message based on type
-		h.handleMessage(client, &msg, projectPath, claudeSessionID)
+		h.handleMessage(client, &msg, projectPath, claudeSessionID, isFilesystemSession)
 	}
 }
 
@@ -276,10 +314,10 @@ func (h *Handler) writePump(client *Client) {
 }
 
 // handleMessage routes incoming messages to appropriate handlers
-func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPath string, claudeSessionID uuid.UUID) {
+func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPath string, claudeSessionID uuid.UUID, isFilesystemSession bool) {
 	switch msg.Type {
 	case MessageTypeChat:
-		h.handleChatMessage(client, msg.Content, projectPath, claudeSessionID)
+		h.handleChatMessage(client, msg.Content, projectPath, claudeSessionID, isFilesystemSession)
 	case MessageTypeStop:
 		h.handleStopMessage(client, claudeSessionID)
 	case MessageTypePing:
@@ -293,7 +331,7 @@ func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPat
 }
 
 // handleChatMessage processes a chat message from the client
-func (h *Handler) handleChatMessage(client *Client, content, projectPath string, claudeSessionID uuid.UUID) {
+func (h *Handler) handleChatMessage(client *Client, content, projectPath string, claudeSessionID uuid.UUID, isFilesystemSession bool) {
 	if content == "" {
 		h.sendErrorToClient(client, "empty message content")
 		return
@@ -304,7 +342,6 @@ func (h *Handler) handleChatMessage(client *Client, content, projectPath string,
 		return
 	}
 
-	ctx := context.Background()
 	convID := client.ConversationID
 
 	h.logger.Info("received chat message",
@@ -312,29 +349,36 @@ func (h *Handler) handleChatMessage(client *Client, content, projectPath string,
 		zap.String("conversationID", convID.String()),
 		zap.String("claudeSessionID", claudeSessionID.String()),
 		zap.Int("contentLength", len(content)),
-		zap.String("projectPath", projectPath))
+		zap.String("projectPath", projectPath),
+		zap.Bool("isFilesystemSession", isFilesystemSession))
 
-	// Get next sequence number
-	h.logger.Debug("getting max sequence number")
-	maxSeq, err := h.msgRepo.GetMaxSequenceNum(ctx, convID)
-	if err != nil {
-		h.logger.Error("failed to get max sequence number", zap.Error(err))
-		h.sendErrorToClient(client, "internal error")
-		return
-	}
+	// For database-based sessions, save the user message
+	// For filesystem sessions, Claude CLI manages its own history
+	if !isFilesystemSession {
+		ctx := context.Background()
 
-	// Save the user message
-	userMsg := &message.Message{
-		ConversationID: convID,
-		Role:           message.RoleUser,
-		Content:        content,
-		SequenceNum:    maxSeq + 1,
-	}
+		// Get next sequence number
+		h.logger.Debug("getting max sequence number")
+		maxSeq, err := h.msgRepo.GetMaxSequenceNum(ctx, convID)
+		if err != nil {
+			h.logger.Error("failed to get max sequence number", zap.Error(err))
+			h.sendErrorToClient(client, "internal error")
+			return
+		}
 
-	if err := h.msgRepo.Create(ctx, userMsg); err != nil {
-		h.logger.Error("failed to save user message", zap.Error(err))
-		h.sendErrorToClient(client, "failed to save message")
-		return
+		// Save the user message
+		userMsg := &message.Message{
+			ConversationID: convID,
+			Role:           message.RoleUser,
+			Content:        content,
+			SequenceNum:    maxSeq + 1,
+		}
+
+		if err := h.msgRepo.Create(ctx, userMsg); err != nil {
+			h.logger.Error("failed to save user message", zap.Error(err))
+			h.sendErrorToClient(client, "failed to save message")
+			return
+		}
 	}
 
 	// Send status update
@@ -373,7 +417,7 @@ func (h *Handler) handleChatMessage(client *Client, content, projectPath string,
 		zap.String("claudeSessionID", claudeSessionID.String()))
 
 	// Stream process output to client
-	go h.streamProcessOutput(client, process)
+	go h.streamProcessOutput(client, process, isFilesystemSession)
 }
 
 // handleStopMessage stops the current Claude process
@@ -398,8 +442,7 @@ func (h *Handler) handlePingMessage(client *Client) {
 
 // streamProcessOutput streams Claude CLI output to the WebSocket client
 // It monitors the client.Done channel to detect client disconnection and avoid race conditions
-func (h *Handler) streamProcessOutput(client *Client, process *claude.Process) {
-	ctx := context.Background()
+func (h *Handler) streamProcessOutput(client *Client, process *claude.Process, isFilesystemSession bool) {
 	convID := client.ConversationID
 	var assistantContent string
 
@@ -456,8 +499,10 @@ streamLoop:
 		}
 	}
 
-	// Save the assistant message if we received any content
-	if assistantContent != "" {
+	// Save the assistant message if we received any content (database-based sessions only)
+	// For filesystem sessions, Claude CLI manages its own history
+	if assistantContent != "" && !isFilesystemSession {
+		ctx := context.Background()
 		maxSeq, err := h.msgRepo.GetMaxSequenceNum(ctx, convID)
 		if err != nil {
 			h.logger.Error("failed to get max sequence number", zap.Error(err))
@@ -536,4 +581,12 @@ func (h *Handler) sendCompleteToClient(client *Client) {
 	case client.Send <- data:
 	default:
 	}
+}
+
+// decodeProjectPath converts an encoded path back to the original filesystem path.
+// Claude CLI encodes paths by replacing / with -
+// This function uses smart decoding that verifies paths exist on the filesystem.
+func decodeProjectPath(encoded string) string {
+	// Import claude.EncodeProjectPath logic here to avoid circular dependencies
+	return claude.DecodeProjectPath(encoded)
 }

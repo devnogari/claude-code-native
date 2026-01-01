@@ -75,9 +75,9 @@ frontend:
 
 # Start frontend with hot reload (watches for changes)
 frontend-watch:
-	@echo "Starting desktop app with hot reload (experimental)..."
-	@echo "Hot reload: Modify code and rebuild will happen automatically"
-	cd frontend && ./gradlew composeApp:hotRunDesktop --mainClass=com.claudecode.native.MainKt
+	@echo "Starting desktop app with hot reload..."
+	@echo "Hot reload: Code changes will be automatically applied"
+	cd frontend && ./gradlew composeApp:hotRunDesktop --mainClass=com.claudecode.native.MainKt --auto
 
 # Start frontend web app (wasm)
 frontend-web:

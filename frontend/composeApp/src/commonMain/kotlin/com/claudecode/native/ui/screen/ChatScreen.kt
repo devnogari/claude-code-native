@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.ArrowDownward
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -30,16 +33,34 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalFocusManager
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.ui.component.MessageBubble
+import com.claudecode.native.ui.component.QueuedMessageBubble
+import com.claudecode.native.ui.component.ProcessingIndicator
+import com.claudecode.native.ui.component.SlashCommand
+import com.claudecode.native.ui.component.SlashCommandMenu
 import com.claudecode.native.ui.component.StreamingBubble
+import com.claudecode.native.ui.component.ThinkingBubble
+import com.claudecode.native.ui.component.defaultSlashCommands
 import com.claudecode.native.ui.viewmodel.ChatViewModel
+import com.claudecode.native.ui.viewmodel.ContentBlock
 import org.koin.compose.koinInject
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 
 /**
  * Chat screen for real-time messaging with Claude.
@@ -87,6 +108,37 @@ fun ChatScreenContent(
 ) {
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+
+    // Track if user is at bottom of the list (for showing scroll button and auto-scroll)
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+            val totalItems = layoutInfo.totalItemsCount
+            // Consider at bottom if: no items, last item visible, or very few items
+            totalItems == 0 ||
+                lastVisibleItem == null ||
+                lastVisibleItem.index >= totalItems - 1 ||
+                totalItems <= 3
+        }
+    }
+
+    // Track if user manually scrolled up (to disable auto-scroll)
+    var userScrolledUp by remember { mutableStateOf(false) }
+
+    // Detect when user scrolls away from bottom
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress to isAtBottom }
+            .collect { (scrolling, atBottom) ->
+                if (scrolling && !atBottom) {
+                    userScrolledUp = true
+                } else if (atBottom) {
+                    userScrolledUp = false
+                }
+            }
+    }
 
     // Menu and dialog states
     var showMenu by remember { mutableStateOf(false) }
@@ -96,6 +148,9 @@ fun ChatScreenContent(
     val messages by viewModel.messages.collectAsState()
     val isStreaming by viewModel.isStreaming.collectAsState()
     val streamingContent by viewModel.streamingContent.collectAsState()
+    val streamingTools by viewModel.streamingTools.collectAsState()
+    val streamingBlocks by viewModel.streamingBlocks.collectAsState()
+    val queuedMessages by viewModel.queuedMessages.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
 
@@ -111,19 +166,59 @@ fun ChatScreenContent(
         }
     }
 
-    // Auto-scroll to bottom when new messages arrive or streaming content updates
-    LaunchedEffect(messages.size, streamingContent) {
-        if (messages.isNotEmpty() || streamingContent.isNotEmpty()) {
-            val targetIndex = if (isStreaming) messages.size else messages.size - 1
-            if (targetIndex >= 0) {
-                try {
-                    // Use scrollToItem for initial load to avoid layout conflicts on iOS
-                    // animateScrollToItem can cause "layout state is not idle" crashes
-                    listState.scrollToItem(targetIndex.coerceAtLeast(0))
-                } catch (e: Exception) {
-                    // Ignore layout exceptions during scroll
+    // Filter out empty messages (no blocks) for display count
+    val filteredMessagesCount = messages.count { it.blocks.isNotEmpty() }
+
+    // Scroll to bottom when conversation first loads
+    var hasScrolledToBottom by remember(conversationId) { mutableStateOf(false) }
+    LaunchedEffect(conversationId, messages.size) {
+        if (!hasScrolledToBottom && messages.isNotEmpty()) {
+            // Wait a bit for layout to complete
+            kotlinx.coroutines.delay(100)
+            try {
+                val totalItems = listState.layoutInfo.totalItemsCount
+                if (totalItems > 0) {
+                    listState.scrollToItem(totalItems - 1)
                 }
+            } catch (e: Exception) {
+                // Ignore layout exceptions
             }
+            hasScrolledToBottom = true
+        }
+    }
+
+    // Track if there are new messages when not at bottom
+    var hasNewMessages by remember { mutableStateOf(false) }
+
+    // Swipe to go back state
+    var swipeOffset by remember { mutableStateOf(0f) }
+    val swipeThreshold = 100f  // Minimum swipe distance to trigger back
+
+    // Single auto-scroll effect: scroll to bottom when new content arrives (unless user scrolled up)
+    LaunchedEffect(messages.size, streamingBlocks.size, isStreaming) {
+        val totalItems = listState.layoutInfo.totalItemsCount
+        if (totalItems > 0) {
+            if (!userScrolledUp) {
+                // Auto-scroll to bottom
+                try {
+                    listState.animateScrollToItem(totalItems - 1)
+                } catch (e: Exception) {
+                    try {
+                        listState.scrollToItem(totalItems - 1)
+                    } catch (_: Exception) {}
+                }
+                hasNewMessages = false
+            } else {
+                // User scrolled up, show new message indicator
+                hasNewMessages = true
+            }
+        }
+    }
+
+    // Clear new messages indicator when user reaches bottom
+    LaunchedEffect(isAtBottom) {
+        if (isAtBottom) {
+            hasNewMessages = false
         }
     }
 
@@ -170,9 +265,56 @@ fun ChatScreenContent(
     }
 
     Scaffold(
+        modifier = Modifier.pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragStart = { swipeOffset = 0f },
+                onDragEnd = {
+                    if (swipeOffset > swipeThreshold) {
+                        onBack()
+                    }
+                    swipeOffset = 0f
+                },
+                onDragCancel = { swipeOffset = 0f },
+                onHorizontalDrag = { _, dragAmount ->
+                    // Only track right swipes (positive drag from left edge)
+                    if (dragAmount > 0 || swipeOffset > 0) {
+                        swipeOffset = (swipeOffset + dragAmount).coerceAtLeast(0f)
+                    }
+                }
+            )
+        },
         topBar = {
             TopAppBar(
-                title = { Text("Chat") },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("Chat")
+                        // Thinking indicator in title bar
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isStreaming,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "Thinking...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -182,6 +324,21 @@ fun ChatScreenContent(
                     }
                 },
                 actions = {
+                    // Stop button when streaming
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isStreaming,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        TextButton(
+                            onClick = { viewModel.stopGeneration() },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text("Stop")
+                        }
+                    }
                     Box {
                         IconButton(onClick = { showMenu = true }) {
                             Icon(
@@ -278,30 +435,156 @@ fun ChatScreenContent(
                 }
             }
 
-            // Messages list
-            LazyColumn(
+            // Messages list - filter out empty messages (no blocks) to avoid blank spaces
+            val filteredMessages = messages.filter { it.blocks.isNotEmpty() }
+
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                state = listState,
-                contentPadding = PaddingValues(vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .pointerInput(Unit) {
+                        // Clear focus (dismiss keyboard) when tapping on message area
+                        detectTapGestures(onTap = { focusManager.clearFocus() })
+                    }
             ) {
-                items(
-                    items = messages,
-                    key = { it.id }
-                ) { message ->
-                    MessageBubble(message = message)
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    state = listState,
+                    contentPadding = PaddingValues(
+                        top = 16.dp,
+                        bottom = 16.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(
+                        items = filteredMessages,
+                        key = { it.id }
+                    ) { message ->
+                        MessageBubble(message = message)
+                    }
+
+                    // Show streaming bubble when receiving a response
+                    if (isStreaming) {
+                        item(key = "streaming") {
+                            StreamingBubble(
+                                content = streamingContent,
+                                tools = streamingTools,
+                                blocks = streamingBlocks
+                            )
+                        }
+                    }
+
+                    // Show queued messages (user messages waiting to be processed)
+                    if (queuedMessages.isNotEmpty()) {
+                        items(
+                            items = queuedMessages,
+                            key = { "queued_${it.hashCode()}" }
+                        ) { queuedContent ->
+                            QueuedMessageBubble(content = queuedContent)
+                        }
+                    }
                 }
 
-                // Show streaming bubble when receiving a response
-                if (isStreaming) {
-                    item(key = "streaming") {
-                        StreamingBubble(content = streamingContent)
+                // Scroll to bottom button with new message preview
+                // Shows when not at bottom or when there are new messages
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = !isAtBottom || hasNewMessages,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp)
+                        .zIndex(1f),
+                    enter = fadeIn() + slideInVertically { it },
+                    exit = fadeOut() + slideOutVertically { it }
+                ) {
+                    // Get latest message preview for the button
+                    val latestMessage = messages.lastOrNull()
+                    val previewText = when {
+                        isStreaming && streamingContent.isNotEmpty() ->
+                            streamingContent.take(50).replace("\n", " ") + "..."
+                        latestMessage != null ->
+                            latestMessage.content.take(50).replace("\n", " ") + if (latestMessage.content.length > 50) "..." else ""
+                        else -> null
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        // New message preview chip
+                        if (hasNewMessages && previewText != null) {
+                            Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.widthIn(max = 280.dp)
+                            ) {
+                                Text(
+                                    text = previewText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+
+                        // Scroll to bottom button
+                        SmallFloatingActionButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    val totalItems = listState.layoutInfo.totalItemsCount
+                                    if (totalItems > 0) {
+                                        try {
+                                            listState.animateScrollToItem(totalItems - 1)
+                                        } catch (e: Exception) {
+                                            listState.scrollToItem(totalItems - 1)
+                                        }
+                                    }
+                                    hasNewMessages = false
+                                    userScrolledUp = false
+                                }
+                            },
+                            containerColor = if (hasNewMessages) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            contentColor = if (hasNewMessages) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            shape = CircleShape
+                        ) {
+                            Icon(
+                                Icons.Default.ArrowDownward,
+                                contentDescription = "Scroll to bottom"
+                            )
+                        }
                     }
                 }
             }
+
+            // Slash command menu - shows when input starts with "/"
+            val showSlashMenu = inputText.startsWith("/") && !isStreaming
+            val slashFilter = if (inputText.startsWith("/")) {
+                inputText.removePrefix("/").takeWhile { !it.isWhitespace() }
+            } else ""
+
+            SlashCommandMenu(
+                visible = showSlashMenu,
+                filter = slashFilter,
+                onCommandSelected = { command ->
+                    handleSlashCommand(
+                        command = command,
+                        viewModel = viewModel,
+                        onClearInput = { inputText = "" },
+                        onShowDeleteDialog = { showDeleteDialog = true }
+                    )
+                },
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
 
             // Input area
             ChatInputBar(
@@ -310,8 +593,26 @@ fun ChatScreenContent(
                 isStreaming = isStreaming,
                 isConnected = connectionState == ConnectionState.Connected,
                 onSend = {
-                    viewModel.sendMessage(inputText)
-                    inputText = ""
+                    // Check if it's a slash command
+                    if (inputText.startsWith("/")) {
+                        val commandName = inputText.removePrefix("/").split(" ").firstOrNull() ?: ""
+                        val command = defaultSlashCommands.find { it.name.equals(commandName, ignoreCase = true) }
+                        if (command != null) {
+                            handleSlashCommand(
+                                command = command,
+                                viewModel = viewModel,
+                                onClearInput = { inputText = "" },
+                                onShowDeleteDialog = { showDeleteDialog = true }
+                            )
+                        } else {
+                            // Unknown command - send as regular message
+                            viewModel.sendMessage(inputText)
+                            inputText = ""
+                        }
+                    } else {
+                        viewModel.sendMessage(inputText)
+                        inputText = ""
+                    }
                 },
                 onStop = { viewModel.stopGeneration() },
                 modifier = Modifier
@@ -458,7 +759,7 @@ private fun ChatInputBar(
                     .onPreviewKeyEvent { keyEvent ->
                         // Desktop: Enter to send (without Shift), Shift+Enter for newline
                         if (keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown) {
-                            if (!keyEvent.isShiftPressed && inputText.isNotBlank() && !isStreaming && isConnected) {
+                            if (!keyEvent.isShiftPressed && inputText.isNotBlank() && isConnected) {
                                 onSend()
                                 true // Consume the event
                             } else {
@@ -468,21 +769,28 @@ private fun ChatInputBar(
                             false
                         }
                     },
-                placeholder = { Text("Type a message...") },
-                enabled = !isStreaming && isConnected,
+                placeholder = {
+                    Text(
+                        if (!isConnected) "Read-only (viewing history)"
+                        else if (isStreaming) "Type to queue message..."
+                        else "Type a message..."
+                    )
+                },
+                enabled = true,  // Always enabled - allow typing to queue messages during streaming
                 singleLine = false,
                 maxLines = 4,
                 // iOS: Use keyboard send action
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(
                     onSend = {
-                        if (inputText.isNotBlank() && !isStreaming && isConnected) {
+                        if (inputText.isNotBlank() && isConnected) {
                             onSend()
                         }
                     }
                 )
             )
 
+            // Show both Stop button (when streaming) and Send button (always)
             if (isStreaming) {
                 // Stop button during streaming
                 IconButton(
@@ -497,24 +805,78 @@ private fun ChatInputBar(
                         contentDescription = "Stop generation"
                     )
                 }
-            } else {
-                // Send button when not streaming
-                IconButton(
-                    onClick = onSend,
-                    enabled = inputText.isNotBlank() && isConnected,
-                    colors = IconButtonDefaults.iconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send message"
-                    )
-                }
             }
+
+            // Send button - always visible, queues message during streaming
+            IconButton(
+                onClick = onSend,
+                enabled = inputText.isNotBlank() && isConnected,
+                colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = if (isStreaming) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    contentColor = if (isStreaming) {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onPrimary
+                    },
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = if (isStreaming) "Queue message" else "Send message"
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Handles slash command execution.
+ *
+ * @param command The slash command to execute
+ * @param viewModel The chat view model for actions
+ * @param onClearInput Callback to clear the input field
+ * @param onShowDeleteDialog Callback to show the delete session dialog
+ */
+private fun handleSlashCommand(
+    command: SlashCommand,
+    viewModel: ChatViewModel,
+    onClearInput: () -> Unit,
+    onShowDeleteDialog: () -> Unit
+) {
+    when (command.name.lowercase()) {
+        "clear" -> {
+            viewModel.clearMessages()
+            onClearInput()
+        }
+        "reset" -> {
+            onShowDeleteDialog()
+            onClearInput()
+        }
+        "help" -> {
+            // Send help command to Claude
+            viewModel.sendMessage("/help")
+            onClearInput()
+        }
+        "compact" -> {
+            // Send compact request to Claude
+            viewModel.sendMessage("/compact")
+            onClearInput()
+        }
+        "init" -> {
+            // Send init command
+            viewModel.sendMessage("/init")
+            onClearInput()
+        }
+        else -> {
+            // Unknown command - send as message
+            viewModel.sendMessage("/${command.name}")
+            onClearInput()
         }
     }
 }

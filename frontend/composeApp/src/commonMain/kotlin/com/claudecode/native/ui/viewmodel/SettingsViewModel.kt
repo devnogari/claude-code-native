@@ -27,9 +27,9 @@ class SettingsViewModel(
     private val themeRepository: ThemeRepository,
     private val scope: CoroutineScope
 ) {
-    private val _serverUrl = MutableStateFlow(apiClient.baseUrl)
-    /** Current server URL. */
-    val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
+    private val _serverHost = MutableStateFlow(apiClient.serverHost)
+    /** Current server host (e.g., "localhost:8083"). */
+    val serverHost: StateFlow<String> = _serverHost.asStateFlow()
 
     /** Whether dark mode is enabled. Delegates to ThemeRepository. */
     val isDarkMode: StateFlow<Boolean> = themeRepository.isDarkMode
@@ -51,13 +51,13 @@ class SettingsViewModel(
     val message: StateFlow<String?> = _message.asStateFlow()
 
     /**
-     * Updates the server URL configuration.
+     * Updates the server host configuration.
      *
-     * @param url The new server URL
+     * @param host The new server host (e.g., "localhost:8083" or "192.168.1.100:8080")
      */
-    fun updateServerUrl(url: String) {
-        if (url.isBlank()) {
-            _error.value = "Server URL cannot be empty"
+    fun updateServerHost(host: String) {
+        if (host.isBlank()) {
+            _error.value = "Server host cannot be empty"
             return
         }
 
@@ -65,20 +65,26 @@ class SettingsViewModel(
             _isLoading.value = true
             _error.value = null
             try {
-                // Validate URL format
-                if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                    _error.value = "URL must start with http:// or https://"
+                // Validate host format (should be host:port or just host)
+                val cleanHost = host.trim()
+                    .removePrefix("http://")
+                    .removePrefix("https://")
+                    .removeSuffix("/")
+                    .removeSuffix("/api/v1")
+
+                if (cleanHost.isEmpty()) {
+                    _error.value = "Invalid host format"
                     return@launch
                 }
 
-                // Update the API client base URL
-                apiClient.updateBaseUrl(url)
-                _serverUrl.value = url
-                _message.value = "Server URL updated successfully"
+                // Update the API client server host
+                apiClient.updateServerHost(cleanHost)
+                _serverHost.value = cleanHost
+                _message.value = "Server host updated successfully"
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to update server URL"
+                _error.value = e.message ?: "Failed to update server host"
             } finally {
                 _isLoading.value = false
             }

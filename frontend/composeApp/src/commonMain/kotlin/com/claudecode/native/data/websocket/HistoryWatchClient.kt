@@ -1,6 +1,7 @@
 package com.claudecode.native.data.websocket
 
 import com.claudecode.native.data.model.ClaudeMessage
+import com.claudecode.native.data.storage.TokenStorage
 import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
@@ -48,9 +49,17 @@ sealed class HistoryWatchEvent {
  */
 class HistoryWatchClient(
     private val httpClient: HttpClient,
-    private val scope: CoroutineScope,
-    private val baseUrl: String
+    private val scope: CoroutineScope
 ) {
+    companion object {
+        private const val DEFAULT_HOST = "localhost:8083"
+        private const val API_PATH = "/api/v1"
+    }
+
+    /** Get the current WebSocket base URL from stored server host */
+    private val baseUrl: String
+        get() = "ws://${TokenStorage.getServerHost() ?: DEFAULT_HOST}$API_PATH"
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true

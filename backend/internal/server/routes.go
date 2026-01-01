@@ -54,6 +54,7 @@ func (s *Server) setupRoutes() {
 	historyGroup.Get("/projects/:encodedPath", s.historyHandler.GetProject)
 	historyGroup.Get("/projects/:encodedPath/sessions/:sessionId", s.historyHandler.GetSessionMessages)
 	historyGroup.Post("/sessions/:sessionId/favorite", s.historyHandler.ToggleSessionFavorite)
+	historyGroup.Post("/refresh", s.historyHandler.Refresh)
 
 	// WebSocket route for watching session file changes in real-time
 	historyGroup.Get("/ws/:encodedPath/:sessionId", s.historyWatchHandler.Upgrade, websocket.New(s.historyWatchHandler.HandleConnection))

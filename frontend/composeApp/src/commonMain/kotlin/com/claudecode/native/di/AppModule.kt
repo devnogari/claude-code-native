@@ -6,14 +6,12 @@ import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.MessageApi
 import com.claudecode.native.data.api.ProjectApi
-import com.claudecode.native.data.config.UrlConfig
 import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.data.repository.PreferencesRepository
 import com.claudecode.native.data.repository.ThemeRepository
 import com.claudecode.native.data.websocket.HistoryWatchClient
 import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.ui.viewmodel.ChatViewModel
-import com.claudecode.native.ui.viewmodel.ClaudeHistoryViewModel
 import com.claudecode.native.ui.viewmodel.LoginViewModel
 import com.claudecode.native.ui.viewmodel.ProjectListViewModel
 import com.claudecode.native.ui.viewmodel.SettingsViewModel
@@ -46,9 +44,9 @@ val appModule = module {
     }
 
     // HTTP Client for REST API operations
-    // URL is determined by platform-specific UrlConfig
+    // Server host is loaded from storage or uses default (localhost:8083)
     single {
-        ApiClient(baseUrl = UrlConfig.apiBaseUrl)
+        ApiClient()
     } onClose {
         it?.close()
     }
@@ -83,17 +81,14 @@ val appModule = module {
     // ViewModels - use single to maintain state across recomposition (e.g., theme changes)
     single { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
     single { ChatViewModel(get(), get(), get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, HistoryWatchClient, CoroutineScope
-    single { ProjectListViewModel(get(), get(), get(), get()) }  // ProjectApi, ConversationApi, FavoriteRepository, CoroutineScope
+    single { ProjectListViewModel(get(), get(), get()) }  // ClaudeHistoryApi, FavoriteRepository, CoroutineScope
     single { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
-    single { ClaudeHistoryViewModel(get(), get(), get()) }  // ClaudeHistoryApi, HistoryWatchClient, CoroutineScope
-
     // WebSocket Client for real-time communication
-    // URL is determined by platform-specific UrlConfig
+    // URL is determined by stored server host in TokenStorage
     single {
         WebSocketClient(
             httpClient = get(),
-            scope = get(),
-            baseUrl = UrlConfig.wsBaseUrl
+            scope = get()
         )
     }
 
@@ -101,8 +96,7 @@ val appModule = module {
     single {
         HistoryWatchClient(
             httpClient = get(),
-            scope = get(),
-            baseUrl = UrlConfig.wsBaseUrl
+            scope = get()
         )
     }
 }

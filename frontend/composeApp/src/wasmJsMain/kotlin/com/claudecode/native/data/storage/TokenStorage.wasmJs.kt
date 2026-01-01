@@ -4,10 +4,11 @@ import kotlinx.browser.localStorage
 
 /**
  * WASM implementation using browser localStorage.
- * Token persists across page refreshes.
+ * Token and server host persist across page refreshes.
  */
 actual object TokenStorage {
     private const val TOKEN_KEY = "auth_token"
+    private const val SERVER_HOST_KEY = "server_host"
 
     actual fun saveToken(token: String) {
         localStorage.setItem(TOKEN_KEY, token)
@@ -19,5 +20,17 @@ actual object TokenStorage {
 
     actual fun clearToken() {
         localStorage.removeItem(TOKEN_KEY)
+    }
+
+    actual fun saveServerHost(host: String) {
+        localStorage.setItem(SERVER_HOST_KEY, host)
+    }
+
+    actual fun getServerHost(): String? {
+        return localStorage.getItem(SERVER_HOST_KEY)
+    }
+
+    actual fun clearServerHost() {
+        localStorage.removeItem(SERVER_HOST_KEY)
     }
 }

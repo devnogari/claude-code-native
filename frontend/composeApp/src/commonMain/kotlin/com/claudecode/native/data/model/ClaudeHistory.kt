@@ -41,7 +41,10 @@ data class ClaudeMessage(
     val timestamp: Instant? = null,
     val message: MessageContent? = null,
     val cwd: String? = null,
-    @SerialName("parentMsgId") val parentMsgId: String? = null
+    @SerialName("parentMsgId") val parentMsgId: String? = null,
+    // Queue operation fields (type="queue-operation")
+    val operation: String? = null, // "enqueue", "dequeue", etc.
+    val content: String? = null    // Queued message content
 )
 
 @Serializable
