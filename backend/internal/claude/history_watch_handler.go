@@ -89,12 +89,11 @@ func (h *HistoryWatchHandler) HandleConnection(c *websocket.Conn) {
 		return
 	}
 
-	// Verify the session exists
-	_, err := h.cache.GetSessionMessages(encodedPath, sessionID)
-	if err != nil {
-		h.sendError(c, "session not found")
-		return
-	}
+	// Note: We no longer require the session to exist beforehand.
+	// For new sessions (created from draft mode), the session folder may not exist yet
+	// when HistoryWatch connects. The session folder will be created when Claude CLI
+	// starts processing the first message.
+	// The cache.Subscribe will handle watching for the folder to be created.
 
 	// Create client
 	client := &WatchClient{

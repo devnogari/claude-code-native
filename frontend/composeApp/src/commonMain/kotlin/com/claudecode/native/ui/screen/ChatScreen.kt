@@ -861,8 +861,12 @@ private fun ChatInputBar(
                             if (!keyEvent.isShiftPressed && inputText.isNotBlank() && isConnected) {
                                 onSend()
                                 true // Consume the event
+                            } else if (keyEvent.isShiftPressed) {
+                                // Manually insert newline for Shift+Enter
+                                onInputChange(inputText + "\n")
+                                true // Consume the event
                             } else {
-                                false // Let Shift+Enter pass through for newline
+                                false
                             }
                         } else {
                             false
