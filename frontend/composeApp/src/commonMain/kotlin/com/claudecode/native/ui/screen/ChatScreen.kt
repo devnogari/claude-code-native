@@ -561,12 +561,30 @@ fun ChatScreenContent(
                     val streamingMessageId = viewModel.currentStreamingMessageId
                     if (isStreaming && streamingMessageId != null) {
                         item(key = "streaming") {
-                            StreamingBubble(
-                                content = streamingContent,
-                                tools = streamingTools,
-                                blocks = streamingBlocks,
-                                messageId = streamingMessageId
-                            )
+                            // Filter out tool blocks that are already displayed in messages
+                            // to avoid duplicate tool display during streaming
+                            val existingToolIds = remember(messages) {
+                                messages.flatMap { msg ->
+                                    msg.blocks.filterIsInstance<ContentBlock.Tool>().map { it.info.id }
+                                }.toSet()
+                            }
+                            val filteredStreamingBlocks = streamingBlocks.filter { block ->
+                                when (block) {
+                                    is ContentBlock.Tool -> block.info.id !in existingToolIds
+                                    is ContentBlock.Text -> true
+                                }
+                            }
+                            val filteredStreamingTools = streamingTools.filter { it.id !in existingToolIds }
+
+                            // Only show streaming bubble if there's content to display
+                            if (streamingContent.isNotEmpty() || filteredStreamingBlocks.isNotEmpty()) {
+                                StreamingBubble(
+                                    content = streamingContent,
+                                    tools = filteredStreamingTools,
+                                    blocks = filteredStreamingBlocks,
+                                    messageId = streamingMessageId
+                                )
+                            }
                         }
                     }
 
