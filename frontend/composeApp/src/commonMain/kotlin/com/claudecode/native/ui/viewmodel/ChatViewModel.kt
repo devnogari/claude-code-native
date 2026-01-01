@@ -602,6 +602,11 @@ class ChatViewModel(
                 return@mapIndexedNotNull null
             }
 
+            // Skip meta messages (skill content injected by Claude Code, not user-typed)
+            if (msg.isMeta) {
+                return@mapIndexedNotNull null
+            }
+
             // Skip messages with no content blocks
             if (blocksWithResults.isEmpty()) return@mapIndexedNotNull null
 
@@ -1675,6 +1680,11 @@ class ChatViewModel(
 
                     // Skip tool_result-only messages
                     if (hasOnlyToolResults(msg.content)) {
+                        return@mapNotNull null
+                    }
+
+                    // Skip meta messages (skill content injected by Claude Code, not user-typed)
+                    if (claudeMsg.isMeta) {
                         return@mapNotNull null
                     }
 

@@ -60,7 +60,10 @@ data class ClaudeMessage(
 
     // Queue operation fields (type="queue-operation")
     val operation: String? = null,
-    val content: String? = null
+    val content: String? = null,
+
+    // Meta message flag (skill content injected by Claude Code, not user-typed)
+    @SerialName("isMeta") val isMeta: Boolean = false
 )
 
 @Serializable
