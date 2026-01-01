@@ -706,6 +706,7 @@ class ChatViewModel(
             }
 
             _messages.value = stableMessages + messagesToAdd
+            println("ChatViewModel:697 - Added ${messagesToAdd.size} messages (initial load), total=${_messages.value.size}")
         }
     }
 
@@ -1062,6 +1063,7 @@ class ChatViewModel(
                     pendingUserMessages[normalizedHash] = messageId
                 }
                 _messages.value = _messages.value + userMessage
+                println("ChatViewModel:1054 - Added user message id=${userMessage.id}, total=${_messages.value.size}")
             }
 
             // Trigger scroll to bottom for the new user message (atomic update)
@@ -1238,6 +1240,7 @@ class ChatViewModel(
                                 isStreaming = false
                             )
                             _messages.value = _messages.value + resultMessage
+                            println("ChatViewModel:1231 - Added builtin result id=${resultMessage.id}, total=${_messages.value.size}")
                         }
                     }
                 }
@@ -1742,12 +1745,13 @@ class ChatViewModel(
                                 // New message - add it
                                 currentMessages.add(newMsg)
                                 updated = true
-                                println("ChatViewModel: Added message ${newMsg.id}: ${newMsg.content.take(30)}...")
+                                println("ChatViewModel:1735 - Added HistoryWatch message id=${newMsg.id}, content=${newMsg.content.take(30)}...")
                             }
                         }
 
                         if (updated) {
                             _messages.value = currentMessages
+                            println("ChatViewModel:1742 - HistoryWatch update, total=${_messages.value.size}")
                         }
                     }
                 }
@@ -1770,81 +1774,13 @@ class ChatViewModel(
     }
 
     private suspend fun finalizeStreamingMessage() {
-        // Use streamingMutex to prevent race conditions with WebSocket/HistoryWatch handlers
-        // that also modify streaming state
+        // Reset streaming state - message saving is handled by HistoryWatch
         streamingMutex.withLock {
-            val content = _streamingContent.value
-            val messageId = streamingMessageId
-            val tools = _streamingTools.value
-            val orderedBlocks = _streamingBlocks.value
-
-            if ((content.isNotEmpty() || tools.isNotEmpty() || orderedBlocks.isNotEmpty()) && messageId != null) {
-                // Build final blocks combining content from both sources:
-                // - WebSocket manages _streamingContent (text)
-                // - HistoryWatch manages _streamingBlocks (tools, and text only if isStreamingFromHistoryWatch)
-                //
-                // When WebSocket is streaming (!isStreamingFromHistoryWatch):
-                //   - orderedBlocks may only have tool blocks (no text since we skip text in HistoryWatch)
-                //   - content has the full text from WebSocket
-                //   - We need to combine: text from content + tools from orderedBlocks
-                //
-                // When HistoryWatch is streaming (isStreamingFromHistoryWatch):
-                //   - orderedBlocks has both text and tools in correct order
-                //   - Use orderedBlocks directly
-                val blocks = if (orderedBlocks.isNotEmpty()) {
-                    val hasTextBlock = orderedBlocks.any { it is ContentBlock.Text }
-                    if (!hasTextBlock && content.isNotEmpty()) {
-                        // WebSocket streaming case: orderedBlocks has only tools, content has text
-                        // Prepend text block, then add all tool blocks
-                        listOf(ContentBlock.Text(content)) + orderedBlocks
-                    } else {
-                        // HistoryWatch streaming case: orderedBlocks has everything
-                        orderedBlocks
-                    }
-                } else {
-                    // No ordered blocks - use legacy behavior (text first, then tools)
-                    val legacyBlocks = mutableListOf<ContentBlock>()
-                    if (content.isNotEmpty()) {
-                        legacyBlocks.add(ContentBlock.Text(content))
-                    }
-                    tools.forEach { tool ->
-                        legacyBlocks.add(ContentBlock.Tool(tool))
-                    }
-                    legacyBlocks
-                }
-
-                val assistantMessage = ChatMessage(
-                    id = messageId,
-                    role = MessageRole.ASSISTANT,
-                    blocks = blocks,
-                    isStreaming = false
-                )
-
-                mutex.withLock {
-                    // Simple UUID-based deduplication: find by ID, update or add
-                    val currentMessages = _messages.value.toMutableList()
-                    val existingIndex = currentMessages.indexOfFirst { it.id == messageId }
-
-                    if (existingIndex >= 0) {
-                        // Update existing message with finalized blocks
-                        currentMessages[existingIndex] = assistantMessage
-                        _messages.value = currentMessages
-                        println("ChatViewModel: Updated finalized message: ${content.take(50)}... (${blocks.count { it is ContentBlock.Tool }} tools)")
-                    } else {
-                        // Add new message
-                        _messages.value = _messages.value + assistantMessage
-                        println("ChatViewModel: Finalized streaming message: ${content.take(50)}... (${blocks.count { it is ContentBlock.Tool }} tools)")
-                    }
-                }
-            }
-
-            // Reset streaming state atomically within the same lock
             _isStreaming.value = false
             _streamingContent.value = ""
             _streamingTools.value = emptyList()
             _streamingBlocks.value = emptyList()
             streamingMessageId = null
-
             isStreamingFromHistoryWatch = false
         }
 
