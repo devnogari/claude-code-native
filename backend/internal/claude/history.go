@@ -27,14 +27,15 @@ type ClaudeProject struct {
 
 // ClaudeSession represents a conversation session in Claude Code
 type ClaudeSession struct {
-	ID           string          `json:"id"`
-	Filename     string          `json:"filename"`
-	Messages     []ClaudeMessage `json:"messages,omitempty"`
-	MessageCount int             `json:"message_count"`
-	FirstMessage string          `json:"first_message"`
-	IsFavorite   bool            `json:"is_favorite"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID                string          `json:"id"`
+	Filename          string          `json:"filename"`
+	Messages          []ClaudeMessage `json:"messages,omitempty"`
+	MessageCount      int             `json:"message_count"`
+	FirstMessage      string          `json:"first_message"`
+	IsFavorite        bool            `json:"is_favorite"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+	SourceEncodedPath string          `json:"source_encoded_path,omitempty"` // Actual directory where session file resides (for inherited sessions)
 }
 
 // ClaudeMessage represents a single message in a Claude Code conversation

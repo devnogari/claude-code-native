@@ -262,18 +262,20 @@ class ProjectListViewModel(
      *
      * @param conversationId The session ID to delete (aliased as conversationId for compatibility)
      * @param projectPath The project path
+     * @param sourceEncodedPath Optional encoded path where session file actually resides (for inherited sessions)
      * @param onSuccess Callback when deletion succeeds
      * @param onError Callback when deletion fails
      */
     fun deleteSession(
         conversationId: String,
         projectPath: String,
+        sourceEncodedPath: String? = null,
         onSuccess: () -> Unit,
         onError: (String) -> Unit
     ) {
         scope.launch {
             try {
-                claudeHistoryApi.deleteSession(conversationId, projectPath)
+                claudeHistoryApi.deleteSession(conversationId, projectPath, sourceEncodedPath)
                 onSuccess()
             } catch (e: CancellationException) {
                 throw e

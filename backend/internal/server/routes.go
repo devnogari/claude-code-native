@@ -158,6 +158,9 @@ func (s *Server) deleteSession(c *fiber.Ctx) error {
 
 // deleteSessionDirect deletes Claude CLI session files directly by session ID and project path
 // This is for Claude History sessions that may not be in the database
+// Query params:
+//   - path: project path (required)
+//   - source_encoded_path: encoded path where session file actually resides (optional, for inherited sessions)
 func (s *Server) deleteSessionDirect(c *fiber.Ctx) error {
 	sessionIDStr := c.Params("sessionId")
 	sessionID, err := uuid.FromString(sessionIDStr)
@@ -175,6 +178,9 @@ func (s *Server) deleteSessionDirect(c *fiber.Ctx) error {
 		})
 	}
 
+	// Get source encoded path (for inherited sessions that reside in a different directory)
+	sourceEncodedPath := c.Query("source_encoded_path")
+
 	// Get user ID from context (set by auth middleware)
 	userIDStr, ok := c.Locals("userID").(string)
 	if !ok {
@@ -190,10 +196,23 @@ func (s *Server) deleteSessionDirect(c *fiber.Ctx) error {
 	}
 
 	// Delete the Claude CLI session files
-	if err := s.claudeMgr.DeleteSession(sessionID, projectPath); err != nil {
-		s.logger.Warn("failed to delete claude session files",
+	// Use sourceEncodedPath if provided (for inherited sessions), otherwise fall back to projectPath
+	if sourceEncodedPath != "" {
+		s.logger.Info("deleting session using source encoded path",
 			zap.String("sessionID", sessionID.String()),
-			zap.Error(err))
+			zap.String("sourceEncodedPath", sourceEncodedPath))
+		if err := s.claudeMgr.DeleteSessionByEncodedPath(sessionID, sourceEncodedPath); err != nil {
+			s.logger.Warn("failed to delete claude session files by encoded path",
+				zap.String("sessionID", sessionID.String()),
+				zap.String("sourceEncodedPath", sourceEncodedPath),
+				zap.Error(err))
+		}
+	} else {
+		if err := s.claudeMgr.DeleteSession(sessionID, projectPath); err != nil {
+			s.logger.Warn("failed to delete claude session files",
+				zap.String("sessionID", sessionID.String()),
+				zap.Error(err))
+		}
 	}
 
 	// Also delete the conversation from database if it exists

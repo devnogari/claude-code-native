@@ -2,6 +2,9 @@ package claude
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/gofrs/uuid/v5"
@@ -117,4 +120,58 @@ func (m *Manager) DeleteSession(convID uuid.UUID, workDir string) error {
 	// Create a temporary process just for deletion
 	process := NewProcess(convID, workDir, m.logger)
 	return process.DeleteSession()
+}
+
+// DeleteSessionByEncodedPath deletes the Claude CLI session files using the encoded path directly
+// This is used when the session was inherited from a parent project and we know the exact location
+func (m *Manager) DeleteSessionByEncodedPath(convID uuid.UUID, encodedPath string) error {
+	// Validate encodedPath doesn't contain path traversal sequences
+	// Encoded paths should be like "-Users-probe-git-project" with no slashes or ".."
+	if strings.Contains(encodedPath, "..") || strings.Contains(encodedPath, "/") || strings.Contains(encodedPath, "\\") {
+		return fmt.Errorf("invalid encoded path: contains path traversal characters")
+	}
+
+	// First stop the process if running
+	_ = m.StopProcess(convID)
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	sessionFile := filepath.Join(
+		homeDir,
+		".claude",
+		"projects",
+		encodedPath,
+		convID.String()+".jsonl",
+	)
+
+	// Also check for related files (session-env, todos, debug)
+	relatedPaths := []string{
+		sessionFile,
+		filepath.Join(homeDir, ".claude", "session-env", convID.String()),
+		filepath.Join(homeDir, ".claude", "debug", convID.String()+".txt"),
+	}
+
+	// Find and delete todo files
+	todosDir := filepath.Join(homeDir, ".claude", "todos")
+	if files, err := filepath.Glob(filepath.Join(todosDir, convID.String()+"*.json")); err == nil {
+		relatedPaths = append(relatedPaths, files...)
+	}
+
+	var lastErr error
+	for _, path := range relatedPaths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			m.logger.Warn("failed to delete session file",
+				zap.String("path", path),
+				zap.Error(err))
+			lastErr = err
+		} else if err == nil {
+			m.logger.Info("deleted session file",
+				zap.String("path", path))
+		}
+	}
+
+	return lastErr
 }
