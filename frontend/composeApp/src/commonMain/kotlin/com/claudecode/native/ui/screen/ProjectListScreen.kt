@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
@@ -83,12 +84,11 @@ fun ProjectListScreenContent(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Clear focus and hide keyboard on initial composition
-    // Delay ensures TextField is fully composed before clearing focus (iOS fix)
+    // Prevent TextField from receiving focus during initial composition (iOS keyboard fix)
+    var canFocusInput by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(100)
-        focusManager.clearFocus()
-        keyboardController?.hide()
+        kotlinx.coroutines.delay(300)
+        canFocusInput = true
     }
 
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -189,7 +189,8 @@ fun ProjectListScreenContent(
                 onValueChange = { viewModel.updateSearchQuery(it) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .focusProperties { canFocus = canFocusInput },
                 placeholder = { Text("Search projects...") },
                 leadingIcon = {
                     Icon(Icons.Default.Search, contentDescription = null)
