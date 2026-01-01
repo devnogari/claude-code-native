@@ -129,8 +129,14 @@ func (s *Service) parseCommandFile(path, relPath, namespace string) (Command, er
 	defer file.Close()
 
 	// Command name from relative path (remove .md extension, add / prefix)
-	cmdName := "/" + strings.TrimSuffix(relPath, ".md")
-	cmdName = strings.ReplaceAll(cmdName, string(filepath.Separator), "/")
+	// Use ":" as separator for nested commands (e.g., sc/cleanup.md -> /sc:cleanup)
+	// First convert path separators to colons, then add / prefix
+	cmdName := strings.TrimSuffix(relPath, ".md")
+	// Replace OS-specific separator (backslash on Windows, forward slash on Unix)
+	cmdName = strings.ReplaceAll(cmdName, string(filepath.Separator), ":")
+	// Also replace forward slash for cross-platform compatibility
+	cmdName = strings.ReplaceAll(cmdName, "/", ":")
+	cmdName = "/" + cmdName
 
 	cmd := Command{
 		Name:         cmdName,

@@ -24,6 +24,13 @@ When working on this project, ALWAYS use these approaches:
 ### Worktree Directory
 Worktrees are stored in `.worktrees/` directory (already in .gitignore).
 
+### Custom Commands Format
+Custom commands in `~/.claude/commands/` use colon (`:`) as namespace separator:
+- File: `~/.claude/commands/sc/cleanup.md` → Command: `/sc:cleanup`
+- File: `~/.claude/commands/my/nested/cmd.md` → Command: `/my:nested:cmd`
+
+This matches SuperClaude's `/sc:` command convention.
+
 ## Project Overview
 
 Claude Code Native is a cross-platform desktop/web application providing a native UI for Claude Code CLI. It consists of a Go backend with real-time WebSocket streaming and a Kotlin Multiplatform frontend (Compose).
