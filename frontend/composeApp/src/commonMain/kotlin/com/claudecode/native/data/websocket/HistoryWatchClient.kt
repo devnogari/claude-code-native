@@ -103,12 +103,14 @@ class HistoryWatchClient(
         watchJob = scope.launch {
             try {
                 val wsUrl = "$baseUrl/claude-history/ws/$encodedPath/$sessionId"
+                println("HistoryWatchClient: Connecting to $wsUrl")
 
                 httpClient.webSocket(urlString = wsUrl, request = {
                     headers.append("Authorization", "Bearer $token")
                 }) {
                     session = this
                     _isConnected.value = true
+                    println("HistoryWatchClient: Connected successfully to session $sessionId")
 
                     // Listen for messages
                     for (frame in incoming) {
@@ -118,16 +120,21 @@ class HistoryWatchClient(
                                 handleMessage(text)
                             }
                             is Frame.Close -> {
+                                println("HistoryWatchClient: Received Close frame")
                                 _events.emit(HistoryWatchEvent.Disconnected)
                                 break
                             }
                             else -> {}
                         }
                     }
+                    println("HistoryWatchClient: Receive loop ended")
                 }
             } catch (e: Exception) {
+                println("HistoryWatchClient: Connection error: ${e.message}")
+                e.printStackTrace()
                 _events.emit(HistoryWatchEvent.Error(e.message ?: "Connection failed"))
             } finally {
+                println("HistoryWatchClient: Connection closed, cleaning up")
                 _isConnected.value = false
                 session = null
             }
@@ -192,6 +199,7 @@ class HistoryWatchClient(
                     }
                 }
                 HistoryWatchMessageType.ERROR -> {
+                    println("HistoryWatchClient: Server error: ${message.error}")
                     _events.emit(HistoryWatchEvent.Error(message.error ?: "Unknown error"))
                 }
                 HistoryWatchMessageType.PONG -> {
@@ -199,6 +207,8 @@ class HistoryWatchClient(
                 }
             }
         } catch (e: Exception) {
+            println("HistoryWatchClient: Failed to parse message: ${e.message}")
+            e.printStackTrace()
             _events.emit(HistoryWatchEvent.Error("Failed to parse message: ${e.message}"))
         }
     }
