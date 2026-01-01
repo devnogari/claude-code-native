@@ -173,15 +173,6 @@ class ChatViewModel(
     // Track pending user messages to properly handle duplicates from history watch
     // Key: content hash, Value: message ID
     private val pendingUserMessages = mutableMapOf<Int, String>()
-
-    // Track finalized assistant messages to prevent duplicates from history watch
-    // Key: content hash (first 200 chars), Value: message ID
-    private val finalizedAssistantMessages = mutableMapOf<Int, String>()
-
-    // Track processed history watch message timestamps to prevent re-processing
-    // This is more reliable than content-based dedup for rapid message sequences
-    // Limited to MAX_PROCESSED_TIMESTAMPS entries to prevent unbounded growth
-    private val processedHistoryWatchTimestamps = mutableSetOf<Long>()
     companion object {
         /** Marker for draft sessions that haven't been created yet. */
         const val DRAFT_SESSION_MARKER = "draft"
@@ -189,7 +180,6 @@ class ChatViewModel(
         private const val CONNECTION_TIMEOUT_ATTEMPTS = 50
         /** Interval between connection checks in milliseconds. */
         private const val CONNECTION_CHECK_INTERVAL_MS = 100L
-        private const val MAX_PROCESSED_TIMESTAMPS = 500
         private val WHITESPACE_REGEX = Regex("\\s+")
 
         /**
@@ -209,6 +199,39 @@ class ChatViewModel(
 
     // Maximum number of queued messages to prevent memory pressure
     private val maxQueuedMessages = 10
+
+    /**
+     * Clears all session state for switching conversations or starting fresh.
+     */
+    private suspend fun clearSessionState() {
+        mapsMutex.withLock {
+            sessionToolUses.clear()
+            sessionToolResults.clear()
+            pendingUserMessages.clear()
+        }
+        mutex.withLock {
+            _messages.value = emptyList()
+        }
+    }
+
+    /**
+     * Updates tool blocks with results from the tool uses map.
+     * Used during message loading and history watch updates.
+     */
+    private fun updateBlocksWithToolResults(
+        blocks: List<ContentBlock>,
+        toolUses: Map<String, ToolUseInfo>
+    ): List<ContentBlock> {
+        return blocks.map { block ->
+            when (block) {
+                is ContentBlock.Tool -> {
+                    val toolWithResult = toolUses[block.info.id]
+                    if (toolWithResult != null) ContentBlock.Tool(toolWithResult) else block
+                }
+                else -> block
+            }
+        }
+    }
 
 
     init {
@@ -313,17 +336,7 @@ class ChatViewModel(
                         _conversationTitle.value = "New Chat"
 
                         // FIX: Clear previous session's messages for draft sessions
-                        // Without this, messages from the previous conversation remain visible
-                        mapsMutex.withLock {
-                            sessionToolUses.clear()
-                            sessionToolResults.clear()
-                            pendingUserMessages.clear()
-                            finalizedAssistantMessages.clear()
-                            processedHistoryWatchTimestamps.clear()
-                        }
-                        mutex.withLock {
-                            _messages.value = emptyList()
-                        }
+                        clearSessionState()
                         println("ChatViewModel: Cleared previous session state for draft")
 
                         // Fetch project info for project path and commands
@@ -492,17 +505,7 @@ class ChatViewModel(
                 println("[$callId] Got ${response.messages.size} messages from API, processing...")
 
                 // Clear old state atomically ONLY after guard check passes
-                // This prevents empty view flash when rapidly switching rooms
-                mapsMutex.withLock {
-                    sessionToolUses.clear()
-                    sessionToolResults.clear()
-                    pendingUserMessages.clear()
-                    finalizedAssistantMessages.clear()
-                    processedHistoryWatchTimestamps.clear()
-                }
-                mutex.withLock {
-                    _messages.value = emptyList()
-                }
+                clearSessionState()
 
                 // Process messages using existing logic
                 processLoadedMessages(response.messages)
@@ -523,19 +526,8 @@ class ChatViewModel(
                         return
                     }
 
-                    // Clear old state for new sessions - this is the FIX for stale messages
-                    // Previously we only cleared on successful message load, leaving old messages
-                    // visible when starting a new session
-                    mapsMutex.withLock {
-                        sessionToolUses.clear()
-                        sessionToolResults.clear()
-                        pendingUserMessages.clear()
-                        finalizedAssistantMessages.clear()
-                        processedHistoryWatchTimestamps.clear()
-                    }
-                    mutex.withLock {
-                        _messages.value = emptyList()
-                    }
+                    // Clear old state for new sessions
+                    clearSessionState()
                     println("[$callId] Cleared state for new session")
                 } else {
                     println("[$callId] Failed to load messages from filesystem: ${e.message}")
@@ -595,15 +587,7 @@ class ChatViewModel(
             val blocks = parseMessageContent(message.content)
 
             // Update tool blocks with results from session maps
-            val blocksWithResults = blocks.map { block ->
-                when (block) {
-                    is ContentBlock.Tool -> {
-                        val toolWithResult = allToolUses[block.info.id]
-                        if (toolWithResult != null) ContentBlock.Tool(toolWithResult) else block
-                    }
-                    else -> block
-                }
-            }
+            val blocksWithResults = updateBlocksWithToolResults(blocks, allToolUses)
 
             // Skip tool_result-only messages (they're matched to tool_use messages)
             if (hasOnlyToolResults(message.content)) {
@@ -806,17 +790,8 @@ class ChatViewModel(
             if (isNotFound) {
                 println("ChatViewModel: No history found for conversation (this is normal for new chats)")
 
-                // Clear old state for new sessions - matches behavior in loadMessagesFromFilesystem()
-                mapsMutex.withLock {
-                    sessionToolUses.clear()
-                    sessionToolResults.clear()
-                    pendingUserMessages.clear()
-                    finalizedAssistantMessages.clear()
-                    processedHistoryWatchTimestamps.clear()
-                }
-                mutex.withLock {
-                    _messages.value = emptyList()
-                }
+                // Clear old state for new sessions
+                clearSessionState()
             } else {
                 println("ChatViewModel: Failed to load messages: ${e.message}")
                 e.printStackTrace()
@@ -1677,45 +1652,16 @@ class ChatViewModel(
                 }
 
                 // Convert ClaudeMessages to ChatMessages with matched tools
-                // Filter out already processed messages based on timestamp
                 // Take a snapshot of sessionToolUses for use in the map operation
                 val toolUsesSnapshot = mapsMutex.withLock { sessionToolUses.toMap() }
 
                 val newChatMessages = event.messages.mapNotNull { claudeMsg ->
-                    // Skip messages we've already processed (timestamp-based dedup)
-                    val timestamp = claudeMsg.timestamp?.toEpochMilliseconds() ?: 0L
-                    val alreadyProcessed = mapsMutex.withLock {
-                        processedHistoryWatchTimestamps.contains(timestamp)
-                    }
-                    if (timestamp > 0 && alreadyProcessed) {
-                        return@mapNotNull null
-                    }
-                    // Track this timestamp as processed with bounded set size
-                    if (timestamp > 0) {
-                        mapsMutex.withLock {
-                            processedHistoryWatchTimestamps.add(timestamp)
-                            // Prevent unbounded growth: remove oldest timestamps when limit exceeded
-                            if (processedHistoryWatchTimestamps.size > MAX_PROCESSED_TIMESTAMPS) {
-                                val oldest = processedHistoryWatchTimestamps.minOrNull()
-                                oldest?.let { processedHistoryWatchTimestamps.remove(it) }
-                            }
-                        }
-                    }
-
                     val msg = claudeMsg.message ?: return@mapNotNull null
                     val role = msg.role
                     val blocks = parseMessageContent(msg.content)
 
-                    // Update tool blocks with results from session maps (using snapshot)
-                    val blocksWithResults = blocks.map { block ->
-                        when (block) {
-                            is ContentBlock.Tool -> {
-                                val toolWithResult = toolUsesSnapshot[block.info.id]
-                                if (toolWithResult != null) ContentBlock.Tool(toolWithResult) else block
-                            }
-                            else -> block
-                        }
-                    }
+                    // Update tool blocks with results from session maps
+                    val blocksWithResults = updateBlocksWithToolResults(blocks, toolUsesSnapshot)
 
                     // Skip tool_result-only messages
                     if (hasOnlyToolResults(msg.content)) {
@@ -1732,8 +1678,12 @@ class ChatViewModel(
                     // Skip compaction/summary messages (system-generated, not user content)
                     if (isCompactionMessage(textContent)) return@mapNotNull null
 
+                    // Use UUID from Claude message, fallback to timestamp-based ID
+                    val messageId = claudeMsg.uuid
+                        ?: "watch_${claudeMsg.timestamp?.toEpochMilliseconds() ?: Clock.System.now().toEpochMilliseconds()}"
+
                     ChatMessage(
-                        id = "watch_${claudeMsg.timestamp?.toEpochMilliseconds() ?: Clock.System.now().toEpochMilliseconds()}_${(0..9999).random()}",
+                        id = messageId,
                         role = when (role) {
                             "user" -> MessageRole.USER
                             "assistant" -> MessageRole.ASSISTANT
@@ -1748,33 +1698,18 @@ class ChatViewModel(
                 }
 
                 // Update existing messages that have tools without results
+                val toolUsesSnap = mapsMutex.withLock { sessionToolUses.toMap() }
                 mutex.withLock {
                     val currentMessages = _messages.value.toMutableList()
                     var messagesUpdated = false
 
-                    // Update existing messages with newly matched tool results
                     for (i in currentMessages.indices) {
                         val msg = currentMessages[i]
                         val hasToolsWithoutResults = msg.blocks.any { block ->
                             block is ContentBlock.Tool && block.info.result == null
                         }
                         if (hasToolsWithoutResults) {
-                            // Take snapshot of tool uses for updating blocks
-                            val toolUsesSnap = mapsMutex.withLock { sessionToolUses.toMap() }
-                            val updatedBlocks = msg.blocks.map { block ->
-                                when (block) {
-                                    is ContentBlock.Tool -> {
-                                        val toolId = block.info.id
-                                        val updatedTool = toolUsesSnap[toolId]
-                                        if (updatedTool != null && updatedTool.result != null) {
-                                            ContentBlock.Tool(updatedTool)
-                                        } else {
-                                            block
-                                        }
-                                    }
-                                    else -> block
-                                }
-                            }
+                            val updatedBlocks = updateBlocksWithToolResults(msg.blocks, toolUsesSnap)
                             if (updatedBlocks != msg.blocks) {
                                 currentMessages[i] = msg.copy(blocks = updatedBlocks)
                                 messagesUpdated = true
@@ -1795,9 +1730,7 @@ class ChatViewModel(
 
                         for (newMsg in newChatMessages) {
                             // Check if this is a pending user message we already added locally
-                            // Use normalized content hash to handle whitespace differences
                             val normalizedContentHash = normalizeForComparison(newMsg.content).hashCode()
-                            // Lock ordering: mutex (#2) → mapsMutex (#3) is allowed
                             val pendingMsgId = if (newMsg.role == MessageRole.USER) {
                                 mapsMutex.withLock { pendingUserMessages.remove(normalizedContentHash) }
                             } else null
@@ -1808,134 +1741,28 @@ class ChatViewModel(
                                 if (pendingIndex >= 0) {
                                     currentMessages[pendingIndex] = currentMessages[pendingIndex].copy(isPending = false)
                                     updated = true
-                                    println("ChatViewModel: Confirmed pending user message (hash=$normalizedContentHash): ${newMsg.content.take(30)}...")
+                                    println("ChatViewModel: Confirmed pending user message: ${newMsg.content.take(30)}...")
                                 }
                                 continue
                             }
 
-                            // For assistant messages, check if already finalized from WebSocket
-                            if (newMsg.role == MessageRole.ASSISTANT) {
-                                val contentHash = newMsg.content.take(200).hashCode()
-                                val newMsgToolIds = newMsg.blocks.filterIsInstance<ContentBlock.Tool>()
-                                    .map { it.info.id }
-
-                                // Check if content or any tool IDs are already finalized
-                                val isAlreadyFinalized = mapsMutex.withLock {
-                                    finalizedAssistantMessages.containsKey(contentHash) ||
-                                        newMsgToolIds.any { toolId ->
-                                            finalizedAssistantMessages.containsKey(toolId.hashCode())
-                                        }
-                                }
-
-                                if (isAlreadyFinalized) {
-                                    // Even if finalized, we may need to update existing message with new tools
-                                    // This handles the race condition where WebSocket COMPLETE arrives before
-                                    // HistoryWatch delivers tool_use blocks
-                                    val newMsgToolCount = newMsg.blocks.count { it is ContentBlock.Tool }
-                                    if (newMsgToolCount > 0) {
-                                        // Find the existing finalized message and update with tools if needed
-                                        val existingIdx = currentMessages.indexOfFirst { existing ->
-                                            existing.role == MessageRole.ASSISTANT &&
-                                                (existing.content == newMsg.content ||
-                                                 existing.content.take(150) == newMsg.content.take(150) ||
-                                                 (existing.content.isNotEmpty() && newMsg.content.isNotEmpty() &&
-                                                  existing.content.take(100) == newMsg.content.take(100)))
-                                        }
-                                        if (existingIdx >= 0) {
-                                            val existing = currentMessages[existingIdx]
-                                            val existingToolCount = existing.blocks.count { it is ContentBlock.Tool }
-                                            if (existingToolCount < newMsgToolCount) {
-                                                // Update existing message with new tools
-                                                currentMessages[existingIdx] = existing.copy(blocks = newMsg.blocks)
-                                                updated = true
-                                                // Also track new tool IDs as finalized to prevent duplicate processing
-                                                // Lock ordering: mutex (#2) → mapsMutex (#3) is allowed
-                                                mapsMutex.withLock {
-                                                    newMsgToolIds.forEach { toolId ->
-                                                        finalizedAssistantMessages[toolId.hashCode()] = existing.id
-                                                    }
-                                                }
-                                                println("ChatViewModel: Updated finalized message from $existingToolCount to $newMsgToolCount tools")
-                                            }
-                                        }
-                                    }
-                                    println("ChatViewModel: Skipping already finalized assistant message: ${newMsg.content.take(30)}... (${newMsgToolIds.size} tools)")
-                                    continue
-                                }
-
-                                // Also check if content or tools match current streaming
-                                if (_isStreaming.value) {
-                                    val streamingContentValue = _streamingContent.value
-                                    val streamingToolIds = _streamingBlocks.value
-                                        .filterIsInstance<ContentBlock.Tool>()
-                                        .map { it.info.id }.toSet()
-
-                                    // Check text content match
-                                    val textMatch = streamingContentValue.isNotEmpty() &&
-                                        (newMsg.content == streamingContentValue ||
-                                         newMsg.content.take(100) == streamingContentValue.take(100) ||
-                                         streamingContentValue.contains(newMsg.content.take(100)))
-
-                                    // Check tool ID match
-                                    val toolMatch = newMsgToolIds.isNotEmpty() &&
-                                        streamingToolIds.isNotEmpty() &&
-                                        newMsgToolIds.any { it in streamingToolIds }
-
-                                    if (textMatch || toolMatch) {
-                                        println("ChatViewModel: Skipping message that matches streaming: ${newMsg.content.take(30)}... (textMatch=$textMatch, toolMatch=$toolMatch)")
-                                        continue
-                                    }
-                                }
-                            }
-
-                            // Find existing message with same content and role
-                            // Use normalized content comparison to handle minor whitespace differences
-                            val newMsgNormalized = newMsg.content.trim().replace(WHITESPACE_REGEX, " ")
-                            val existingIndex = currentMessages.indexOfFirst { existing ->
-                                if (existing.role != newMsg.role) return@indexOfFirst false
-
-                                // Exact match
-                                if (existing.content == newMsg.content) return@indexOfFirst true
-
-                                // Normalized match (handles whitespace differences)
-                                val existingNormalized = existing.content.trim().replace(WHITESPACE_REGEX, " ")
-                                if (existingNormalized == newMsgNormalized) return@indexOfFirst true
-
-                                // Prefix match for streaming scenarios where content grows
-                                if (existingNormalized.isNotEmpty() && newMsgNormalized.isNotEmpty()) {
-                                    val minLen = minOf(existingNormalized.length, newMsgNormalized.length, 150)
-                                    if (minLen >= 50 && existingNormalized.take(minLen) == newMsgNormalized.take(minLen)) {
-                                        return@indexOfFirst true
-                                    }
-                                }
-
-                                false
-                            }
+                            // Simple UUID-based deduplication: find by ID, update or add
+                            val existingIndex = currentMessages.indexOfFirst { it.id == newMsg.id }
 
                             if (existingIndex >= 0) {
-                                // If new message has more blocks or tools, update it
+                                // Message exists - always update with latest blocks (HistoryWatch has complete data)
                                 val existing = currentMessages[existingIndex]
-                                val existingToolCount = existing.blocks.count { it is ContentBlock.Tool }
-                                val newToolCount = newMsg.blocks.count { it is ContentBlock.Tool }
-
-                                if (existingToolCount == 0 && newToolCount > 0) {
-                                    // New message has tools that existing doesn't, update with new blocks
-                                    currentMessages[existingIndex] = existing.copy(blocks = newMsg.blocks)
-                                    updated = true
-                                    println("ChatViewModel: Updated existing message with $newToolCount tools")
-                                } else if (newMsg.blocks.size > existing.blocks.size) {
-                                    // Update with more complete message (more blocks)
-                                    currentMessages[existingIndex] = existing.copy(blocks = newMsg.blocks)
-                                    updated = true
-                                    println("ChatViewModel: Updated message with more blocks")
-                                }
-                                // Otherwise skip (duplicate)
-                                println("ChatViewModel: Skipping duplicate message: ${newMsg.role}, ${newMsg.content.take(30)}...")
+                                currentMessages[existingIndex] = existing.copy(
+                                    blocks = newMsg.blocks,
+                                    isStreaming = false
+                                )
+                                updated = true
+                                println("ChatViewModel: Updated message ${newMsg.id}: ${newMsg.content.take(30)}...")
                             } else {
-                                // New message, add it
+                                // New message - add it
                                 currentMessages.add(newMsg)
                                 updated = true
-                                println("ChatViewModel: Added new message from history watch: ${newMsg.role}, ${newMsg.content.take(30)}...")
+                                println("ChatViewModel: Added message ${newMsg.id}: ${newMsg.content.take(30)}...")
                             }
                         }
 
@@ -2016,43 +1843,19 @@ class ChatViewModel(
                 )
 
                 mutex.withLock {
-                    // Check if this content already exists in messages (avoid duplicates from history watch)
-                    // Must check both text content AND tool blocks for proper duplicate detection
-                    val streamingToolIds = blocks.filterIsInstance<ContentBlock.Tool>()
-                        .map { it.info.id }.toSet()
+                    // Simple UUID-based deduplication: find by ID, update or add
+                    val currentMessages = _messages.value.toMutableList()
+                    val existingIndex = currentMessages.indexOfFirst { it.id == messageId }
 
-                    val isDuplicate = _messages.value.any { existing ->
-                        if (existing.role != MessageRole.ASSISTANT) return@any false
-
-                        // Check text content match
-                        val textMatch = existing.content == content ||
-                            (content.isNotEmpty() && existing.content.contains(content.take(100)))
-
-                        // Check tool block match (for tool-heavy messages where text may be empty)
-                        val existingToolIds = existing.blocks.filterIsInstance<ContentBlock.Tool>()
-                            .map { it.info.id }.toSet()
-                        val toolMatch = streamingToolIds.isNotEmpty() &&
-                            existingToolIds.isNotEmpty() &&
-                            streamingToolIds.intersect(existingToolIds).isNotEmpty()
-
-                        textMatch || toolMatch
-                    }
-
-                    if (!isDuplicate) {
-                        _messages.value = _messages.value + assistantMessage
-                        // Track this finalized message to prevent duplicate from history watch
-                        // Lock ordering: mutex (#2) → mapsMutex (#3) is allowed
-                        val contentHash = content.take(200).hashCode()
-                        mapsMutex.withLock {
-                            finalizedAssistantMessages[contentHash] = messageId
-                            // Also track tool IDs to prevent duplicates
-                            streamingToolIds.forEach { toolId ->
-                                finalizedAssistantMessages[toolId.hashCode()] = messageId
-                            }
-                        }
-                        println("ChatViewModel: Finalized streaming message: ${content.take(50)}... (${streamingToolIds.size} tools)")
+                    if (existingIndex >= 0) {
+                        // Update existing message with finalized blocks
+                        currentMessages[existingIndex] = assistantMessage
+                        _messages.value = currentMessages
+                        println("ChatViewModel: Updated finalized message: ${content.take(50)}... (${blocks.count { it is ContentBlock.Tool }} tools)")
                     } else {
-                        println("ChatViewModel: Skipping duplicate finalization: ${content.take(50)}... (${streamingToolIds.size} tools)")
+                        // Add new message
+                        _messages.value = _messages.value + assistantMessage
+                        println("ChatViewModel: Finalized streaming message: ${content.take(50)}... (${blocks.count { it is ContentBlock.Tool }} tools)")
                     }
                 }
             }
