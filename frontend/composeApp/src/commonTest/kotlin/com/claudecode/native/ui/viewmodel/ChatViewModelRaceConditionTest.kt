@@ -327,4 +327,200 @@ class ChatViewModelRaceConditionTest {
         assertNull(sessionId2)
         assertNull(path2)
     }
+
+    // =====================================
+    // Streaming Content Race Condition Tests
+    // =====================================
+
+    /**
+     * Simulates the streaming content management pattern used in ChatViewModel.
+     *
+     * The key insight is: when WebSocket is streaming (!isStreamingFromHistoryWatch),
+     * HistoryWatch should NOT overwrite _streamingContent. It should only add tool blocks.
+     */
+    class StreamingContentSimulator {
+        var isStreaming = false
+        var isStreamingFromHistoryWatch = false
+        var streamingContent = ""
+        var streamingBlocks = mutableListOf<String>()  // Simplified: "text:xxx" or "tool:xxx"
+
+        /**
+         * Simulates WebSocket initiating streaming and adding content
+         */
+        fun webSocketStartStreaming() {
+            if (!isStreaming) {
+                isStreaming = true
+                isStreamingFromHistoryWatch = false
+            }
+        }
+
+        fun webSocketAddContent(chunk: String) {
+            streamingContent += chunk
+        }
+
+        /**
+         * Simulates HistoryWatch processing a file change event.
+         * This tests the fix: when WebSocket is streaming, don't overwrite content.
+         */
+        fun historyWatchProcessEvent(textBlocks: List<String>, toolBlocks: List<String>) {
+            if (isStreaming) {
+                // FIX: Only add text blocks if HistoryWatch initiated streaming
+                if (isStreamingFromHistoryWatch) {
+                    textBlocks.forEach { text ->
+                        if (!streamingBlocks.contains("text:$text")) {
+                            streamingBlocks.add("text:$text")
+                        }
+                    }
+                    // Update streamingContent from blocks
+                    streamingContent = streamingBlocks
+                        .filter { it.startsWith("text:") }
+                        .joinToString("\n\n") { it.removePrefix("text:") }
+                }
+                // Tool blocks are always processed regardless of streaming source
+                toolBlocks.forEach { tool ->
+                    if (!streamingBlocks.contains("tool:$tool")) {
+                        streamingBlocks.add("tool:$tool")
+                    }
+                }
+            }
+        }
+
+        /**
+         * Simulates finalizing the streaming message.
+         * Tests that WebSocket content is combined with HistoryWatch tools.
+         */
+        fun finalizeStreaming(): List<String> {
+            val hasTextBlock = streamingBlocks.any { it.startsWith("text:") }
+            val result = if (streamingBlocks.isNotEmpty()) {
+                if (!hasTextBlock && streamingContent.isNotEmpty()) {
+                    // WebSocket streaming case: prepend text from streamingContent
+                    listOf("text:$streamingContent") + streamingBlocks
+                } else {
+                    // HistoryWatch streaming case: blocks have everything
+                    streamingBlocks.toList()
+                }
+            } else if (streamingContent.isNotEmpty()) {
+                listOf("text:$streamingContent")
+            } else {
+                emptyList()
+            }
+
+            // Reset state
+            isStreaming = false
+            isStreamingFromHistoryWatch = false
+            streamingContent = ""
+            streamingBlocks.clear()
+
+            return result
+        }
+    }
+
+    @Test
+    fun `websocket streaming content should not be overwritten by historywatch`() {
+        val sim = StreamingContentSimulator()
+
+        // WebSocket starts streaming
+        sim.webSocketStartStreaming()
+        sim.webSocketAddContent("Hello ")
+        sim.webSocketAddContent("World!")
+
+        assertEquals("Hello World!", sim.streamingContent)
+        assertFalse(sim.isStreamingFromHistoryWatch)
+
+        // HistoryWatch processes file event with empty/stale content
+        // This should NOT overwrite the WebSocket content
+        sim.historyWatchProcessEvent(
+            textBlocks = listOf(""),  // stale/empty text from file
+            toolBlocks = listOf("read-file-1")
+        )
+
+        // Content should still be from WebSocket
+        assertEquals("Hello World!", sim.streamingContent, "WebSocket content should not be overwritten")
+
+        // But tool should be added
+        assertTrue(sim.streamingBlocks.contains("tool:read-file-1"), "Tool should be added")
+    }
+
+    @Test
+    fun `finalize should combine websocket text with historywatch tools`() {
+        val sim = StreamingContentSimulator()
+
+        // WebSocket streams text
+        sim.webSocketStartStreaming()
+        sim.webSocketAddContent("This is the response text.")
+
+        // HistoryWatch adds tools
+        sim.historyWatchProcessEvent(
+            textBlocks = emptyList(),
+            toolBlocks = listOf("read-file", "edit-file")
+        )
+
+        // Finalize
+        val result = sim.finalizeStreaming()
+
+        // Should have text from WebSocket + tools from HistoryWatch
+        assertEquals(3, result.size, "Should have 1 text + 2 tools")
+        assertEquals("text:This is the response text.", result[0], "First should be WebSocket text")
+        assertTrue(result.contains("tool:read-file"), "Should have read-file tool")
+        assertTrue(result.contains("tool:edit-file"), "Should have edit-file tool")
+    }
+
+    @Test
+    fun `historywatch initiated streaming should manage all content`() {
+        val sim = StreamingContentSimulator()
+
+        // HistoryWatch initiates streaming (by setting flags directly - simulating the actual behavior)
+        sim.isStreaming = true
+        sim.isStreamingFromHistoryWatch = true
+
+        // HistoryWatch adds text and tools
+        sim.historyWatchProcessEvent(
+            textBlocks = listOf("Response from terminal"),
+            toolBlocks = listOf("bash-1")
+        )
+
+        // streamingContent should be from blocks
+        assertEquals("Response from terminal", sim.streamingContent)
+
+        // Finalize
+        val result = sim.finalizeStreaming()
+
+        assertEquals(2, result.size)
+        assertTrue(result.contains("text:Response from terminal"))
+        assertTrue(result.contains("tool:bash-1"))
+    }
+
+    @Test
+    fun `rapid websocket chunks should accumulate correctly`() {
+        val sim = StreamingContentSimulator()
+
+        sim.webSocketStartStreaming()
+
+        // Simulate rapid chunks
+        val chunks = listOf("I ", "will ", "read ", "the ", "file.")
+        chunks.forEach { sim.webSocketAddContent(it) }
+
+        assertEquals("I will read the file.", sim.streamingContent)
+
+        // HistoryWatch tries to process during streaming
+        sim.historyWatchProcessEvent(
+            textBlocks = listOf("I will"),  // partial/stale content
+            toolBlocks = emptyList()
+        )
+
+        // Content should NOT be overwritten
+        assertEquals("I will read the file.", sim.streamingContent, "Full content should be preserved")
+    }
+
+    @Test
+    fun `empty streaming should not produce empty message`() {
+        val sim = StreamingContentSimulator()
+
+        sim.webSocketStartStreaming()
+        // No content added
+
+        val result = sim.finalizeStreaming()
+
+        assertTrue(result.isEmpty(), "Should not produce empty message blocks")
+    }
 }
