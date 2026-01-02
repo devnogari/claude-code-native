@@ -427,6 +427,10 @@ class ChatViewModel(
                     _conversationTitle.value = null
                     _isDraftSession.value = false
                     _sessionCreatedEvent.value = null
+
+                    // Clear progress status for previous conversation to prevent stale Processing state
+                    // This is important for draft sessions which share the same conversationId pattern
+                    currentConversationId?.let { clearProgressStateForConversation(it) }
                 }
 
                 // Set conversation ID immediately so subsequent connect() calls know to disconnect
@@ -455,6 +459,10 @@ class ChatViewModel(
                         // FIX: Clear previous session's messages for draft sessions
                         clearSessionState()
                         println("ChatViewModel: Cleared previous session state for draft")
+
+                        // FIX: Clear progress status for this conversation ID to ensure fresh state
+                        // Draft sessions reuse the same conversationId pattern, so old state must be cleared
+                        clearProgressStateForConversation(conversationId)
 
                         // Fetch project info for project path and commands
                         try {
@@ -943,6 +951,12 @@ class ChatViewModel(
         // Skip sync if a connect is already in progress to prevent duplicate API calls
         if (currentConnectJob?.isActive == true) {
             println("ChatViewModel: Skipping foreground sync - connect in progress")
+            return
+        }
+
+        // Skip sync for draft sessions (new chats) - they don't have server-side state yet
+        if (_isDraftSession.value) {
+            println("ChatViewModel: Skipping foreground sync - draft session")
             return
         }
 
@@ -2291,6 +2305,18 @@ class ChatViewModel(
             val existingTodos = flow.value.todos
             flow.value = ProgressStatus(isActive = false, todos = existingTodos)
         }
+    }
+
+    /**
+     * Clears all progress-related state for a specific conversation.
+     * Used when switching conversations or initializing draft sessions to prevent stale state.
+     * Unlike stopProgressTracking(), this completely removes the progress entry.
+     */
+    private fun clearProgressStateForConversation(convId: String) {
+        elapsedTimeJobs[convId]?.cancel()
+        elapsedTimeJobs.remove(convId)
+        streamingStartTimes.remove(convId)
+        _progressStatusMap.remove(convId)
     }
 
 }

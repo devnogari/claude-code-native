@@ -184,6 +184,12 @@ object MessageParser {
      */
     fun extractToolSummary(toolName: String, input: Any?): String {
         if (input == null) return ""
+
+        // Handle TodoWrite which receives a JsonArray of todo items
+        if (toolName == "TodoWrite" && input is JsonArray) {
+            return extractTodoWriteSummary(input)
+        }
+
         if (input !is JsonObject) return input.toString().take(100)
 
         return when (toolName) {
@@ -221,10 +227,70 @@ object MessageParser {
     }
 
     /**
+     * Extracts summary from TodoWrite's todo list (JsonArray).
+     * Shows the first in_progress todo's activeForm, or first todo's content.
+     */
+    private fun extractTodoWriteSummary(todos: JsonArray): String {
+        if (todos.isEmpty()) return "Empty todo list"
+
+        // Try to find in_progress todo first
+        val inProgressTodo = todos.firstOrNull { item ->
+            (item as? JsonObject)?.get("status")?.jsonPrimitive?.content == "in_progress"
+        } as? JsonObject
+
+        // Fallback to first todo if no in_progress
+        val targetTodo = inProgressTodo ?: (todos.firstOrNull() as? JsonObject)
+        if (targetTodo == null) return "Todo list (${todos.size} items)"
+
+        val activeForm = targetTodo["activeForm"]?.jsonPrimitive?.content
+        val content = targetTodo["content"]?.jsonPrimitive?.content ?: ""
+        val displayText = activeForm ?: content
+
+        return if (displayText.length > 60) {
+            displayText.take(60) + "..."
+        } else {
+            displayText
+        }
+    }
+
+    /**
+     * Extracts summary from TodoWrite's todo list (List<*>).
+     * Shows the first in_progress todo's activeForm, or first todo's content.
+     */
+    private fun extractTodoWriteSummaryFromList(todos: List<*>): String {
+        if (todos.isEmpty()) return "Empty todo list"
+
+        // Try to find in_progress todo first
+        val inProgressTodo = todos.firstOrNull { item ->
+            (item as? Map<*, *>)?.get("status") == "in_progress"
+        } as? Map<*, *>
+
+        // Fallback to first todo if no in_progress
+        val targetTodo = inProgressTodo ?: (todos.firstOrNull() as? Map<*, *>)
+        if (targetTodo == null) return "Todo list (${todos.size} items)"
+
+        val activeForm = targetTodo["activeForm"] as? String
+        val content = targetTodo["content"] as? String ?: ""
+        val displayText = activeForm ?: content
+
+        return if (displayText.length > 60) {
+            displayText.take(60) + "..."
+        } else {
+            displayText
+        }
+    }
+
+    /**
      * Extracts a brief summary for a tool usage from Map input.
      */
     fun extractToolSummaryFromMap(toolName: String, input: Any?): String {
         if (input == null) return ""
+
+        // Handle TodoWrite which receives a List of todo items
+        if (toolName == "TodoWrite" && input is List<*>) {
+            return extractTodoWriteSummaryFromList(input)
+        }
+
         if (input !is Map<*, *>) return input.toString().take(100)
 
         return when (toolName) {
