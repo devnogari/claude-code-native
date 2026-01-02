@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
@@ -184,6 +185,14 @@ func (s *SyncService) syncSession(ctx context.Context, projectID uuid.UUID, enco
 func (s *SyncService) importMessages(ctx context.Context, convID uuid.UUID, encodedPath, sessionID string, startSeqNum int) int {
 	messages, err := s.reader.GetSessionMessages(encodedPath, sessionID)
 	if err != nil {
+		// File not found is expected - sessions may exist in metadata but have
+		// their .jsonl files deleted, or be in-progress without messages yet
+		if os.IsNotExist(err) {
+			s.logger.Debug("session file not found, skipping message import",
+				zap.String("session_id", sessionID))
+			return 0
+		}
+		// Log other errors (permission denied, I/O errors, etc.) as actual errors
 		s.logger.Error("failed to read session messages",
 			zap.String("session_id", sessionID),
 			zap.Error(err))

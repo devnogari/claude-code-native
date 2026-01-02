@@ -137,4 +137,13 @@ class ClaudeHistoryApi(private val client: ApiClient) {
     suspend fun getSessionState(encodedPath: String, sessionId: String): SessionStateResponse {
         return client.get("/claude-history/projects/$encodedPath/sessions/$sessionId/state")
     }
+
+    /**
+     * Deletes a Claude project and all its sessions from the filesystem cache.
+     *
+     * @param encodedPath The encoded project path to delete
+     */
+    suspend fun deleteProject(encodedPath: String) {
+        client.delete("/claude-history/projects/$encodedPath")
+    }
 }

@@ -93,6 +93,7 @@ fun ProjectListScreenContent(
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var deleteSessionTarget by remember { mutableStateOf<Triple<String, String, String?>?>(null) } // sessionId, projectPath, sourceEncodedPath
+    var deleteProjectTarget by remember { mutableStateOf<Pair<String, String>?>(null) } // encodedPath, projectName
     var deleteResultMessage by remember { mutableStateOf<String?>(null) }
 
     // Refresh projects when refreshTrigger changes (e.g., when a new session is created)
@@ -147,6 +148,45 @@ fun ProjectListScreenContent(
             },
             dismissButton = {
                 TextButton(onClick = { deleteSessionTarget = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Delete project confirmation dialog
+    if (deleteProjectTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deleteProjectTarget = null },
+            title = { Text("Delete Project") },
+            text = {
+                Text("Delete project \"${deleteProjectTarget!!.second}\" from the list? This removes the project from cache but does not delete any files on disk.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val (encodedPath, _) = deleteProjectTarget!!
+                        deleteProjectTarget = null
+                        viewModel.deleteProject(
+                            encodedPath = encodedPath,
+                            onSuccess = {
+                                deleteResultMessage = "Project deleted"
+                                viewModel.refresh() // Refresh list to reflect deletion
+                            },
+                            onError = { error ->
+                                deleteResultMessage = error
+                            }
+                        )
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteProjectTarget = null }) {
                     Text("Cancel")
                 }
             }
@@ -214,11 +254,12 @@ fun ProjectListScreenContent(
 
             // Delete result message
             if (deleteResultMessage != null) {
+                val isSuccess = deleteResultMessage == "Session deleted" || deleteResultMessage == "Project deleted"
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = if (deleteResultMessage == "Session deleted")
+                    color = if (isSuccess)
                         MaterialTheme.colorScheme.primaryContainer
                     else
                         MaterialTheme.colorScheme.errorContainer,
@@ -227,7 +268,7 @@ fun ProjectListScreenContent(
                     Text(
                         text = deleteResultMessage ?: "",
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        color = if (deleteResultMessage == "Session deleted")
+                        color = if (isSuccess)
                             MaterialTheme.colorScheme.onPrimaryContainer
                         else
                             MaterialTheme.colorScheme.onErrorContainer
@@ -312,6 +353,9 @@ fun ProjectListScreenContent(
                                     isLoading = uiState.isLoading,
                                     onToggleExpand = { viewModel.toggleProjectExpanded(project.id) },
                                     onToggleFavorite = { viewModel.toggleFavorite(project.path) },
+                                    onDeleteProject = {
+                                        deleteProjectTarget = Pair(project.encodedPath, project.name)
+                                    },
                                     onSessionClick = { session ->
                                         viewModel.onSessionClick(session.id, project.encodedPath) { sessionId, encodedPath ->
                                             onConversationSelected("$sessionId?project=$encodedPath")
@@ -400,6 +444,7 @@ private fun ProjectItem(
     isLoading: Boolean,
     onToggleExpand: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onDeleteProject: () -> Unit,
     onSessionClick: (ClaudeSession) -> Unit,
     onToggleSessionFavorite: (ClaudeSession) -> Unit,
     onDeleteSession: (ClaudeSession) -> Unit,
@@ -473,6 +518,15 @@ private fun ProjectItem(
                         if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                         contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
                         tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Delete project button
+                IconButton(onClick = onDeleteProject) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete project",
+                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
                     )
                 }
 
