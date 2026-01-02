@@ -8,6 +8,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.ArrowDownward
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -80,8 +83,11 @@ import androidx.compose.material.icons.filled.Image
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.claudecode.native.util.DebugLogger
 import com.claudecode.native.util.DropState
 import com.claudecode.native.util.imageDropTarget
+
+private const val TAG = "ChatScreen"
 
 /**
  * Chat screen for real-time messaging with Claude.
@@ -122,7 +128,7 @@ fun ChatScreen(
  * @param onSessionCreated Callback when a new session is created from draft mode (sessionId, encodedPath for refreshing sidebar)
  * @param onNewSession Callback when user wants to start a new session (disabled during draft sessions)
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
 fun ChatScreenContent(
     conversationId: String,
@@ -157,6 +163,20 @@ fun ChatScreenContent(
                 firstVisibleItem == null ||
                 firstVisibleItem.index == 0 ||
                 totalItems <= 3
+        }
+    }
+
+    // Track if user is at top of the list (oldest messages) for pagination
+    // With reverseLayout=true, last visible item (highest index) is at the top
+    val isNearTop by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+            val totalItems = layoutInfo.totalItemsCount
+            // Consider near top if last visible item is within 3 items of the end
+            totalItems > 0 &&
+                lastVisibleItem != null &&
+                lastVisibleItem.index >= totalItems - 3
         }
     }
 
@@ -195,6 +215,8 @@ fun ChatScreenContent(
     // that returns different StateFlow based on currentConversationId)
     val progressStatus by remember(conversationId) { viewModel.progressStatus }.collectAsState()
     val attachedImages by viewModel.attachedImages.collectAsState()
+    val hasMoreMessages by viewModel.hasMoreMessages.collectAsState()
+    val isLoadingMore by viewModel.isLoadingMore.collectAsState()
 
     // Image picker
     val imagePicker = remember { ImagePicker() }
@@ -205,7 +227,7 @@ fun ChatScreenContent(
     // Notify when a new session is created from draft mode
     LaunchedEffect(sessionCreatedEvent) {
         sessionCreatedEvent?.let { sessionInfo ->
-            println("ChatScreen: Session created event received: sessionId=${sessionInfo.sessionId}, encodedPath=${sessionInfo.encodedPath}")
+            DebugLogger.d(TAG, "Session created event received: sessionId=${sessionInfo.sessionId}, encodedPath=${sessionInfo.encodedPath}")
             onSessionCreated(sessionInfo.sessionId, sessionInfo.encodedPath)
             viewModel.clearSessionCreatedEvent()
         }
@@ -225,14 +247,14 @@ fun ChatScreenContent(
 
     // Connect when screen is displayed
     LaunchedEffect(conversationId) {
-        println("ChatScreen: LaunchedEffect(${conversationId.take(20)}) - calling connect()")
+        DebugLogger.d(TAG, "LaunchedEffect(${conversationId.take(20)}) - calling connect()")
         viewModel.connect(conversationId)
         hasInitialized = true
         // Mark initial loading complete after connection attempt starts
         // Small delay to let connection state transition to Connecting
         kotlinx.coroutines.delay(100)
         isInitialLoading = false
-        println("ChatScreen: LaunchedEffect(${conversationId.take(20)}) - connect() returned")
+        DebugLogger.d(TAG, "LaunchedEffect(${conversationId.take(20)}) - connect() returned")
     }
 
     // Note: Commands are loaded automatically by ChatViewModel when project path is set
@@ -249,7 +271,7 @@ fun ChatScreenContent(
     DisposableEffect(Unit) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && currentHasInitialized) {
-                println("ChatScreen: ON_RESUME - syncing messages")
+                DebugLogger.d(TAG, "ON_RESUME - syncing messages")
                 viewModel.syncOnForeground()
             }
         }
@@ -308,6 +330,19 @@ fun ChatScreenContent(
         }
     }
 
+    // Load more messages when scrolling near top (pagination)
+    // Using snapshotFlow with debounce to prevent rapid-fire API calls
+    LaunchedEffect(Unit) {
+        snapshotFlow { Triple(isNearTop, hasMoreMessages, isLoadingMore) }
+            .distinctUntilChanged()
+            .debounce(100)
+            .collect { (nearTop, hasMore, loading) ->
+                if (nearTop && hasMore && !loading) {
+                    viewModel.loadMoreMessages()
+                }
+            }
+    }
+
     // Scroll to bottom when ViewModel signals (on send message, streaming complete, etc.)
     // With reverseLayout=true, index 0 is at the bottom
     LaunchedEffect(scrollToBottomSignal) {
@@ -319,11 +354,11 @@ fun ChatScreenContent(
                 try {
                     listState.animateScrollToItem(0)
                 } catch (e: Exception) {
-                    println("ChatScreen: Animate scroll failed, falling back to immediate scroll. Error: ${e.message}")
+                    DebugLogger.w(TAG, "Animate scroll failed, falling back to immediate scroll. Error: ${e.message}")
                     try {
                         listState.scrollToItem(0)
                     } catch (scrollError: Exception) {
-                        println("ChatScreen: Immediate scroll also failed. Error: ${scrollError.message}")
+                        DebugLogger.w(TAG, "Immediate scroll also failed. Error: ${scrollError.message}")
                     }
                 }
                 userScrolledUp = false
@@ -633,6 +668,24 @@ fun ChatScreenContent(
                         key = { it.id }
                     ) { message ->
                         MessageBubble(message = message)
+                    }
+
+                    // Loading indicator at top (oldest messages) for pagination
+                    // With reverseLayout=true, this appears at the top of the visible list
+                    if (isLoadingMore) {
+                        item(key = "loading_more") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -1159,7 +1212,7 @@ private fun handleSlashCommand(
             // Most builtin commands are handled internally by ChatViewModel
             // (displaying results as local assistant messages).
             // This callback is only for commands that need custom UI handling.
-            println("ChatScreen: Unhandled builtin command action: ${response.action}")
+            DebugLogger.w(TAG, "Unhandled builtin command action: ${response.action}")
         }
     )
     onClearInput()

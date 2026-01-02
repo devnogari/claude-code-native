@@ -115,6 +115,17 @@ class ChatViewModel(
     /** True when this is a draft session (not yet created on server). */
     val isDraftSession: StateFlow<Boolean> = _isDraftSession.asStateFlow()
 
+    private val _hasMoreMessages = MutableStateFlow(false)
+    /** True when there are more messages to load (pagination). */
+    val hasMoreMessages: StateFlow<Boolean> = _hasMoreMessages.asStateFlow()
+
+    private val _isLoadingMore = MutableStateFlow(false)
+    /** True when loading more messages (pagination in progress). */
+    val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
+
+    /** Current offset for pagination (number of messages already loaded). */
+    private var currentMessagesOffset: Int = 0
+
     /**
      * Event data for when a new session is created from draft mode.
      */
@@ -326,6 +337,147 @@ class ChatViewModel(
         mutex.withLock {
             _messages.value = emptyList()
         }
+        // Reset pagination state
+        currentMessagesOffset = 0
+        _hasMoreMessages.value = false
+        _isLoadingMore.value = false
+    }
+
+    /**
+     * Loads more (older) messages for pagination.
+     * Called when user scrolls to the top of the message list.
+     */
+    fun loadMoreMessages() {
+        // Guard: Don't load if already loading or no more messages
+        if (_isLoadingMore.value || !_hasMoreMessages.value) {
+            DebugLogger.d(TAG, "loadMoreMessages skipped - isLoading=${_isLoadingMore.value}, hasMore=${_hasMoreMessages.value}")
+            return
+        }
+
+        val encodedPath = currentEncodedPath ?: return
+        val sessionId = currentClaudeSession ?: return
+        val expectedConversationId = currentConversationId ?: return
+
+        scope.launch {
+            _isLoadingMore.value = true
+            try {
+                DebugLogger.d(TAG, "Loading more messages, offset=$currentMessagesOffset")
+                val response = claudeHistoryApi.getSessionMessages(
+                    encodedPath = encodedPath,
+                    sessionId = sessionId,
+                    limit = 100,
+                    offset = currentMessagesOffset,
+                    summary = false
+                )
+
+                // GUARD CHECK: Verify we're still in the same conversation
+                if (currentConversationId != expectedConversationId) {
+                    DebugLogger.d(TAG, "Room switched during loadMore, discarding results")
+                    return@launch
+                }
+
+                if (response.messages.isEmpty()) {
+                    _hasMoreMessages.value = false
+                    return@launch
+                }
+
+                DebugLogger.d(TAG, "Got ${response.messages.size} more messages, hasMore=${response.hasMore}")
+
+                // Update pagination state
+                currentMessagesOffset += response.messages.size
+                _hasMoreMessages.value = response.hasMore
+
+                // Process and prepend older messages
+                processOlderMessages(response.messages)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                DebugLogger.e(TAG, "Failed to load more messages: ${e.message}", e)
+                _error.value = e.toUserMessage()
+            } finally {
+                _isLoadingMore.value = false
+            }
+        }
+    }
+
+    /**
+     * Processes older messages and prepends them to the existing message list.
+     * Uses same logic as processLoadedMessages for consistency.
+     */
+    private suspend fun processOlderMessages(messages: List<com.claudecode.native.data.model.ClaudeMessage>) {
+        // Build tool maps for older messages
+        val olderToolUses = mutableMapOf<String, ToolUseInfo>()
+        val olderToolResults = mutableMapOf<String, Pair<String, Boolean>>()
+
+        for (msg in messages) {
+            val message = msg.message ?: continue
+            extractToolsFromContent(message.content, olderToolUses, olderToolResults)
+        }
+
+        // Match tool results to tool uses (using immutable copy pattern)
+        for ((toolId, resultPair) in olderToolResults) {
+            val (result, isError) = resultPair
+            if (olderToolUses.containsKey(toolId)) {
+                olderToolUses[toolId] = olderToolUses[toolId]!!.copy(result = result, isError = isError)
+            }
+        }
+
+        // Merge older tool uses into session maps
+        mapsMutex.withLock {
+            sessionToolUses.putAll(olderToolUses)
+            sessionToolResults.putAll(olderToolResults)
+        }
+
+        // Convert older messages to ChatMessages (using same pattern as processLoadedMessages)
+        val olderChatMessages = messages.mapIndexedNotNull { index, msg ->
+            val message = msg.message ?: return@mapIndexedNotNull null
+            val role = message.role
+            val blocks = parseMessageContent(message.content, msg.uuid)
+
+            // Update tool blocks with results
+            val blocksWithResults = updateBlocksWithToolResults(blocks, olderToolUses)
+
+            // Skip tool_result-only messages
+            if (hasOnlyToolResults(message.content)) {
+                return@mapIndexedNotNull null
+            }
+
+            // Skip meta messages
+            if (msg.isMeta) {
+                return@mapIndexedNotNull null
+            }
+
+            // Skip messages with no content blocks
+            if (blocksWithResults.isEmpty()) return@mapIndexedNotNull null
+
+            // Skip compaction/summary messages
+            val textContent = blocksWithResults.filterIsInstance<ContentBlock.Text>()
+                .joinToString("\n\n") { it.content }
+            if (isCompactionMessage(textContent)) return@mapIndexedNotNull null
+
+            ChatMessage(
+                id = msg.uuid ?: "msg_${msg.timestamp?.toEpochMilliseconds() ?: index}",
+                role = when (role) {
+                    "user" -> MessageRole.USER
+                    "assistant" -> MessageRole.ASSISTANT
+                    else -> return@mapIndexedNotNull null
+                },
+                blocks = blocksWithResults,
+                isStreaming = false,
+                gitBranch = msg.gitBranch,
+                agentId = msg.agentId,
+                isSidechain = msg.isSidechain
+            )
+        }
+
+        // Prepend older messages to existing list, filtering out duplicates
+        mutex.withLock {
+            val currentMessages = _messages.value
+            val existingIds = currentMessages.map { it.id }.toSet()
+            val uniqueOlderMessages = olderChatMessages.filter { it.id !in existingIds }
+            _messages.value = uniqueOlderMessages + currentMessages
+            DebugLogger.d(TAG, "Prepended ${uniqueOlderMessages.size} older messages (filtered ${olderChatMessages.size - uniqueOlderMessages.size} duplicates)")
+        }
     }
 
     /**
@@ -437,23 +589,23 @@ class ChatViewModel(
 
         // OPTIMIZATION: Skip if already connected to this room and not loading
         if (currentConversationId == conversationId && currentConnectJob?.isActive != true) {
-            println("[$connectCallId] SKIP: Already connected to $shortConvId")
+            DebugLogger.d(TAG, "[$connectCallId] SKIP: Already connected to $shortConvId")
             return
         }
 
-        println("[$connectCallId] >>> connect() CALLED with: $shortConvId")
-        println("[$connectCallId] Current state: currentConversationId=${currentConversationId?.take(20)}, title=${_conversationTitle.value?.take(30)}")
+        DebugLogger.d(TAG, "[$connectCallId] >>> connect() CALLED with: $shortConvId")
+        DebugLogger.d(TAG, "[$connectCallId] Current state: currentConversationId=${currentConversationId?.take(20)}, title=${_conversationTitle.value?.take(30)}")
 
         // Cancel any previous connect job to prevent race conditions when switching rooms quickly
         val prevJob = currentConnectJob
         if (prevJob != null) {
-            println("[$connectCallId] Cancelling previous connect job")
+            DebugLogger.d(TAG, "[$connectCallId] Cancelling previous connect job")
             prevJob.cancel()
         }
 
         currentConnectJob = scope.launch {
             try {
-                println("[$connectCallId] Inside coroutine, checking if need to disconnect")
+                DebugLogger.d(TAG, "[$connectCallId] Inside coroutine, checking if need to disconnect")
                 // Disconnect from previous conversation if any
                 if (currentConversationId != null && currentConversationId != conversationId) {
                     webSocketClient.disconnect()
@@ -480,7 +632,7 @@ class ChatViewModel(
                 // Set conversation ID immediately so subsequent connect() calls know to disconnect
                 currentConversationId = conversationId
                 _currentConversationIdFlow.value = conversationId
-                println("[$connectCallId] Set currentConversationId = $shortConvId")
+                DebugLogger.d(TAG, "[$connectCallId] Set currentConversationId = $shortConvId")
 
                 val token = apiClient.getAuthToken() ?: run {
                     _error.value = "Not authenticated"
@@ -490,12 +642,12 @@ class ChatViewModel(
                 // Parse conversationId to extract session info
                 // Format: "draft?project=encodedPath", "sessionId?project=encodedPath", or legacy UUID
                 val (sessionId, encodedPath) = parseConversationId(conversationId)
-                println("[$connectCallId] Parsed: sessionId=${sessionId?.take(15)}, encodedPath=${encodedPath?.take(30)}")
+                DebugLogger.d(TAG, "[$connectCallId] Parsed: sessionId=${sessionId?.take(15)}, encodedPath=${encodedPath?.take(30)}")
 
                 if (sessionId != null && encodedPath != null) {
                     // Check if this is a draft session (not yet created)
                     if (sessionId == DRAFT_SESSION_MARKER) {
-                        println("ChatViewModel: Draft session mode for $encodedPath")
+                        DebugLogger.d(TAG, "ChatViewModel: Draft session mode for $encodedPath")
                         _isDraftSession.value = true
                         currentEncodedPath = encodedPath
                         currentClaudeSession = null  // No session ID yet
@@ -503,7 +655,7 @@ class ChatViewModel(
 
                         // FIX: Clear previous session's messages for draft sessions
                         clearSessionState()
-                        println("ChatViewModel: Cleared previous session state for draft")
+                        DebugLogger.d(TAG, "ChatViewModel: Cleared previous session state for draft")
 
                         // FIX: Clear progress status for this conversation ID to ensure fresh state
                         // Draft sessions reuse the same conversationId pattern, so old state must be cleared
@@ -515,12 +667,12 @@ class ChatViewModel(
                             currentProjectPath = project.path
                             loadCommands(project.path)
                         } catch (e: Exception) {
-                            println("ChatViewModel: Failed to fetch project info for draft: ${e.message}")
+                            DebugLogger.d(TAG, "ChatViewModel: Failed to fetch project info for draft: ${e.message}")
                         }
 
                         // Connect WebSocket in draft mode (will be ready when session is created)
                         // The WebSocket will be reconnected with actual session ID when first message is sent
-                        println("ChatViewModel: Draft mode - WebSocket will connect on first message")
+                        DebugLogger.d(TAG, "ChatViewModel: Draft mode - WebSocket will connect on first message")
                         return@launch  // Don't connect WebSocket yet for draft sessions
                     }
 
@@ -528,52 +680,52 @@ class ChatViewModel(
                     currentEncodedPath = encodedPath
                     currentClaudeSession = sessionId
 
-                    println("[$connectCallId] BEFORE loadMessagesFromFilesystem, title=${_conversationTitle.value?.take(30)}")
+                    DebugLogger.d(TAG, "[$connectCallId] BEFORE loadMessagesFromFilesystem, title=${_conversationTitle.value?.take(30)}")
 
                     // Load messages directly from filesystem API
                     loadMessagesFromFilesystem(encodedPath, sessionId, conversationId, connectCallId)
 
-                    println("[$connectCallId] AFTER loadMessagesFromFilesystem, title=${_conversationTitle.value?.take(30)}")
-                    println("[$connectCallId] currentConversationId now = ${currentConversationId?.take(20)}")
+                    DebugLogger.d(TAG, "[$connectCallId] AFTER loadMessagesFromFilesystem, title=${_conversationTitle.value?.take(30)}")
+                    DebugLogger.d(TAG, "[$connectCallId] currentConversationId now = ${currentConversationId?.take(20)}")
 
                     // Guard: Check if we're still the active conversation after async load
                     // If user switched rooms during loading, abort this connection
                     if (currentConversationId != conversationId) {
-                        println("[$connectCallId] !!! GUARD TRIGGERED: room switched during load, ABORTING")
-                        println("[$connectCallId] BUT TITLE IS ALREADY SET TO: ${_conversationTitle.value?.take(50)}")
+                        DebugLogger.d(TAG, "[$connectCallId] !!! GUARD TRIGGERED: room switched during load, ABORTING")
+                        DebugLogger.d(TAG, "[$connectCallId] BUT TITLE IS ALREADY SET TO: ${_conversationTitle.value?.take(50)}")
                         return@launch
                     }
-                    println("[$connectCallId] Guard passed, continuing with connection")
+                    DebugLogger.d(TAG, "[$connectCallId] Guard passed, continuing with connection")
 
                     // Connect to history watch for real-time file changes
-                    println("ChatViewModel: Connecting history watch for $encodedPath / $sessionId")
+                    DebugLogger.d(TAG, "ChatViewModel: Connecting history watch for $encodedPath / $sessionId")
                     historyWatchClient.connect(encodedPath, sessionId, token)
 
                     // Connect WebSocket with the full session identifier
                     // This allows continuing the conversation
-                    println("[$connectCallId] Connecting WebSocket for filesystem session")
+                    DebugLogger.d(TAG, "[$connectCallId] Connecting WebSocket for filesystem session")
                     webSocketClient.connect(conversationId, token)
-                    println("[$connectCallId] <<< connect() COMPLETE for: $shortConvId")
-                    println("[$connectCallId] Final state: title=${_conversationTitle.value?.take(40)}, msgCount=${_messages.value.size}")
+                    DebugLogger.d(TAG, "[$connectCallId] <<< connect() COMPLETE for: $shortConvId")
+                    DebugLogger.d(TAG, "[$connectCallId] Final state: title=${_conversationTitle.value?.take(40)}, msgCount=${_messages.value.size}")
                 } else {
                     // Legacy database-based flow (fallback)
                     loadMessages(conversationId)
 
                     // Guard: Check if we're still the active conversation after async load
                     if (currentConversationId != conversationId) {
-                        println("[$connectCallId] !!! Legacy GUARD TRIGGERED: room switched during message load")
+                        DebugLogger.d(TAG, "[$connectCallId] !!! Legacy GUARD TRIGGERED: room switched during message load")
                         return@launch
                     }
 
                     webSocketClient.connect(conversationId, token)
                     connectHistoryWatch(conversationId, token)
-                    println("[$connectCallId] <<< Legacy connect() COMPLETE")
+                    DebugLogger.d(TAG, "[$connectCallId] <<< Legacy connect() COMPLETE")
                 }
             } catch (e: CancellationException) {
-                println("[$connectCallId] !!! CANCELLED - job was cancelled")
+                DebugLogger.d(TAG, "[$connectCallId] !!! CANCELLED - job was cancelled")
                 throw e
             } catch (e: Exception) {
-                println("[$connectCallId] !!! ERROR: ${e.message}")
+                DebugLogger.d(TAG, "[$connectCallId] !!! ERROR: ${e.message}")
                 _error.value = e.toUserMessage()
             }
         }
@@ -605,8 +757,8 @@ class ChatViewModel(
         callId: String = "?"
     ) {
         try {
-            println("[$callId] loadMessagesFromFilesystem START - sessionId=${sessionId.take(15)}")
-            println("[$callId] Before API call, currentConversationId=${currentConversationId?.take(20)}")
+            DebugLogger.d(TAG, "[$callId] loadMessagesFromFilesystem START - sessionId=${sessionId.take(15)}")
+            DebugLogger.d(TAG, "[$callId] Before API call, currentConversationId=${currentConversationId?.take(20)}")
 
             // Fetch project to get the original path and session title for delete operations
             try {
@@ -615,13 +767,13 @@ class ChatViewModel(
                 // GUARD CHECK: Before setting ANY state, verify we're still the active conversation
                 // This prevents race condition where user clicks another room during API call
                 if (currentConversationId != expectedConversationId) {
-                    println("[$callId] !!! GUARD: Room switched during project fetch, aborting state update")
-                    println("[$callId] Expected: ${expectedConversationId.take(20)}, Current: ${currentConversationId?.take(20)}")
+                    DebugLogger.d(TAG, "[$callId] !!! GUARD: Room switched during project fetch, aborting state update")
+                    DebugLogger.d(TAG, "[$callId] Expected: ${expectedConversationId.take(20)}, Current: ${currentConversationId?.take(20)}")
                     return
                 }
 
                 currentProjectPath = project.path
-                println("[$callId] Got project: ${project.name}")
+                DebugLogger.d(TAG, "[$callId] Got project: ${project.name}")
 
                 // Find the session and extract the title (firstMessage)
                 val session = project.sessions.find { it.id == sessionId }
@@ -633,26 +785,26 @@ class ChatViewModel(
 
                 // GUARD CHECK again before setting title (in case of context switch)
                 if (currentConversationId != expectedConversationId) {
-                    println("[$callId] !!! GUARD: Room switched before title set, aborting")
+                    DebugLogger.d(TAG, "[$callId] !!! GUARD: Room switched before title set, aborting")
                     return
                 }
 
-                println("[$callId] About to set title to: ${newTitle.take(50)}")
-                println("[$callId] currentConversationId at title set time: ${currentConversationId?.take(20)}")
+                DebugLogger.d(TAG, "[$callId] About to set title to: ${newTitle.take(50)}")
+                DebugLogger.d(TAG, "[$callId] currentConversationId at title set time: ${currentConversationId?.take(20)}")
                 _conversationTitle.value = newTitle
-                println("[$callId] Title IS NOW: ${_conversationTitle.value?.take(50)}")
+                DebugLogger.d(TAG, "[$callId] Title IS NOW: ${_conversationTitle.value?.take(50)}")
 
                 // Load commands now that we have the project path
                 loadCommands(project.path)
             } catch (e: Exception) {
-                println("[$callId] Failed to fetch project info: ${e.message}")
+                DebugLogger.d(TAG, "[$callId] Failed to fetch project info: ${e.message}")
                 // Continue without project path - delete will try to decode
                 _conversationTitle.value = null
             }
 
             // GUARD CHECK before loading messages
             if (currentConversationId != expectedConversationId) {
-                println("[$callId] !!! GUARD: Room switched before message load, aborting")
+                DebugLogger.d(TAG, "[$callId] !!! GUARD: Room switched before message load, aborting")
                 return
             }
 
@@ -668,17 +820,21 @@ class ChatViewModel(
 
                 // GUARD CHECK after API call, before setting messages
                 if (currentConversationId != expectedConversationId) {
-                    println("[$callId] !!! GUARD: Room switched during message fetch, discarding ${response.messages.size} messages")
+                    DebugLogger.d(TAG, "[$callId] !!! GUARD: Room switched during message fetch, discarding ${response.messages.size} messages")
                     return
                 }
 
-                println("[$callId] Got ${response.messages.size} messages from API, processing...")
+                DebugLogger.d(TAG, "[$callId] Got ${response.messages.size} messages from API, hasMore=${response.hasMore}, processing...")
 
                 // Only clear state on initial load, not on foreground sync
                 // During sync, we want to preserve pending messages that are still being sent
                 if (callId != "SYNC") {
                     clearSessionState()
                 }
+
+                // Update pagination state
+                currentMessagesOffset = response.messages.size
+                _hasMoreMessages.value = response.hasMore
 
                 // Process messages using existing logic
                 processLoadedMessages(response.messages)
@@ -694,19 +850,19 @@ class ChatViewModel(
                         e.message?.contains("400", ignoreCase = true) == true ||
                         e.message?.contains("session not found", ignoreCase = true) == true
                 if (isExpectedError) {
-                    println("[$callId] No history found for session (this is normal for new chats)")
+                    DebugLogger.d(TAG, "[$callId] No history found for session (this is normal for new chats)")
 
                     // GUARD CHECK: Verify we're still the active conversation before clearing state
                     if (currentConversationId != expectedConversationId) {
-                        println("[$callId] !!! GUARD: Room switched during 404 handling, aborting state clear")
+                        DebugLogger.d(TAG, "[$callId] !!! GUARD: Room switched during 404 handling, aborting state clear")
                         return
                     }
 
                     // Clear old state for new sessions
                     clearSessionState()
-                    println("[$callId] Cleared state for new session")
+                    DebugLogger.d(TAG, "[$callId] Cleared state for new session")
                 } else {
-                    println("[$callId] Failed to load messages from filesystem: ${e.message}")
+                    DebugLogger.d(TAG, "[$callId] Failed to load messages from filesystem: ${e.message}")
                     _error.value = e.toUserMessage()
                 }
             }
@@ -714,7 +870,7 @@ class ChatViewModel(
             throw e
         } catch (e: Exception) {
             // Outer catch for project fetch errors
-            println("ChatViewModel: Failed during filesystem message loading: ${e.message}")
+            DebugLogger.d(TAG, "ChatViewModel: Failed during filesystem message loading: ${e.message}")
             _error.value = e.toUserMessage()
         }
     }
@@ -801,7 +957,7 @@ class ChatViewModel(
                 isSidechain = msg.isSidechain
             )
         }
-        println("ChatViewModel: Converted to ${chatMessages.size} chat messages")
+        DebugLogger.d(TAG, "ChatViewModel: Converted to ${chatMessages.size} chat messages")
 
         mutex.withLock {
             val currentMessages = _messages.value
@@ -812,7 +968,7 @@ class ChatViewModel(
             val messagesToAdd = mutableListOf<ChatMessage>()
 
             if (pendingMessages.isNotEmpty()) {
-                println("ChatViewModel: Preserving ${pendingMessages.size} pending messages during reload")
+                DebugLogger.d(TAG, "ChatViewModel: Preserving ${pendingMessages.size} pending messages during reload")
                 // Merge: loaded messages + pending messages not already in loaded list
                 val loadedContentHashes = chatMessages.map { it.content.hashCode() }.toSet()
                 val uniquePendingMessages = pendingMessages.filter { pending ->
@@ -867,7 +1023,7 @@ class ChatViewModel(
                 .toList()
 
             _messages.value = deduplicatedMessages
-            println("ChatViewModel:697 - Added ${messagesToAdd.size} messages (initial load), total=${_messages.value.size}")
+            DebugLogger.d(TAG, "ChatViewModel:697 - Added ${messagesToAdd.size} messages (initial load), total=${_messages.value.size}")
         }
     }
 
@@ -880,7 +1036,7 @@ class ChatViewModel(
             val conversation = conversationApi.getConversation(conversationId)
             val claudeSession = conversation.claudeSession
             if (claudeSession.isNullOrBlank()) {
-                println("ChatViewModel: No claudeSession for history watch")
+                DebugLogger.d(TAG, "ChatViewModel: No claudeSession for history watch")
                 return
             }
 
@@ -892,12 +1048,12 @@ class ChatViewModel(
             currentEncodedPath = encodedPath
             currentClaudeSession = claudeSession
 
-            println("ChatViewModel: Connecting history watch for $encodedPath / $claudeSession")
+            DebugLogger.d(TAG, "ChatViewModel: Connecting history watch for $encodedPath / $claudeSession")
             historyWatchClient.connect(encodedPath, claudeSession, token)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            println("ChatViewModel: Failed to connect history watch: ${e.message}")
+            DebugLogger.d(TAG, "ChatViewModel: Failed to connect history watch: ${e.message}")
             // Don't fail the main connection if history watch fails
         }
     }
@@ -917,7 +1073,7 @@ class ChatViewModel(
             val claudeSession = conversation.claudeSession
             if (claudeSession.isNullOrBlank()) {
                 // No Claude session linked - this is a new conversation
-                println("ChatViewModel: No claudeSession for conversation $conversationId")
+                DebugLogger.d(TAG, "ChatViewModel: No claudeSession for conversation $conversationId")
                 return
             }
 
@@ -931,7 +1087,7 @@ class ChatViewModel(
             // Load commands now that we have the project path
             loadCommands(project.path)
 
-            println("ChatViewModel: Loading messages from $encodedPath / $claudeSession")
+            DebugLogger.d(TAG, "ChatViewModel: Loading messages from $encodedPath / $claudeSession")
 
             // Load messages from file-based API (with summary=false for full content)
             val response = claudeHistoryApi.getSessionMessages(
@@ -941,7 +1097,7 @@ class ChatViewModel(
                 offset = 0,
                 summary = false
             )
-            println("ChatViewModel: Got ${response.messages.size} messages from API")
+            DebugLogger.d(TAG, "ChatViewModel: Got ${response.messages.size} messages from API")
 
             // Use shared processing logic
             processLoadedMessages(response.messages)
@@ -952,12 +1108,12 @@ class ChatViewModel(
             val isNotFound = e.message?.contains("Not found", ignoreCase = true) == true ||
                     e.message?.contains("404", ignoreCase = true) == true
             if (isNotFound) {
-                println("ChatViewModel: No history found for conversation (this is normal for new chats)")
+                DebugLogger.d(TAG, "ChatViewModel: No history found for conversation (this is normal for new chats)")
 
                 // Clear old state for new sessions
                 clearSessionState()
             } else {
-                println("ChatViewModel: Failed to load messages: ${e.message}")
+                DebugLogger.d(TAG, "ChatViewModel: Failed to load messages: ${e.message}")
                 e.printStackTrace()
                 _error.value = "Failed to load messages: ${e.message}"
             }
@@ -995,13 +1151,13 @@ class ChatViewModel(
 
         // Skip sync if a connect is already in progress to prevent duplicate API calls
         if (currentConnectJob?.isActive == true) {
-            println("ChatViewModel: Skipping foreground sync - connect in progress")
+            DebugLogger.d(TAG, "ChatViewModel: Skipping foreground sync - connect in progress")
             return
         }
 
         // Skip sync for draft sessions (new chats) - they don't have server-side state yet
         if (_isDraftSession.value) {
-            println("ChatViewModel: Skipping foreground sync - draft session")
+            DebugLogger.d(TAG, "ChatViewModel: Skipping foreground sync - draft session")
             return
         }
 
@@ -1010,14 +1166,14 @@ class ChatViewModel(
                 // Always sync state first via REST to detect streaming status changes
                 // This is important because streaming might have started/stopped while in background
                 if (encodedPath != null && sessionId != null) {
-                    println("ChatViewModel: Syncing state on foreground for $encodedPath / $sessionId")
+                    DebugLogger.d(TAG, "ChatViewModel: Syncing state on foreground for $encodedPath / $sessionId")
                     try {
                         val stateResponse = claudeHistoryApi.getSessionState(encodedPath, sessionId)
 
                         // Update streaming state
                         streamingMutex.withLock {
                             if (_isStreaming.value != stateResponse.isStreaming) {
-                                println("ChatViewModel: Foreground sync - updating streaming state: ${stateResponse.isStreaming}")
+                                DebugLogger.d(TAG, "ChatViewModel: Foreground sync - updating streaming state: ${stateResponse.isStreaming}")
                                 _isStreaming.value = stateResponse.isStreaming
                             }
                         }
@@ -1031,7 +1187,7 @@ class ChatViewModel(
                         } else {
                             // Server says idle - always stop progress if it's running
                             if (streamingStartTimes.containsKey(convId)) {
-                                println("ChatViewModel: Foreground sync - stopping progress (server confirmed idle)")
+                                DebugLogger.d(TAG, "ChatViewModel: Foreground sync - stopping progress (server confirmed idle)")
                                 stopProgressTracking()
                             }
                         }
@@ -1041,40 +1197,40 @@ class ChatViewModel(
                         if (progressFlow != null && stateResponse.todos.isNotEmpty()) {
                             val currentStatus = progressFlow.value
                             if (currentStatus.todos != stateResponse.todos) {
-                                println("ChatViewModel: Foreground sync - updating todos: ${stateResponse.todos.size} items")
+                                DebugLogger.d(TAG, "ChatViewModel: Foreground sync - updating todos: ${stateResponse.todos.size} items")
                                 progressFlow.value = currentStatus.copy(todos = stateResponse.todos)
                             }
                         }
                     } catch (e: Exception) {
-                        println("ChatViewModel: Failed to sync state on foreground: ${e.message}")
+                        DebugLogger.d(TAG, "ChatViewModel: Failed to sync state on foreground: ${e.message}")
                         // Continue with message sync even if state sync fails
                     }
 
                     // Skip message sync if streaming is now active
                     if (_isStreaming.value) {
-                        println("ChatViewModel: Skipping message sync - streaming is active")
+                        DebugLogger.d(TAG, "ChatViewModel: Skipping message sync - streaming is active")
                         return@launch
                     }
 
                     // Skip message sync for draft sessions or sessions with no messages yet
                     // (new conversations don't need to reload messages)
                     if (_isDraftSession.value || _messages.value.isEmpty()) {
-                        println("ChatViewModel: Skipping message sync - draft session or no messages yet")
+                        DebugLogger.d(TAG, "ChatViewModel: Skipping message sync - draft session or no messages yet")
                         return@launch
                     }
 
                     // Reload messages from filesystem
-                    println("ChatViewModel: Syncing messages on foreground for $encodedPath / $sessionId")
+                    DebugLogger.d(TAG, "ChatViewModel: Syncing messages on foreground for $encodedPath / $sessionId")
                     loadMessagesFromFilesystem(encodedPath, sessionId, convId, "SYNC")
                 } else {
                     // Legacy flow - reload via conversation API
-                    println("ChatViewModel: Syncing messages on foreground (legacy) for $convId")
+                    DebugLogger.d(TAG, "ChatViewModel: Syncing messages on foreground (legacy) for $convId")
                     loadMessages(convId)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                println("ChatViewModel: Failed to sync on foreground: ${e.message}")
+                DebugLogger.d(TAG, "ChatViewModel: Failed to sync on foreground: ${e.message}")
             }
         }
     }
@@ -1094,14 +1250,14 @@ class ChatViewModel(
 
         scope.launch {
             try {
-                println("ChatViewModel: Syncing state via REST for $encodedPath / $sessionId")
+                DebugLogger.d(TAG, "ChatViewModel: Syncing state via REST for $encodedPath / $sessionId")
                 val stateResponse = claudeHistoryApi.getSessionState(encodedPath, sessionId)
 
                 // REST API reads the actual file state and checks stop_reason,
                 // so it provides authoritative information about streaming completion
                 streamingMutex.withLock {
                     if (_isStreaming.value != stateResponse.isStreaming) {
-                        println("ChatViewModel: REST sync - updating streaming state: ${stateResponse.isStreaming} (was: ${_isStreaming.value})")
+                        DebugLogger.d(TAG, "ChatViewModel: REST sync - updating streaming state: ${stateResponse.isStreaming} (was: ${_isStreaming.value})")
                         _isStreaming.value = stateResponse.isStreaming
                     }
                 }
@@ -1115,7 +1271,7 @@ class ChatViewModel(
                 } else {
                     // Server says not streaming (has stop_reason), stop progress
                     if (streamingStartTimes.containsKey(convId)) {
-                        println("ChatViewModel: REST sync - stopping progress (server confirmed idle)")
+                        DebugLogger.d(TAG, "ChatViewModel: REST sync - stopping progress (server confirmed idle)")
                         stopProgressTracking()
                     }
                 }
@@ -1125,17 +1281,17 @@ class ChatViewModel(
                 if (progressFlow != null && stateResponse.todos.isNotEmpty()) {
                     val currentStatus = progressFlow.value
                     if (currentStatus.todos != stateResponse.todos) {
-                        println("ChatViewModel: REST sync - updating todos: ${stateResponse.todos.size} items")
+                        DebugLogger.d(TAG, "ChatViewModel: REST sync - updating todos: ${stateResponse.todos.size} items")
                         progressFlow.value = currentStatus.copy(todos = stateResponse.todos)
                     }
                 }
 
-                println("ChatViewModel: REST sync complete - state=${stateResponse.sessionState}, streaming=${stateResponse.isStreaming}, todos=${stateResponse.todos.size}")
+                DebugLogger.d(TAG, "ChatViewModel: REST sync complete - state=${stateResponse.sessionState}, streaming=${stateResponse.isStreaming}, todos=${stateResponse.todos.size}")
 
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                println("ChatViewModel: Failed to sync state via REST: ${e.message}")
+                DebugLogger.d(TAG, "ChatViewModel: Failed to sync state via REST: ${e.message}")
                 // Don't propagate error - this is a fallback mechanism
             }
         }
@@ -1308,7 +1464,7 @@ class ChatViewModel(
         try {
             // Generate a new session ID
             val newSessionId = kotlin.uuid.Uuid.random().toString()
-            println("ChatViewModel: Creating session from draft: $newSessionId for $encodedPath")
+            DebugLogger.d(TAG, "ChatViewModel: Creating session from draft: $newSessionId for $encodedPath")
 
             // Update internal state
             currentClaudeSession = newSessionId
@@ -1331,7 +1487,7 @@ class ChatViewModel(
             }
 
             // Connect WebSocket with the new session ID
-            println("ChatViewModel: Connecting WebSocket for new session: $newConversationId")
+            DebugLogger.d(TAG, "ChatViewModel: Connecting WebSocket for new session: $newConversationId")
             webSocketClient.connect(newConversationId, token)
 
             // Wait for connection to be established
@@ -1360,7 +1516,7 @@ class ChatViewModel(
             }
 
             // Connect history watch for real-time updates
-            println("ChatViewModel: Connecting history watch for new session: $encodedPath / $newSessionId")
+            DebugLogger.d(TAG, "ChatViewModel: Connecting history watch for new session: $encodedPath / $newSessionId")
             historyWatchClient.connect(encodedPath, newSessionId, token)
 
             // Now send the message with images
@@ -1368,7 +1524,7 @@ class ChatViewModel(
 
             // Defer session created event until first server response (STREAM message)
             // HistoryWatch serves as fallback for edge cases where STREAM may be missed
-            println("ChatViewModel: Session created, deferring event until first response: $newSessionId")
+            DebugLogger.d(TAG, "ChatViewModel: Session created, deferring event until first response: $newSessionId")
             sessionCreatedMutex.withLock {
                 pendingSessionCreatedEmit = SessionCreatedInfo(newSessionId, encodedPath)
             }
@@ -1376,7 +1532,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            println("ChatViewModel: Failed to create session from draft: ${e.message}")
+            DebugLogger.d(TAG, "ChatViewModel: Failed to create session from draft: ${e.message}")
             _error.value = e.toUserMessage()
             _isDraftSession.value = true  // Revert to draft mode
         }
@@ -1487,7 +1643,7 @@ class ChatViewModel(
     private suspend fun logQueueStatusOnStreamingComplete() {
         val queue = getCurrentQueue()
         if (queue.isNotEmpty()) {
-            println("ChatViewModel: Streaming complete, ${queue.size} messages in queue (already sent to CLI)")
+            DebugLogger.d(TAG, "ChatViewModel: Streaming complete, ${queue.size} messages in queue (already sent to CLI)")
         }
     }
 
@@ -1503,14 +1659,14 @@ class ChatViewModel(
         val message = queue.find { it.id == messageId }
         when {
             message == null -> {
-                println("ChatViewModel: Cannot cancel - message not found: $messageId")
+                DebugLogger.d(TAG, "ChatViewModel: Cannot cancel - message not found: $messageId")
             }
             message.source == QueuedMessageSource.CLI -> {
-                println("ChatViewModel: Cannot cancel CLI message from app: $messageId")
+                DebugLogger.d(TAG, "ChatViewModel: Cannot cancel CLI message from app: $messageId")
                 _error.value = "Cannot cancel messages queued from terminal"
             }
             else -> {
-                println("ChatViewModel: Cancelled queued message: $messageId")
+                DebugLogger.d(TAG, "ChatViewModel: Cancelled queued message: $messageId")
                 updateCurrentQueue { q -> q.filter { it.id != messageId } }
             }
         }
@@ -1526,7 +1682,7 @@ class ChatViewModel(
         val cliMessages = queue.filter { it.source == QueuedMessageSource.CLI }
         val localCount = queue.size - cliMessages.size
         if (localCount > 0) {
-            println("ChatViewModel: Cleared $localCount locally queued messages")
+            DebugLogger.d(TAG, "ChatViewModel: Cleared $localCount locally queued messages")
             updateCurrentQueue { cliMessages }
         }
     }
@@ -1582,11 +1738,11 @@ class ChatViewModel(
                 val path = projectPath ?: currentProjectPath ?: ""
                 val response = commandApi.listCommands(path)
                 _availableCommands.value = response.builtIn + response.custom
-                println("ChatViewModel: Loaded ${response.count} commands (${response.builtIn.size} builtin, ${response.custom.size} custom)")
+                DebugLogger.d(TAG, "ChatViewModel: Loaded ${response.count} commands (${response.builtIn.size} builtin, ${response.custom.size} custom)")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                println("ChatViewModel: Failed to load commands: ${e.message}")
+                DebugLogger.d(TAG, "ChatViewModel: Failed to load commands: ${e.message}")
                 // Don't show error to user - just use empty list
                 _availableCommands.value = emptyList()
             } finally {
@@ -1663,7 +1819,7 @@ class ChatViewModel(
                                 isStreaming = false
                             )
                             _messages.value = _messages.value + resultMessage
-                            println("ChatViewModel:1231 - Added builtin result id=${resultMessage.id}, total=${_messages.value.size}")
+                            DebugLogger.d(TAG, "ChatViewModel:1231 - Added builtin result id=${resultMessage.id}, total=${_messages.value.size}")
                         }
                     }
                 }
@@ -1772,7 +1928,7 @@ class ChatViewModel(
                 // not waiting for HistoryWatch filesystem detection which can be delayed
                 sessionCreatedMutex.withLock {
                     pendingSessionCreatedEmit?.let { sessionInfo ->
-                        println("ChatViewModel: First STREAM message received, emitting session created event: ${sessionInfo.sessionId}")
+                        DebugLogger.d(TAG, "ChatViewModel: First STREAM message received, emitting session created event: ${sessionInfo.sessionId}")
                         _sessionCreatedEvent.value = sessionInfo
                         pendingSessionCreatedEmit = null
                     }
@@ -1783,7 +1939,7 @@ class ChatViewModel(
 
             MessageType.COMPLETE -> {
                 // Finalize the streaming message
-                println("ChatViewModel: Received COMPLETE message, calling finalizeStreamingMessage()")
+                DebugLogger.d(TAG, "ChatViewModel: Received COMPLETE message, calling finalizeStreamingMessage()")
                 finalizeStreamingMessage()
             }
 
@@ -1797,7 +1953,7 @@ class ChatViewModel(
                 // (FIFO queue: first message is the one being processed)
                 val queue = getCurrentQueue()
                 if (queue.isNotEmpty()) {
-                    println("ChatViewModel: Removing first queued message due to error")
+                    DebugLogger.d(TAG, "ChatViewModel: Removing first queued message due to error")
                     updateCurrentQueue { q -> q.drop(1) }
                 }
             }
@@ -1821,26 +1977,26 @@ class ChatViewModel(
     private suspend fun handleHistoryWatchEvent(event: HistoryWatchEvent) {
         when (event) {
             is HistoryWatchEvent.Connected -> {
-                println("ChatViewModel: History watch connected for ${event.sessionId}")
+                DebugLogger.d(TAG, "ChatViewModel: History watch connected for ${event.sessionId}")
             }
 
             is HistoryWatchEvent.NewMessages -> {
                 // Validate event belongs to current conversation to prevent stale messages
                 // from previous conversation appearing after switching chat rooms
                 if (event.sessionId != currentClaudeSession || event.encodedPath != currentEncodedPath) {
-                    println("ChatViewModel: Ignoring history watch event for stale session " +
+                    DebugLogger.d(TAG, "ChatViewModel: Ignoring history watch event for stale session " +
                             "(event: ${event.sessionId}, current: $currentClaudeSession)")
                     return
                 }
 
-                println("ChatViewModel: Received ${event.messages.size} new messages from history watch")
+                DebugLogger.d(TAG, "ChatViewModel: Received ${event.messages.size} new messages from history watch")
 
                 // Fallback: Emit session created event if not already emitted via STREAM message
                 // This handles edge cases where STREAM messages might be missed but HistoryWatch detects the session
                 sessionCreatedMutex.withLock {
                     pendingSessionCreatedEmit?.let { sessionInfo ->
                         if (sessionInfo.sessionId == event.sessionId) {
-                            println("ChatViewModel: HistoryWatch fallback - emitting session created event: ${sessionInfo.sessionId}")
+                            DebugLogger.d(TAG, "ChatViewModel: HistoryWatch fallback - emitting session created event: ${sessionInfo.sessionId}")
                             _sessionCreatedEvent.value = sessionInfo
                             pendingSessionCreatedEmit = null
                         }
@@ -1858,7 +2014,7 @@ class ChatViewModel(
                             "enqueue" -> {
                                 // Skip system notifications (bash-notification, etc.) - not user messages
                                 if (queueContent.trimStart().startsWith("<bash-notification>")) {
-                                    println("ChatViewModel: Skipping bash-notification enqueue (not a user message)")
+                                    DebugLogger.d(TAG, "ChatViewModel: Skipping bash-notification enqueue (not a user message)")
                                     continue
                                 }
 
@@ -1871,13 +2027,13 @@ class ChatViewModel(
                                     source = QueuedMessageSource.CLI
                                 )
                                 updateCurrentQueue { queue -> queue + cliQueuedMessage }
-                                println("ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")
+                                DebugLogger.d(TAG, "ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")
                             }
                             "dequeue", "clear" -> {
                                 // Remove first message from queue (FIFO)
                                 val queue = getCurrentQueue()
                                 if (queue.isNotEmpty()) {
-                                    println("ChatViewModel: Dequeued message from CLI (operation=$operation)")
+                                    DebugLogger.d(TAG, "ChatViewModel: Dequeued message from CLI (operation=$operation)")
                                     updateCurrentQueue { q -> q.drop(1) }
                                 }
                             }
@@ -1891,7 +2047,7 @@ class ChatViewModel(
                                 val messagesToRemove = queue.filter { it.queuedAt <= removeTimestamp }
 
                                 if (messagesToRemove.isNotEmpty()) {
-                                    println("ChatViewModel: Remove operation - removing ${messagesToRemove.size} queued message(s) before timestamp $removeTimestamp")
+                                    DebugLogger.d(TAG, "ChatViewModel: Remove operation - removing ${messagesToRemove.size} queued message(s) before timestamp $removeTimestamp")
                                     updateCurrentQueue { q -> q.filter { it.queuedAt > removeTimestamp } }
                                 }
 
@@ -1909,7 +2065,7 @@ class ChatViewModel(
                                         }
 
                                         if (alreadyConfirmed) {
-                                            println("ChatViewModel: Removed message already confirmed, skipping")
+                                            DebugLogger.d(TAG, "ChatViewModel: Removed message already confirmed, skipping")
                                         } else {
                                             val messageId = "pending_${generateMessageId()}"
                                             val blocks = mutableListOf<ContentBlock>()
@@ -1937,7 +2093,7 @@ class ChatViewModel(
                                                 pendingUserMessages[normalizedHash] = messageId
                                             }
                                             _messages.value = _messages.value + userMessage
-                                            println("ChatViewModel: Added removed message as pending (id=$messageId)")
+                                            DebugLogger.d(TAG, "ChatViewModel: Added removed message as pending (id=$messageId)")
                                         }
                                     }
 
@@ -1956,7 +2112,7 @@ class ChatViewModel(
                         .joinToString(" ") { it.content }
                         .take(50)
                         .replace("\n", " ")
-                    println("ChatViewModel: [$idx] role=${msg.role}, preview='$textPreview...'")
+                    DebugLogger.d(TAG, "ChatViewModel: [$idx] role=${msg.role}, preview='$textPreview...'")
                 }
 
                 // Check if any message is from assistant - this means Claude is processing
@@ -1966,7 +2122,7 @@ class ChatViewModel(
                     val shouldStartProgress = streamingMutex.withLock {
                         val wasNotStreaming = !_isStreaming.value
                         if (wasNotStreaming) {
-                            println("ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
+                            DebugLogger.d(TAG, "ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")
                             _isStreaming.value = true
                             isStreamingFromHistoryWatch = true
                         }
@@ -1987,7 +2143,7 @@ class ChatViewModel(
                             // Only update if todos actually changed to avoid unnecessary recomposition
                             if (current.todos != event.todos) {
                                 progressFlow.value = current.copy(todos = event.todos)
-                                println("ChatViewModel: Updated todos (${event.todos.size} items, ${event.todos.count { it.isCompleted }} completed)")
+                                DebugLogger.d(TAG, "ChatViewModel: Updated todos (${event.todos.size} items, ${event.todos.count { it.isCompleted }} completed)")
                             }
                         }
                     }
@@ -2002,7 +2158,7 @@ class ChatViewModel(
                     extractToolsFromContent(msg.content, newToolUses, newToolResults)
                 }
 
-                println("ChatViewModel: Found ${newToolUses.size} tool_uses, ${newToolResults.size} tool_results")
+                DebugLogger.d(TAG, "ChatViewModel: Found ${newToolUses.size} tool_uses, ${newToolResults.size} tool_results")
 
                 // Add new tools to session maps with proper synchronization
                 mapsMutex.withLock {
@@ -2089,7 +2245,7 @@ class ChatViewModel(
                             if (updatedBlocks != msg.blocks) {
                                 currentMessages[i] = msg.copy(blocks = updatedBlocks)
                                 messagesUpdated = true
-                                println("ChatViewModel: Updated message ${msg.id} with tool results")
+                                DebugLogger.d(TAG, "ChatViewModel: Updated message ${msg.id} with tool results")
                             }
                         }
                     }
@@ -2123,7 +2279,7 @@ class ChatViewModel(
                                         normalizeForComparison(it.content) == normalizedContent
                                     }
                                     if (matchingIndex >= 0) {
-                                        println("ChatViewModel: Removed confirmed queued message from queue")
+                                        DebugLogger.d(TAG, "ChatViewModel: Removed confirmed queued message from queue")
                                         queue.filterIndexed { index, _ -> index != matchingIndex }
                                     } else {
                                         queue
@@ -2162,7 +2318,7 @@ class ChatViewModel(
 
                         if (updated) {
                             _messages.value = currentMessages.toList()
-                            println("ChatViewModel:1742 - HistoryWatch update, total=${_messages.value.size}")
+                            DebugLogger.d(TAG, "ChatViewModel:1742 - HistoryWatch update, total=${_messages.value.size}")
                         }
                     }
                 }
@@ -2172,7 +2328,7 @@ class ChatViewModel(
                 if (event.sessionState == SessionState.IDLE) {
                     streamingMutex.withLock {
                         if (_isStreaming.value) {
-                            println("ChatViewModel: HistoryWatch detected IDLE state, finalizing streaming")
+                            DebugLogger.d(TAG, "ChatViewModel: HistoryWatch detected IDLE state, finalizing streaming")
                             _isStreaming.value = false
                             isStreamingFromHistoryWatch = false
                         }
@@ -2183,7 +2339,7 @@ class ChatViewModel(
             }
 
             is HistoryWatchEvent.Error -> {
-                println("ChatViewModel: History watch error: ${event.message}")
+                DebugLogger.d(TAG, "ChatViewModel: History watch error: ${event.message}")
                 // Clear pending event to prevent stale state
                 sessionCreatedMutex.withLock {
                     pendingSessionCreatedEmit = null
@@ -2191,7 +2347,7 @@ class ChatViewModel(
             }
 
             is HistoryWatchEvent.Disconnected -> {
-                println("ChatViewModel: History watch disconnected")
+                DebugLogger.d(TAG, "ChatViewModel: History watch disconnected")
                 // Clear pending event to prevent stale state
                 sessionCreatedMutex.withLock {
                     pendingSessionCreatedEmit = null
@@ -2307,9 +2463,9 @@ class ChatViewModel(
      */
     private fun stopProgressTracking() {
         val convId = currentConversationId
-        println("ChatViewModel: stopProgressTracking() called, convId=$convId")
+        DebugLogger.d(TAG, "ChatViewModel: stopProgressTracking() called, convId=$convId")
         if (convId == null) {
-            println("ChatViewModel: stopProgressTracking() - convId is null, returning early")
+            DebugLogger.d(TAG, "ChatViewModel: stopProgressTracking() - convId is null, returning early")
             return
         }
 
@@ -2318,7 +2474,7 @@ class ChatViewModel(
         streamingStartTimes.remove(convId)
 
         val progressFlow = _progressStatusMap[convId]
-        println("ChatViewModel: stopProgressTracking() - progressFlow exists: ${progressFlow != null}, setting isActive=false")
+        DebugLogger.d(TAG, "ChatViewModel: stopProgressTracking() - progressFlow exists: ${progressFlow != null}, setting isActive=false")
         // Preserve existing todos when stopping progress tracking
         progressFlow?.let { flow ->
             val existingTodos = flow.value.todos
