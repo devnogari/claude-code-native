@@ -39,7 +39,7 @@ import kotlinx.coroutines.launch
  * @param selectedConversationId The currently selected conversation ID, or null if none selected
  * @param onConversationSelected Callback when a conversation is selected from the list
  * @param onSettingsClick Callback when settings is clicked
- * @param onSessionCreated Callback when a new session is created from draft mode (for refreshing sidebar)
+ * @param onSessionCreated Callback when a new session is created from draft mode (sessionId, encodedPath for refreshing sidebar)
  * @param onNewSession Callback when user wants to start a new session from chat screen
  * @param listContent Composable content for the project list pane
  * @param detailContent Composable content for the chat detail pane, receives the conversation ID
@@ -50,7 +50,7 @@ fun AdaptiveProjectLayout(
     selectedConversationId: String?,
     onConversationSelected: (String) -> Unit,
     onSettingsClick: () -> Unit,
-    onSessionCreated: () -> Unit = {},
+    onSessionCreated: (sessionId: String, encodedPath: String) -> Unit = { _, _ -> },
     onNewSession: () -> Unit = {},
     listContent: @Composable (
         onConversationSelected: (String) -> Unit,
@@ -59,7 +59,7 @@ fun AdaptiveProjectLayout(
     detailContent: @Composable (
         conversationId: String,
         onBack: () -> Unit,
-        onSessionCreated: () -> Unit,
+        onSessionCreated: (sessionId: String, encodedPath: String) -> Unit,
         onNewSession: () -> Unit
     ) -> Unit
 ) {

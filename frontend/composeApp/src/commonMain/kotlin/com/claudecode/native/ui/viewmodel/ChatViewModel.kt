@@ -98,19 +98,27 @@ class ChatViewModel(
     /** True when this is a draft session (not yet created on server). */
     val isDraftSession: StateFlow<Boolean> = _isDraftSession.asStateFlow()
 
-    private val _sessionCreatedEvent = MutableStateFlow<String?>(null)
     /**
-     * Emits the new session ID when a draft session is converted to a real session.
-     * UI can observe this to update the sidebar/project list.
+     * Event data for when a new session is created from draft mode.
      */
-    val sessionCreatedEvent: StateFlow<String?> = _sessionCreatedEvent.asStateFlow()
+    data class SessionCreatedInfo(
+        val sessionId: String,
+        val encodedPath: String
+    )
+
+    private val _sessionCreatedEvent = MutableStateFlow<SessionCreatedInfo?>(null)
+    /**
+     * Emits session info when a draft session is converted to a real session.
+     * UI can observe this to update the sidebar/project list with polling.
+     */
+    val sessionCreatedEvent: StateFlow<SessionCreatedInfo?> = _sessionCreatedEvent.asStateFlow()
 
     /**
-     * Pending session ID to emit when first server response arrives (STREAM message).
+     * Pending session info to emit when first server response arrives (STREAM message).
      * HistoryWatch serves as fallback for edge cases where STREAM may be missed.
      * Protected by sessionCreatedMutex to ensure thread-safe access from multiple handlers.
      */
-    private var pendingSessionCreatedEmit: String? = null
+    private var pendingSessionCreatedEmit: SessionCreatedInfo? = null
     private val sessionCreatedMutex = Mutex()
 
 
@@ -1119,7 +1127,7 @@ class ChatViewModel(
             // HistoryWatch serves as fallback for edge cases where STREAM may be missed
             println("ChatViewModel: Session created, deferring event until first response: $newSessionId")
             sessionCreatedMutex.withLock {
-                pendingSessionCreatedEmit = newSessionId
+                pendingSessionCreatedEmit = SessionCreatedInfo(newSessionId, encodedPath)
             }
 
         } catch (e: CancellationException) {
@@ -1502,9 +1510,9 @@ class ChatViewModel(
                 // This ensures sidebar refresh happens when server actually starts responding,
                 // not waiting for HistoryWatch filesystem detection which can be delayed
                 sessionCreatedMutex.withLock {
-                    pendingSessionCreatedEmit?.let { sessionId ->
-                        println("ChatViewModel: First STREAM message received, emitting session created event: $sessionId")
-                        _sessionCreatedEvent.value = sessionId
+                    pendingSessionCreatedEmit?.let { sessionInfo ->
+                        println("ChatViewModel: First STREAM message received, emitting session created event: ${sessionInfo.sessionId}")
+                        _sessionCreatedEvent.value = sessionInfo
                         pendingSessionCreatedEmit = null
                     }
                 }
@@ -1561,10 +1569,10 @@ class ChatViewModel(
                 // Fallback: Emit session created event if not already emitted via STREAM message
                 // This handles edge cases where STREAM messages might be missed but HistoryWatch detects the session
                 sessionCreatedMutex.withLock {
-                    pendingSessionCreatedEmit?.let { sessionId ->
-                        if (sessionId == event.sessionId) {
-                            println("ChatViewModel: HistoryWatch fallback - emitting session created event: $sessionId")
-                            _sessionCreatedEvent.value = sessionId
+                    pendingSessionCreatedEmit?.let { sessionInfo ->
+                        if (sessionInfo.sessionId == event.sessionId) {
+                            println("ChatViewModel: HistoryWatch fallback - emitting session created event: ${sessionInfo.sessionId}")
+                            _sessionCreatedEvent.value = sessionInfo
                             pendingSessionCreatedEmit = null
                         }
                     }

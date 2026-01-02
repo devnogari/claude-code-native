@@ -150,6 +150,73 @@ class ProjectListViewModel(
     }
 
     /**
+     * Refreshes the project list after a new session is created.
+     * Polls the backend until the session appears in the projects list,
+     * with exponential backoff and a maximum number of retries.
+     *
+     * @param sessionId The session ID to wait for
+     * @param encodedPath The encoded project path where the session should appear
+     */
+    fun refreshAfterSessionCreated(sessionId: String, encodedPath: String) {
+        scope.launch {
+            println("ProjectListViewModel: Waiting for session $sessionId to appear in project $encodedPath")
+
+            // Show loading indicator during polling
+            _uiState.value = _uiState.value.copy(isRefreshing = true)
+
+            val maxRetries = 10
+            val initialDelayMs = 200L
+            var currentDelay = initialDelayMs
+            var found = false
+
+            for (attempt in 1..maxRetries) {
+                // Tell backend to refresh its cache
+                try {
+                    claudeHistoryApi.refresh()
+                } catch (e: Exception) {
+                    // Ignore refresh errors
+                }
+
+                // Check if session exists in projects
+                try {
+                    val projects = claudeHistoryApi.getProjects()
+                    val project = projects.find { it.encodedPath == encodedPath }
+                    val sessionExists = project?.sessions?.any { it.id == sessionId } == true
+
+                    if (sessionExists) {
+                        println("ProjectListViewModel: Session $sessionId found after $attempt attempts")
+                        found = true
+
+                        // Update UI with the new projects list
+                        val currentFavorites = favoriteRepository.favorites.value
+                        val sortedProjects = sortProjects(projects, currentFavorites)
+                        _uiState.value = _uiState.value.copy(
+                            projects = sortedProjects,
+                            isRefreshing = false
+                        )
+                        break
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    println("ProjectListViewModel: Error checking for session: ${e.message}")
+                }
+
+                // Wait before next attempt with exponential backoff
+                println("ProjectListViewModel: Session not found, attempt $attempt/$maxRetries, waiting ${currentDelay}ms")
+                kotlinx.coroutines.delay(currentDelay)
+                currentDelay = (currentDelay * 1.5).toLong().coerceAtMost(2000L)
+            }
+
+            if (!found) {
+                println("ProjectListViewModel: Session $sessionId not found after $maxRetries attempts, doing final refresh")
+                // Fall back to regular refresh if session wasn't found
+                refresh()
+            }
+        }
+    }
+
+    /**
      * Toggles the expanded state of a project.
      */
     fun toggleProjectExpanded(projectId: String) {
