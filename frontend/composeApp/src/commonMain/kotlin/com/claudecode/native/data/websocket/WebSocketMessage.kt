@@ -4,19 +4,36 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
+ * Represents an image attachment in a WebSocket message.
+ */
+@Serializable
+data class ImageContentDto(
+    val type: String = "base64",
+    @SerialName("media_type") val mediaType: String,
+    val data: String
+)
+
+/**
  * Outgoing WebSocket message sent from client to server.
  * Used for chat messages, control commands (stop, ping), and other client-initiated actions.
  */
 @Serializable
 data class OutgoingMessage(
     val type: String,
-    val content: String? = null
+    val content: String? = null,
+    val images: List<ImageContentDto>? = null
 ) {
     companion object {
         /**
          * Creates a chat message to send user input to the server.
          */
         fun chat(content: String) = OutgoingMessage("chat", content)
+
+        /**
+         * Creates a chat message with images attached.
+         */
+        fun chatWithImages(content: String, images: List<ImageContentDto>) =
+            OutgoingMessage("chat", content, images.ifEmpty { null })
 
         /**
          * Creates a stop message to interrupt the current streaming response.

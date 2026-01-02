@@ -94,6 +94,21 @@ object MessageParser {
                 val summary = extractToolSummary(name, input)
                 blocks.add(ContentBlock.Tool(ToolUseInfo(id = id, name = name, summary = summary)))
             }
+            "image" -> {
+                // Parse image block: {"type": "image", "source": {"type": "base64", "media_type": "...", "data": "..."}}
+                element["source"]?.let { sourceElement ->
+                    if (sourceElement is JsonObject) {
+                        val sourceType = sourceElement["type"]?.jsonPrimitive?.content
+                        if (sourceType == "base64") {
+                            val mediaType = sourceElement["media_type"]?.jsonPrimitive?.content ?: "image/png"
+                            val data = sourceElement["data"]?.jsonPrimitive?.content ?: ""
+                            if (data.isNotEmpty()) {
+                                blocks.add(ContentBlock.Image(ImageSource.Base64(data, mediaType)))
+                            }
+                        }
+                    }
+                }
+            }
             // tool_result is handled via session-level matching, not added as a block
         }
     }
@@ -122,6 +137,20 @@ object MessageParser {
                 val input = item["input"]
                 val summary = extractToolSummaryFromMap(name, input)
                 blocks.add(ContentBlock.Tool(ToolUseInfo(id = id, name = name, summary = summary)))
+            }
+            "image" -> {
+                // Parse image block from Map
+                val source = item["source"] as? Map<*, *>
+                if (source != null) {
+                    val sourceType = source["type"] as? String
+                    if (sourceType == "base64") {
+                        val mediaType = (source["media_type"] as? String) ?: "image/png"
+                        val data = (source["data"] as? String) ?: ""
+                        if (data.isNotEmpty()) {
+                            blocks.add(ContentBlock.Image(ImageSource.Base64(data, mediaType)))
+                        }
+                    }
+                }
             }
             // tool_result is handled via session-level matching, not added as a block
         }

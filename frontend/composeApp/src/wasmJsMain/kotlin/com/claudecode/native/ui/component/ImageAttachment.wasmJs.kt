@@ -1,0 +1,31 @@
+package com.claudecode.native.ui.component
+
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import org.jetbrains.skia.Image
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
+
+/**
+ * Decode raw image bytes to ImageBitmap on WASM.
+ */
+actual fun decodeImageBitmap(data: ByteArray, mediaType: String): ImageBitmap? {
+    return try {
+        Image.makeFromEncoded(data).toComposeImageBitmap()
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/**
+ * Decode base64 string to ImageBitmap on WASM.
+ */
+@OptIn(ExperimentalEncodingApi::class)
+actual fun decodeBase64ToBitmap(base64Data: String, mediaType: String): ImageBitmap? {
+    return try {
+        val bytes = Base64.decode(base64Data)
+        Image.makeFromEncoded(bytes).toComposeImageBitmap()
+    } catch (e: Exception) {
+        null
+    }
+}

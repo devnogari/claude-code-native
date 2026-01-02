@@ -285,6 +285,16 @@ class WebSocketClient(
     }
 
     /**
+     * Sends a chat message with attached images.
+     *
+     * @param content The user's message content
+     * @param images List of base64-encoded images to attach
+     */
+    suspend fun sendChatWithImages(content: String, images: List<ImageContentDto>) {
+        send(OutgoingMessage.chatWithImages(content, images))
+    }
+
+    /**
      * Sends a stop command to interrupt the current streaming response.
      */
     suspend fun sendStop() {
