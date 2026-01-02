@@ -23,12 +23,24 @@ const (
 	MessageTypePong = "pong"
 )
 
+// ImageContent represents an image attachment in a chat message
+type ImageContent struct {
+	// Type is the image source type (currently only "base64" is supported)
+	Type string `json:"type"`
+	// MediaType is the MIME type of the image (e.g., "image/png", "image/jpeg")
+	MediaType string `json:"media_type"`
+	// Data is the base64-encoded image data
+	Data string `json:"data"`
+}
+
 // IncomingMessage represents a message received from the WebSocket client
 type IncomingMessage struct {
 	// Type is the message type (chat, stop, ping)
 	Type string `json:"type"`
 	// Content is the message content (optional, used for chat messages)
 	Content string `json:"content,omitempty"`
+	// Images is a list of image attachments (optional, used for chat messages with images)
+	Images []ImageContent `json:"images,omitempty"`
 }
 
 // OutgoingMessage represents a message sent to the WebSocket client
