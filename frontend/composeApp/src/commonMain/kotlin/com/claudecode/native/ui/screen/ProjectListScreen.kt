@@ -733,22 +733,25 @@ private fun ProjectItem(
                     HorizontalDivider()
                 }
 
+                // Use key wrapper for stable recomposition of sessions
                 sessions.forEach { session ->
-                    SessionItem(
-                        session = session,
-                        isLoading = isLoading,
-                        isInSelectionMode = isInSelectionMode,
-                        isSelected = session.id in selectedSessions,
-                        onClick = {
-                            if (isInSelectionMode) {
-                                onToggleSessionSelection(session.id)
-                            } else {
-                                onSessionClick(session)
-                            }
-                        },
-                        onToggleFavorite = { onToggleSessionFavorite(session) },
-                        onDeleteSession = { onDeleteSession(session) }
-                    )
+                    androidx.compose.runtime.key(session.id) {
+                        SessionItem(
+                            session = session,
+                            isLoading = isLoading,
+                            isInSelectionMode = isInSelectionMode,
+                            isSelected = session.id in selectedSessions,
+                            onClick = {
+                                if (isInSelectionMode) {
+                                    onToggleSessionSelection(session.id)
+                                } else {
+                                    onSessionClick(session)
+                                }
+                            },
+                            onToggleFavorite = { onToggleSessionFavorite(session) },
+                            onDeleteSession = { onDeleteSession(session) }
+                        )
+                    }
                 }
             }
         }

@@ -83,40 +83,40 @@ fun MessageBubble(
         )
     }
 
-    BoxWithConstraints(
-        modifier = modifier.fillMaxWidth()
+    // Use fixed widths to avoid BoxWithConstraints overhead
+    // User messages: max 500dp, Assistant messages: fill available width
+    val userMaxWidth = 500.dp
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Top
     ) {
-        // Calculate max width based on available space
-        // User messages: smaller (up to 70% or 500dp max)
-        // Assistant messages: larger (up to 95% of available width for better code display)
-        val userMaxWidth = minOf(maxWidth * 0.7f, 500.dp)
-        val assistantMaxWidth = maxWidth * 0.95f
+        // Menu button on the left for assistant messages
+        if (!isUser) {
+            MessageMenuButton(
+                showMenu = showMenu,
+                onShowMenuChange = { showMenu = it },
+                onInspectClick = { showInspectDialog = true }
+            )
+        }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
-            verticalAlignment = Alignment.Top
+        Column(
+            modifier = Modifier.weight(1f, fill = false),
+            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Menu button on the left for assistant messages
-            if (!isUser) {
-                MessageMenuButton(
-                    showMenu = showMenu,
-                    onShowMenuChange = { showMenu = it },
-                    onInspectClick = { showInspectDialog = true }
-                )
-            }
-
-            Column(
-                modifier = Modifier.weight(1f, fill = false),
-                horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (isUser) {
+            if (isUser) {
                 // User messages: render text blocks and image blocks
-                val textContent = message.blocks
-                    .filterIsInstance<ContentBlock.Text>()
-                    .joinToString("\n\n") { it.content }
-                val imageBlocks = message.blocks.filterIsInstance<ContentBlock.Image>()
+                // Cache text content to avoid repeated filtering
+                val textContent = remember(message.blocks) {
+                    message.blocks
+                        .filterIsInstance<ContentBlock.Text>()
+                        .joinToString("\n\n") { it.content }
+                }
+                val imageBlocks = remember(message.blocks) {
+                    message.blocks.filterIsInstance<ContentBlock.Image>()
+                }
 
                 Column(
                     horizontalAlignment = Alignment.End,
@@ -124,17 +124,16 @@ fun MessageBubble(
                 ) {
                     // Render text bubble if there's text content
                     if (textContent.isNotBlank()) {
+                        val backgroundColor = if (message.isPending) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        }
                         Box(
                             modifier = Modifier
                                 .widthIn(max = userMaxWidth)
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    if (message.isPending) {
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                                    } else {
-                                        MaterialTheme.colorScheme.primary
-                                    }
-                                )
+                                .background(backgroundColor)
                                 .padding(12.dp)
                         ) {
                             Text(
@@ -145,12 +144,14 @@ fun MessageBubble(
                         }
                     }
 
-                    // Render attached images
-                    imageBlocks.forEach { imageBlock ->
-                        ImageBlock(
-                            source = imageBlock.source,
-                            modifier = Modifier.widthIn(max = userMaxWidth)
-                        )
+                    // Render attached images with stable keys
+                    imageBlocks.forEachIndexed { index, imageBlock ->
+                        androidx.compose.runtime.key(index) {
+                            ImageBlock(
+                                source = imageBlock.source,
+                                modifier = Modifier.widthIn(max = userMaxWidth)
+                            )
+                        }
                     }
 
                     // Show pending indicator for user messages
@@ -181,54 +182,57 @@ fun MessageBubble(
                         agentId = message.agentId,
                         gitBranch = message.gitBranch,
                         isSidechain = message.isSidechain,
-                        modifier = Modifier.widthIn(max = assistantMaxWidth)
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
                 // Assistant messages: render blocks in order (preserving interleaved structure)
-                message.blocks.forEach { block ->
-                    when (block) {
-                        is ContentBlock.Text -> {
-                            if (block.content.isNotBlank()) {
-                                Box(
-                                    modifier = Modifier
-                                        .widthIn(max = assistantMaxWidth)
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                                        .padding(12.dp)
-                                ) {
-                                    MarkdownText(
-                                        text = block.content,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
+                // Use key for stable recomposition
+                message.blocks.forEachIndexed { index, block ->
+                    androidx.compose.runtime.key(index) {
+                        when (block) {
+                            is ContentBlock.Text -> {
+                                if (block.content.isNotBlank()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                            .padding(12.dp)
+                                    ) {
+                                        MarkdownText(
+                                            text = block.content,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        is ContentBlock.Tool -> {
-                            Box(modifier = Modifier.widthIn(max = assistantMaxWidth)) {
-                                ToolUseItem(tool = block.info)
+                            is ContentBlock.Tool -> {
+                                ToolUseItem(
+                                    tool = block.info,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
-                        }
-                        is ContentBlock.Image -> {
-                            ImageBlock(
-                                source = block.source,
-                                modifier = Modifier.widthIn(max = assistantMaxWidth)
-                            )
+                            is ContentBlock.Image -> {
+                                ImageBlock(
+                                    source = block.source,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
                 }
             }
-            }
+        }
 
-            // Menu button on the right for user messages
-            if (isUser) {
-                MessageMenuButton(
-                    showMenu = showMenu,
-                    onShowMenuChange = { showMenu = it },
-                    onInspectClick = { showInspectDialog = true }
-                )
-            }
+        // Menu button on the right for user messages
+        if (isUser) {
+            MessageMenuButton(
+                showMenu = showMenu,
+                onShowMenuChange = { showMenu = it },
+                onInspectClick = { showInspectDialog = true }
+            )
         }
     }
 }
@@ -559,28 +563,32 @@ fun ToolUseItem(
                 )
 
                 // Summary with colored paths/commands (takes remaining space)
-                val summaryText = buildAnnotatedString {
-                    val summary = tool.summary
-                    // Check if summary looks like a file path
-                    val isPath = summary.startsWith("/") ||
-                            summary.contains("/") ||
-                            summary.endsWith(".kt") ||
-                            summary.endsWith(".go") ||
-                            summary.endsWith(".ts") ||
-                            summary.endsWith(".js") ||
-                            summary.endsWith(".py")
-                    // Check if summary looks like a command
-                    val isCommand = tool.name == "Bash" || tool.name == "Grep" || tool.name == "Glob"
+                // Cache the annotated string to avoid rebuilding on each recomposition
+                val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+                val summaryText = remember(tool.summary, tool.name, pathColor, commandColor, onSurfaceVariant) {
+                    buildAnnotatedString {
+                        val summary = tool.summary
+                        // Check if summary looks like a file path
+                        val isPath = summary.startsWith("/") ||
+                                summary.contains("/") ||
+                                summary.endsWith(".kt") ||
+                                summary.endsWith(".go") ||
+                                summary.endsWith(".ts") ||
+                                summary.endsWith(".js") ||
+                                summary.endsWith(".py")
+                        // Check if summary looks like a command
+                        val isCommand = tool.name == "Bash" || tool.name == "Grep" || tool.name == "Glob"
 
-                    when {
-                        isPath -> withStyle(SpanStyle(color = pathColor, fontFamily = FontFamily.Monospace)) {
-                            append(summary)
-                        }
-                        isCommand -> withStyle(SpanStyle(color = commandColor, fontFamily = FontFamily.Monospace)) {
-                            append(summary)
-                        }
-                        else -> withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
-                            append(summary)
+                        when {
+                            isPath -> withStyle(SpanStyle(color = pathColor, fontFamily = FontFamily.Monospace)) {
+                                append(summary)
+                            }
+                            isCommand -> withStyle(SpanStyle(color = commandColor, fontFamily = FontFamily.Monospace)) {
+                                append(summary)
+                            }
+                            else -> withStyle(SpanStyle(color = onSurfaceVariant)) {
+                                append(summary)
+                            }
                         }
                     }
                 }
@@ -656,6 +664,19 @@ fun ToolUseItem(
  * Displays text with diff-style syntax highlighting.
  * Highlights additions (green), deletions (red), and hunk headers (cyan).
  */
+/**
+ * Data class for cached diff line info
+ */
+private data class DiffLineInfo(
+    val line: String,
+    val colorType: DiffColorType,
+    val hasBackground: Boolean
+)
+
+private enum class DiffColorType {
+    ADDITION, DELETION, HUNK_HEADER, LINE_NUMBER, DEFAULT
+}
+
 @Composable
 fun DiffHighlightedText(
     text: String,
@@ -668,13 +689,33 @@ fun DiffHighlightedText(
     val lineNumberColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
     val defaultColor = MaterialTheme.colorScheme.onSurface
 
-    // Check if this looks like diff content (for Edit tool or content with diff markers)
-    val isDiffContent = toolName == "Edit" ||
-            text.contains("\n+") ||
-            text.contains("\n-") ||
-            text.lines().any { it.startsWith("@@") }
+    // Cache the diff content check and parsed lines
+    val parsedLines = remember(text, toolName) {
+        // Check if this looks like diff content
+        val isDiffContent = toolName == "Edit" ||
+                text.contains("\n+") ||
+                text.contains("\n-") ||
+                text.lines().any { it.startsWith("@@") }
 
-    if (!isDiffContent) {
+        if (!isDiffContent) {
+            null // Return null to indicate regular text
+        } else {
+            // Parse and cache line info
+            text.lines().map { line ->
+                val (colorType, hasBackground) = when {
+                    line.startsWith("@@") -> DiffColorType.HUNK_HEADER to false
+                    line.startsWith("+") && !line.startsWith("+++") -> DiffColorType.ADDITION to true
+                    line.startsWith("-") && !line.startsWith("---") -> DiffColorType.DELETION to true
+                    line.startsWith(">>>") || line.startsWith("<<<") -> DiffColorType.HUNK_HEADER to false
+                    line.matches(Regex("^\\s*\\d+[→|].*")) -> DiffColorType.LINE_NUMBER to false
+                    else -> DiffColorType.DEFAULT to false
+                }
+                DiffLineInfo(line, colorType, hasBackground)
+            }
+        }
+    }
+
+    if (parsedLines == null) {
         // Regular text display
         Text(
             text = text,
@@ -687,33 +728,26 @@ fun DiffHighlightedText(
         return
     }
 
-    // Parse and highlight diff content
+    // Render diff content with cached line info
     Column(modifier = modifier) {
-        text.lines().forEach { line ->
-            val (color, displayLine) = when {
-                line.startsWith("@@") -> hunkHeaderColor to line
-                line.startsWith("+") && !line.startsWith("+++") -> additionColor to line
-                line.startsWith("-") && !line.startsWith("---") -> deletionColor to line
-                line.startsWith(">>>") || line.startsWith("<<<") -> hunkHeaderColor to line
-                line.matches(Regex("^\\s*\\d+[→|].*")) -> {
-                    // Line number format like "  123→content" or "  123|content"
-                    lineNumberColor to line
+        parsedLines.forEachIndexed { index, lineInfo ->
+            androidx.compose.runtime.key(index) {
+                val color = when (lineInfo.colorType) {
+                    DiffColorType.ADDITION -> additionColor
+                    DiffColorType.DELETION -> deletionColor
+                    DiffColorType.HUNK_HEADER -> hunkHeaderColor
+                    DiffColorType.LINE_NUMBER -> lineNumberColor
+                    DiffColorType.DEFAULT -> defaultColor
                 }
-                else -> defaultColor to line
-            }
 
-            Row {
-                // Highlight background for additions/deletions
                 val backgroundColor = when {
-                    line.startsWith("+") && !line.startsWith("+++") ->
-                        additionColor.copy(alpha = 0.15f)
-                    line.startsWith("-") && !line.startsWith("---") ->
-                        deletionColor.copy(alpha = 0.15f)
+                    lineInfo.colorType == DiffColorType.ADDITION -> additionColor.copy(alpha = 0.15f)
+                    lineInfo.colorType == DiffColorType.DELETION -> deletionColor.copy(alpha = 0.15f)
                     else -> Color.Transparent
                 }
 
                 Text(
-                    text = displayLine,
+                    text = lineInfo.line,
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace
                     ),
