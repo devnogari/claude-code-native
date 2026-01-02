@@ -444,29 +444,65 @@ func (h *Handler) handleChatMessage(client *Client, content string, images []Ima
 		return
 	}
 
-	// Check if process is already running (shouldn't happen with new design)
+	// Check if process is already running in interactive mode
+	// If so, send message via stdin (queued message support)
 	if process.GetStatus() == claude.ProcessStatusRunning {
-		h.logger.Warn("process already running, waiting for completion",
+		if process.IsInteractive() {
+			h.logger.Info("sending message to running interactive process (queued)",
+				zap.String("claudeSessionID", claudeSessionID.String()),
+				zap.Int("contentLength", len(content)))
+
+			// Track images for cleanup when process closes
+			process.TrackImages(imagePaths)
+
+			if err := process.SendMessage(content, imagePaths); err != nil {
+				h.logger.Error("failed to send message to interactive process", zap.Error(err))
+				h.sendErrorToClient(client, "failed to send message: "+err.Error())
+				return
+			}
+			// Message sent successfully - output will be streamed by existing goroutine
+			// Image cleanup handled by process.Close() via TrackImages
+			streamStarted = true // Prevent early cleanup in defer
+			h.logger.Info("queued message sent successfully",
+				zap.String("claudeSessionID", claudeSessionID.String()))
+			return
+		}
+		// Non-interactive process still running (legacy case)
+		h.logger.Warn("process already running in non-interactive mode",
 			zap.String("claudeSessionID", claudeSessionID.String()))
 		h.sendErrorToClient(client, "previous request still processing")
 		return
 	}
 
-	// Start Claude with the prompt and images
-	// Uses --resume flag if session file exists, --session-id for new sessions
-	h.logger.Debug("starting claude with prompt", zap.Int("promptLen", len(content)), zap.Int("imageCount", len(imagePaths)))
-	if err := process.StartWithPromptAndImages(content, imagePaths); err != nil {
+	// Start Claude in interactive mode
+	// This allows sending additional messages via stdin while streaming
+	h.logger.Debug("starting claude in interactive mode", zap.Int("promptLen", len(content)), zap.Int("imageCount", len(imagePaths)))
+	if err := process.StartInteractive(); err != nil {
 		h.logger.Error("failed to start claude process", zap.Error(err))
 		h.sendErrorToClient(client, "failed to start Claude CLI")
 		return
 	}
-	h.logger.Info("claude process started successfully",
+
+	// Track images for cleanup when process closes
+	process.TrackImages(imagePaths)
+
+	// Send the first message via stdin
+	if err := process.SendMessage(content, imagePaths); err != nil {
+		h.logger.Error("failed to send initial message", zap.Error(err))
+		// Stop the process that was just started to clean up resources
+		if stopErr := h.claudeMgr.StopProcess(claudeSessionID); stopErr != nil {
+			h.logger.Warn("failed to stop process after send failure", zap.Error(stopErr))
+		}
+		h.sendErrorToClient(client, "failed to send message: "+err.Error())
+		return
+	}
+	h.logger.Info("claude process started successfully (interactive mode)",
 		zap.String("claudeSessionID", claudeSessionID.String()))
 
 	// Stream process output to client
-	// Pass imagePaths for cleanup after Claude CLI finishes reading them
+	// Image cleanup is now handled by process.Close() via TrackImages
 	streamStarted = true
-	go h.streamProcessOutput(client, process, isFilesystemSession, imagePaths)
+	go h.streamProcessOutput(client, process, isFilesystemSession, nil)
 }
 
 // handleStopMessage stops the current Claude process
