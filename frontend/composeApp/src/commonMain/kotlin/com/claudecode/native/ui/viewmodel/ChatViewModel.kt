@@ -1822,10 +1822,8 @@ class ChatViewModel(
                                 _queuedMessages.update { queue -> queue + cliQueuedMessage }
                                 println("ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")
                             }
-                            "dequeue", "clear", "remove" -> {
-                                // Remove from queued messages and add to messages as pending user message
-                                // This ensures the message stays visible in UI while waiting for history confirmation
-                                // Capture the dequeued message atomically inside the update block to prevent TOCTOU race
+                            "dequeue", "clear" -> {
+                                // Remove first message from queue (FIFO)
                                 var dequeuedMessage: QueuedMessage? = null
                                 _queuedMessages.update { queue ->
                                     if (queue.isNotEmpty()) {
@@ -1836,60 +1834,19 @@ class ChatViewModel(
                                         queue
                                     }
                                 }
-
-                                // Add dequeued message to messages list as pending user message
-                                // Guard against race condition: HistoryWatch might confirm the message before dequeue arrives
-                                dequeuedMessage?.let { msg ->
-                                    val normalizedContent = normalizeForComparison(msg.content)
-                                    val normalizedHash = normalizedContent.hashCode()
-
-                                    mutex.withLock {
-                                        // Check if this message was already confirmed by HistoryWatch (race condition)
-                                        val alreadyConfirmed = _messages.value.any { existingMsg ->
-                                            existingMsg.role == MessageRole.USER &&
-                                            !existingMsg.isPending &&
-                                            normalizeForComparison(existingMsg.content) == normalizedContent
-                                        }
-
-                                        if (alreadyConfirmed) {
-                                            println("ChatViewModel: Dequeued message already confirmed by HistoryWatch, skipping duplicate")
-                                        } else {
-                                            val messageId = "pending_${generateMessageId()}"
-
-                                            // Build blocks with text and images
-                                            val blocks = mutableListOf<ContentBlock>()
-                                            if (msg.content.isNotBlank()) {
-                                                blocks.add(ContentBlock.Text(msg.content))
-                                            }
-                                            msg.images.forEach { img ->
-                                                blocks.add(ContentBlock.Image(
-                                                    ImageSource.Base64(
-                                                        data = kotlin.io.encoding.Base64.encode(img.data),
-                                                        mediaType = img.mediaType
-                                                    )
-                                                ))
-                                            }
-
-                                            val userMessage = ChatMessage(
-                                                id = messageId,
-                                                role = MessageRole.USER,
-                                                blocks = blocks,
-                                                isStreaming = false,
-                                                isPending = true
-                                            )
-
-                                            // Track pending message for duplicate prevention
-                                            mapsMutex.withLock {
-                                                pendingUserMessages[normalizedHash] = messageId
-                                            }
-                                            _messages.value = _messages.value + userMessage
-                                            println("ChatViewModel: Added dequeued message as pending user message (id=$messageId, images=${msg.images.size})")
-                                        }
+                            }
+                            "remove" -> {
+                                // Remove all messages queued before the timestamp
+                                // This handles timing issues where multiple messages were queued
+                                val removeTimestamp = claudeMsg.timestamp?.toEpochMilliseconds() ?: Long.MAX_VALUE
+                                _queuedMessages.update { queue ->
+                                    val (toRemove, toKeep) = queue.partition { it.queuedAt <= removeTimestamp }
+                                    if (toRemove.isNotEmpty()) {
+                                        println("ChatViewModel: Remove operation - cleared ${toRemove.size} queued messages (timestamp=$removeTimestamp)")
                                     }
-
-                                    // Trigger scroll to bottom for the dequeued message
-                                    _scrollToBottomSignal.update { it + 1 }
+                                    toKeep
                                 }
+                                // Note: No need to add pending messages here - HistoryWatch will provide the actual messages
                             }
                         }
                     }
