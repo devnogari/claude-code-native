@@ -69,9 +69,15 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Image
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.claudecode.native.util.DropState
+import com.claudecode.native.util.imageDropTarget
 
 /**
  * Chat screen for real-time messaging with Claude.
@@ -185,6 +191,9 @@ fun ChatScreenContent(
 
     // Image picker
     val imagePicker = remember { ImagePicker() }
+
+    // Drag and drop state
+    var dropState by remember { mutableStateOf(DropState()) }
 
     // Notify when a new session is created from draft mode
     LaunchedEffect(sessionCreatedEvent) {
@@ -359,24 +368,38 @@ fun ChatScreenContent(
     }
 
     Scaffold(
-        modifier = Modifier.pointerInput(Unit) {
-            detectHorizontalDragGestures(
-                onDragStart = { swipeOffset = 0f },
-                onDragEnd = {
-                    if (swipeOffset > swipeThreshold) {
-                        onBack()
-                    }
-                    swipeOffset = 0f
-                },
-                onDragCancel = { swipeOffset = 0f },
-                onHorizontalDrag = { _, dragAmount ->
-                    // Only track right swipes (positive drag from left edge)
-                    if (dragAmount > 0 || swipeOffset > 0) {
-                        swipeOffset = (swipeOffset + dragAmount).coerceAtLeast(0f)
+        modifier = Modifier
+            .imageDropTarget(
+                enabled = (connectionState == ConnectionState.Connected || isDraftSession) && !isStreaming,
+                onDragStateChange = { dropState = it },
+                onImageDropped = { images ->
+                    images.forEach { picked ->
+                        viewModel.addAttachedImage(
+                            data = picked.data,
+                            mediaType = picked.mediaType,
+                            fileName = picked.fileName
+                        )
                     }
                 }
             )
-        },
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { swipeOffset = 0f },
+                    onDragEnd = {
+                        if (swipeOffset > swipeThreshold) {
+                            onBack()
+                        }
+                        swipeOffset = 0f
+                    },
+                    onDragCancel = { swipeOffset = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        // Only track right swipes (positive drag from left edge)
+                        if (dragAmount > 0 || swipeOffset > 0) {
+                            swipeOffset = (swipeOffset + dragAmount).coerceAtLeast(0f)
+                        }
+                    }
+                )
+            },
         topBar = {
             TopAppBar(
                 title = {
@@ -457,12 +480,15 @@ fun ChatScreenContent(
             )
         }
     ) { paddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Connection status bar
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                // Connection status bar
             // - Hide during initial loading to avoid "Disconnected" flash
             // - Hide for draft sessions (not connected until first message sent)
             if (!isInitialLoading && !isDraftSession) {
@@ -751,6 +777,44 @@ fun ChatScreenContent(
                     .fillMaxWidth()
                     .padding(16.dp)
             )
+            }
+
+            // Drag and drop overlay
+            AnimatedVisibility(
+                visible = dropState.isHovering,
+                modifier = Modifier.fillMaxSize(),
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                        .border(
+                            BorderStroke(3.dp, MaterialTheme.colorScheme.primary),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Image,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Drop images here",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -931,13 +995,17 @@ private fun ChatInputBar(
                                 }
                                 // Desktop: Enter to send (without Shift), Shift+Enter for newline
                                 keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown -> {
-                                    if (!keyEvent.isShiftPressed && hasContent && isConnected) {
+                                    if (keyEvent.isShiftPressed) {
+                                        // Shift+Enter: Insert newline manually
+                                        onInputChange(inputText + "\n")
+                                        true // Consume the event
+                                    } else if (hasContent && isConnected) {
+                                        // Enter without Shift: Send message
                                         onSend()
                                         true // Consume the event
                                     } else {
-                                        // Shift+Enter or empty input: let TextField handle naturally
-                                        // (singleLine=false allows TextField to insert newline at cursor position)
-                                        false
+                                        // Empty input: do nothing
+                                        true
                                     }
                                 }
                                 else -> false
