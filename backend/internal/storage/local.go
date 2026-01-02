@@ -82,8 +82,14 @@ func (s *LocalFileStorage) Get(ctx context.Context, path string) ([]byte, error)
 	fullPath := filepath.Join(s.basePath, cleanPath)
 
 	// Verify the resolved path is within basePath (defense in depth)
-	absBase, _ := filepath.Abs(s.basePath)
-	absPath, _ := filepath.Abs(fullPath)
+	absBase, err := filepath.Abs(s.basePath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to resolve base path: %v", ErrStorageFailed, err)
+	}
+	absPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to resolve file path: %v", ErrStorageFailed, err)
+	}
 	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
 		return nil, ErrInvalidPath
 	}
@@ -114,13 +120,19 @@ func (s *LocalFileStorage) Delete(ctx context.Context, path string) error {
 	fullPath := filepath.Join(s.basePath, cleanPath)
 
 	// Verify the resolved path is within basePath (defense in depth)
-	absBase, _ := filepath.Abs(s.basePath)
-	absPath, _ := filepath.Abs(fullPath)
+	absBase, err := filepath.Abs(s.basePath)
+	if err != nil {
+		return fmt.Errorf("%w: failed to resolve base path: %v", ErrStorageFailed, err)
+	}
+	absPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return fmt.Errorf("%w: failed to resolve file path: %v", ErrStorageFailed, err)
+	}
 	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
 		return ErrInvalidPath
 	}
 
-	err := os.Remove(fullPath)
+	err = os.Remove(fullPath)
 	if os.IsNotExist(err) {
 		// Already deleted, consider success
 		return nil

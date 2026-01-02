@@ -131,7 +131,10 @@ func (s *service) RemoveFromQueue(ctx context.Context, messageID uuid.UUID) erro
 	// Get the message first to clean up images
 	msg, err := s.repo.GetByID(ctx, messageID)
 	if err != nil {
-		// Message might already be deleted
+		return fmt.Errorf("failed to get message for removal: %w", err)
+	}
+	if msg == nil {
+		// Message not found, might have been already deleted
 		s.logger.Debug("message not found for removal", zap.String("message_id", messageID.String()))
 		return nil
 	}

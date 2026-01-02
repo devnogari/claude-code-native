@@ -66,8 +66,8 @@ func ToResponse(msg *QueuedMessage, getImageURL func(string) string) QueuedMessa
 // ToResponseList converts a slice of QueuedMessage models to API responses.
 func ToResponseList(messages []QueuedMessage, getImageURL func(string) string) []QueuedMessageResponse {
 	responses := make([]QueuedMessageResponse, 0, len(messages))
-	for _, msg := range messages {
-		responses = append(responses, ToResponse(&msg, getImageURL))
+	for i := range messages {
+		responses = append(responses, ToResponse(&messages[i], getImageURL))
 	}
 	return responses
 }
