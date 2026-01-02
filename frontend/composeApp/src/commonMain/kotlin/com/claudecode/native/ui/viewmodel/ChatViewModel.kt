@@ -354,12 +354,24 @@ class ChatViewModel(
         return try {
             val response = queueApi.addToQueue(convId, content)
             val serverMsg = response.message
+            // Map server-returned images to ServerImage objects
+            val serverImages = serverMsg.images.map { imgDto ->
+                ServerImage(
+                    id = imgDto.id,
+                    url = imgDto.url,
+                    mediaType = imgDto.mediaType,
+                    fileName = imgDto.fileName,
+                    width = imgDto.width,
+                    height = imgDto.height
+                )
+            }
             QueuedMessage(
                 id = serverMsg.id,
                 content = serverMsg.content,
                 queuedAt = serverMsg.queuedAt,
                 source = QueuedMessageSource.SERVER,
-                images = images // Keep local images for display
+                images = images, // Keep local images for immediate display (before server upload)
+                serverImages = serverImages // Server-persisted images (currently empty until upload is implemented)
             )
         } catch (e: Exception) {
             DebugLogger.e(TAG, "Failed to add to server queue, storing locally: ${e.message}", e)
