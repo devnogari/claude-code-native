@@ -393,4 +393,63 @@ class ChatViewModelTest {
         assertEquals("ping", MessageType.PING)
         assertEquals("pong", MessageType.PONG)
     }
+
+    // =====================================
+    // normalizeForComparison Tests
+    // =====================================
+
+    @Test
+    fun `normalizeForComparison should strip single at mention from beginning`() {
+        val input = "@/tmp/claude-image-123.png image test"
+        val result = ChatViewModel.normalizeForComparison(input)
+        assertEquals("image test", result)
+    }
+
+    @Test
+    fun `normalizeForComparison should strip multiple at mentions from beginning`() {
+        val input = "@/tmp/image1.png @/tmp/image2.jpg hello world"
+        val result = ChatViewModel.normalizeForComparison(input)
+        assertEquals("hello world", result)
+    }
+
+    @Test
+    fun `normalizeForComparison should not strip at mentions in middle of content`() {
+        val input = "check out @user for more info"
+        val result = ChatViewModel.normalizeForComparison(input)
+        assertEquals("check out @user for more info", result)
+    }
+
+    @Test
+    fun `normalizeForComparison should handle content without at mentions`() {
+        val input = "normal message content"
+        val result = ChatViewModel.normalizeForComparison(input)
+        assertEquals("normal message content", result)
+    }
+
+    @Test
+    fun `normalizeForComparison should normalize whitespace`() {
+        val input = "  multiple   spaces   here  "
+        val result = ChatViewModel.normalizeForComparison(input)
+        assertEquals("multiple spaces here", result)
+    }
+
+    @Test
+    fun `normalizeForComparison should handle at mention with trailing whitespace`() {
+        val input = "@/path/to/file.png   message with extra spaces"
+        val result = ChatViewModel.normalizeForComparison(input)
+        assertEquals("message with extra spaces", result)
+    }
+
+    @Test
+    fun `normalizeForComparison should match hashes for image message`() {
+        // When user sends "image test" with image, pending hash is computed from "image test"
+        val pendingContent = "image test"
+        val pendingHash = ChatViewModel.normalizeForComparison(pendingContent).hashCode()
+
+        // When history watch receives, it includes the @ mention
+        val historyContent = "@/tmp/claude-image-abc123.png image test"
+        val historyHash = ChatViewModel.normalizeForComparison(historyContent).hashCode()
+
+        assertEquals(pendingHash, historyHash, "Hashes should match after normalization")
+    }
 }

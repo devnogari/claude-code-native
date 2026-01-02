@@ -238,13 +238,23 @@ class ChatViewModel(
         private val WHITESPACE_REGEX = Regex("\\s+")
 
         /**
+         * Regex to match @ file mentions at the start of content.
+         * Claude CLI prepends @/path/to/image.png to messages with attachments.
+         * Format: @/path/to/file followed by space, repeated at start of string.
+         */
+        private val AT_MENTION_REGEX = Regex("""^(@\S+\s+)+""")
+
+        /**
          * Normalizes content for hash comparison.
-         * Trims whitespace and normalizes internal whitespace to single spaces.
+         * - Strips @ file mentions from the beginning (added by Claude CLI for images)
+         * - Trims whitespace and normalizes internal whitespace to single spaces
          * This ensures hash comparison works even when content is modified
          * during serialization/deserialization (e.g., trailing spaces removed).
          */
         fun normalizeForComparison(content: String): String {
-            return content.trim().replace(WHITESPACE_REGEX, " ")
+            // Strip @ mentions from beginning (e.g., "@/tmp/claude-image-xxx.png message")
+            val withoutMentions = content.replace(AT_MENTION_REGEX, "")
+            return withoutMentions.trim().replace(WHITESPACE_REGEX, " ")
         }
     }
 
