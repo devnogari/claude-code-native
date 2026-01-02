@@ -148,6 +148,18 @@ func GetSessionState(messages []ClaudeMessage) SessionState {
 		return SessionStateStreaming
 	}
 
+	// If last message is from assistant, check if it has a stop_reason
+	// to determine if streaming is truly complete
+	if lastRelevantMsg != nil && lastRelevantMsg.Message.Role == "assistant" {
+		// If stop_reason is set, the response is complete
+		if lastRelevantMsg.Message.StopReason != "" {
+			return SessionStateIdle
+		}
+		// No stop_reason means streaming is still in progress
+		// (assistant message exists but not yet finalized)
+		return SessionStateStreaming
+	}
+
 	return SessionStateIdle
 }
 
