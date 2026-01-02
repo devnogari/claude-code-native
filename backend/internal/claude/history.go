@@ -119,10 +119,20 @@ const (
 	SessionStateStreaming SessionState = "streaming" // Currently generating response
 )
 
+// StreamingTimeout is the duration after which a message without stop_reason
+// is considered complete (handles interrupted/crashed sessions)
+const StreamingTimeout = 30 * time.Second
+
 // GetSessionState determines the current state of a session from its messages
 func GetSessionState(messages []ClaudeMessage) SessionState {
 	var lastQueueOp string
 	var lastRelevantMsg *ClaudeMessage
+	var lastAssistantMsgID string
+
+	// Track stop_reason by message ID (Claude API message ID, not UUID)
+	// Claude CLI appends multiple JSONL lines for streaming chunks with the same message.ID
+	// Only the final chunk has stop_reason set
+	stopReasonByMsgID := make(map[string]string)
 
 	for i := range messages {
 		msg := &messages[i]
@@ -133,6 +143,16 @@ func GetSessionState(messages []ClaudeMessage) SessionState {
 		// Track last user/assistant message
 		if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
 			lastRelevantMsg = msg
+
+			// For assistant messages, track stop_reason by message ID
+			// The message.ID is the Claude API message ID (same across streaming chunks)
+			if msg.Message.Role == "assistant" && msg.Message.ID != "" {
+				lastAssistantMsgID = msg.Message.ID
+				// Keep the stop_reason if it's set (later chunks may have it)
+				if msg.Message.StopReason != "" {
+					stopReasonByMsgID[msg.Message.ID] = msg.Message.StopReason
+				}
+			}
 		}
 	}
 
@@ -148,15 +168,29 @@ func GetSessionState(messages []ClaudeMessage) SessionState {
 		return SessionStateStreaming
 	}
 
-	// If last message is from assistant, check if it has a stop_reason
-	// to determine if streaming is truly complete
+	// If last message is from assistant
 	if lastRelevantMsg != nil && lastRelevantMsg.Message.Role == "assistant" {
-		// If stop_reason is set, the response is complete
-		if lastRelevantMsg.Message.StopReason != "" {
+		// If we have a message ID, check if ANY chunk of that message has stop_reason
+		// This handles Claude CLI's streaming behavior where multiple JSONL lines share
+		// the same message ID but only the final line has stop_reason set
+		if lastAssistantMsgID != "" {
+			if stopReasonByMsgID[lastAssistantMsgID] != "" {
+				return SessionStateIdle
+			}
+		} else {
+			// Fallback: if no message ID, check stop_reason on the last message directly
+			if lastRelevantMsg.Message.StopReason != "" {
+				return SessionStateIdle
+			}
+		}
+
+		// No stop_reason found - check if message is old enough to be considered complete
+		// This handles interrupted/crashed sessions where stop_reason was never written
+		if !lastRelevantMsg.Timestamp.IsZero() && time.Since(lastRelevantMsg.Timestamp) > StreamingTimeout {
 			return SessionStateIdle
 		}
-		// No stop_reason means streaming is still in progress
-		// (assistant message exists but not yet finalized)
+
+		// Recent message without stop_reason means streaming is still in progress
 		return SessionStateStreaming
 	}
 
