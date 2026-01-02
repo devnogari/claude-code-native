@@ -370,7 +370,7 @@ fun ChatScreenContent(
     Scaffold(
         modifier = Modifier
             .imageDropTarget(
-                enabled = (connectionState == ConnectionState.Connected || isDraftSession) && !isStreaming,
+                enabled = connectionState == ConnectionState.Connected || isDraftSession,
                 onDragStateChange = { dropState = it },
                 onImageDropped = { images ->
                     images.forEach { picked ->
@@ -964,15 +964,15 @@ private fun ChatInputBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Image attachment button
+                // Image attachment button (enabled even during streaming for queued messages)
                 IconButton(
                     onClick = onAttachImages,
-                    enabled = isConnected && !isStreaming
+                    enabled = isConnected
                 ) {
                     Icon(
                         Icons.Default.Add,
                         contentDescription = "Attach image",
-                        tint = if (isConnected && !isStreaming) {
+                        tint = if (isConnected) {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         } else {
                             MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)

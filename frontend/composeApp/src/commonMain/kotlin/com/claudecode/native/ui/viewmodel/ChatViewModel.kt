@@ -1704,24 +1704,38 @@ class ChatViewModel(
                                 }
 
                                 // Add dequeued message to messages list as pending user message
+                                // Guard against race condition: HistoryWatch might confirm the message before dequeue arrives
                                 dequeuedMessage?.let { msg ->
-                                    val messageId = "pending_${generateMessageId()}"
-                                    val userMessage = ChatMessage(
-                                        id = messageId,
-                                        role = MessageRole.USER,
-                                        blocks = listOf(ContentBlock.Text(msg.content)),
-                                        isStreaming = false,
-                                        isPending = true
-                                    )
+                                    val normalizedContent = normalizeForComparison(msg.content)
+                                    val normalizedHash = normalizedContent.hashCode()
 
-                                    // Track pending message for duplicate prevention
-                                    val normalizedHash = normalizeForComparison(msg.content).hashCode()
                                     mutex.withLock {
-                                        mapsMutex.withLock {
-                                            pendingUserMessages[normalizedHash] = messageId
+                                        // Check if this message was already confirmed by HistoryWatch (race condition)
+                                        val alreadyConfirmed = _messages.value.any { existingMsg ->
+                                            existingMsg.role == MessageRole.USER &&
+                                            !existingMsg.isPending &&
+                                            normalizeForComparison(existingMsg.content) == normalizedContent
                                         }
-                                        _messages.value = _messages.value + userMessage
-                                        println("ChatViewModel: Added dequeued message as pending user message (id=$messageId)")
+
+                                        if (alreadyConfirmed) {
+                                            println("ChatViewModel: Dequeued message already confirmed by HistoryWatch, skipping duplicate")
+                                        } else {
+                                            val messageId = "pending_${generateMessageId()}"
+                                            val userMessage = ChatMessage(
+                                                id = messageId,
+                                                role = MessageRole.USER,
+                                                blocks = listOf(ContentBlock.Text(msg.content)),
+                                                isStreaming = false,
+                                                isPending = true
+                                            )
+
+                                            // Track pending message for duplicate prevention
+                                            mapsMutex.withLock {
+                                                pendingUserMessages[normalizedHash] = messageId
+                                            }
+                                            _messages.value = _messages.value + userMessage
+                                            println("ChatViewModel: Added dequeued message as pending user message (id=$messageId)")
+                                        }
                                     }
 
                                     // Trigger scroll to bottom for the dequeued message
