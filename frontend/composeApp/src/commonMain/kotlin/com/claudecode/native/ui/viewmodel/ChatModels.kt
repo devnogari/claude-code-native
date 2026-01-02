@@ -20,6 +20,22 @@ data class ToolUseInfo(
 )
 
 /**
+ * Image source for image content blocks.
+ * Currently supports base64-encoded images.
+ */
+sealed class ImageSource {
+    /**
+     * Base64-encoded image data.
+     * @param data Base64-encoded image bytes
+     * @param mediaType MIME type (e.g., "image/png", "image/jpeg")
+     */
+    data class Base64(
+        val data: String,
+        val mediaType: String
+    ) : ImageSource()
+}
+
+/**
  * Content block in a chat message, preserving the order of text and tool usages.
  * Claude responses can interleave text and tool_use blocks, and this sealed class
  * preserves that ordering for accurate display.
@@ -29,6 +45,8 @@ sealed class ContentBlock {
     data class Text(val content: String) : ContentBlock()
     /** Tool usage block */
     data class Tool(val info: ToolUseInfo) : ContentBlock()
+    /** Image content block */
+    data class Image(val source: ImageSource) : ContentBlock()
 }
 
 /**
@@ -87,3 +105,32 @@ data class QueuedMessage(
     val queuedAt: Long,
     val source: QueuedMessageSource = QueuedMessageSource.LOCAL
 )
+
+/**
+ * Image attached to a message before sending.
+ * Used for image preview and upload.
+ *
+ * @param id Unique identifier for the attached image
+ * @param data Raw image bytes
+ * @param mediaType MIME type (e.g., "image/png", "image/jpeg")
+ * @param fileName Original file name (if available)
+ * @param width Image width in pixels (if known)
+ * @param height Image height in pixels (if known)
+ */
+data class AttachedImage(
+    val id: String,
+    val data: ByteArray,
+    val mediaType: String,
+    val fileName: String? = null,
+    val width: Int? = null,
+    val height: Int? = null
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other == null || this::class != other::class) return false
+        other as AttachedImage
+        return id == other.id
+    }
+
+    override fun hashCode(): Int = id.hashCode()
+}
