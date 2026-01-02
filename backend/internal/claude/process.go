@@ -92,6 +92,7 @@ type Process struct {
 	closeOnce      sync.Once
 	hasRun         bool           // Track if process has run before (for --continue flag)
 	wg             sync.WaitGroup // Track goroutines for cleanup synchronization
+	closed         bool           // Track if channels have been closed
 }
 
 // NewProcess creates a new Process for a conversation
@@ -137,6 +138,7 @@ func (p *Process) StartWithPrompt(prompt string) error {
 		p.Output = make(chan OutputMessage, 100)
 		p.Error = make(chan error, 10)
 		p.closeOnce = sync.Once{}
+		p.closed = false
 	}
 	p.mu.Unlock()
 
@@ -266,11 +268,38 @@ func (p *Process) waitForExit() {
 	err := p.Cmd.Wait()
 
 	p.mu.Lock()
+	// Check if already closed (process was stopped externally via manager.StopProcess)
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+
 	if err != nil {
-		p.Status = ProcessStatusError
-		p.logger.Error("claude process exited with error",
-			zap.String("conversationID", p.ConversationID.String()),
-			zap.Error(err))
+		// "wait: no child processes" is expected when manager.StopProcess already reaped the process
+		// This happens because both manager.StopProcess and waitForExit call Wait()
+		errStr := err.Error()
+		if strings.Contains(errStr, "no child processes") || strings.Contains(errStr, "wait: ") {
+			p.Status = ProcessStatusStopped
+			p.logger.Debug("claude process already reaped by manager",
+				zap.String("conversationID", p.ConversationID.String()))
+			p.mu.Unlock()
+			p.Close()
+			return
+		}
+
+		// Check if this is an exit status (normal termination with non-zero code)
+		// Exit status errors are not necessarily errors - Claude CLI may exit with status on user interrupt
+		if strings.Contains(errStr, "exit status") {
+			p.Status = ProcessStatusStopped
+			p.logger.Info("claude process exited",
+				zap.String("conversationID", p.ConversationID.String()),
+				zap.String("exitStatus", errStr))
+		} else {
+			p.Status = ProcessStatusError
+			p.logger.Error("claude process exited with error",
+				zap.String("conversationID", p.ConversationID.String()),
+				zap.Error(err))
+		}
 	} else {
 		p.Status = ProcessStatusStopped
 		p.logger.Info("claude process exited normally",
@@ -278,16 +307,30 @@ func (p *Process) waitForExit() {
 	}
 	p.mu.Unlock()
 
-	// Signal completion by sending status and then closing channels
-	// This allows streamProcessOutput to exit its loop and send the complete message
-	select {
-	case p.Output <- OutputMessage{Type: "status", Content: "completed"}:
-	default:
-		// Output channel might be full or closed, continue to Close
-	}
+	// Signal completion by sending status - use trySend to avoid panic on closed channel
+	p.trySendOutput(OutputMessage{Type: "status", Content: "completed"})
 
 	// Close channels to signal completion to all listeners
 	p.Close()
+}
+
+// trySendOutput attempts to send a message to the Output channel safely
+// Returns true if sent successfully, false if channel is closed or full
+func (p *Process) trySendOutput(msg OutputMessage) bool {
+	p.mu.RLock()
+	if p.closed {
+		p.mu.RUnlock()
+		return false
+	}
+	p.mu.RUnlock()
+
+	// Use select with default to avoid blocking
+	select {
+	case p.Output <- msg:
+		return true
+	default:
+		return false
+	}
 }
 
 // SetStatus sets the process status in a thread-safe manner
@@ -308,6 +351,9 @@ func (p *Process) GetStatus() string {
 // All channels are closed to prevent goroutine leaks
 func (p *Process) Close() {
 	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		p.mu.Unlock()
 		close(p.Done)
 		close(p.Output)
 		close(p.Error)
