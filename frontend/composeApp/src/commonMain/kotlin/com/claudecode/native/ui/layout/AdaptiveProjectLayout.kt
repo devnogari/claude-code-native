@@ -94,10 +94,14 @@ fun AdaptiveProjectLayout(
     }
 
     // Callback for handling back navigation from the detail pane
+    // Clears currentConversation to properly reset state (important for delete session)
     val handleBack: () -> Unit = {
+        currentConversation = null
         scope.launch {
             navigator.navigateBack()
         }
+        // Also notify parent to update currentScreen state
+        onConversationSelected("")  // Empty string signals navigation back to list
     }
 
     ListDetailPaneScaffold(

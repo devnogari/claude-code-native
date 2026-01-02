@@ -179,7 +179,12 @@ fun AppNavigation() {
             AdaptiveProjectLayout(
                 selectedConversationId = selectedConversationId,
                 onConversationSelected = { conversationId ->
-                    currentScreen = Screen.Chat(conversationId)
+                    // Empty string signals navigation back to project list (e.g., after delete session)
+                    if (conversationId.isEmpty()) {
+                        currentScreen = Screen.ProjectList
+                    } else {
+                        currentScreen = Screen.Chat(conversationId)
+                    }
                 },
                 onSettingsClick = {
                     currentScreen = Screen.Settings
