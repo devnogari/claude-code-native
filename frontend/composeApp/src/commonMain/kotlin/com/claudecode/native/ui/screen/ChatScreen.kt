@@ -43,6 +43,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalFocusManager
@@ -128,7 +130,8 @@ fun ChatScreenContent(
     onSessionCreated: (sessionId: String, encodedPath: String) -> Unit = { _, _ -> },
     onNewSession: () -> Unit = {}
 ) {
-    var inputText by remember { mutableStateOf("") }
+    var inputTextValue by remember { mutableStateOf(TextFieldValue("")) }
+    val inputText = inputTextValue.text
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -720,7 +723,7 @@ fun ChatScreenContent(
                         command = command,
                         args = commandArgs,
                         viewModel = viewModel,
-                        onClearInput = { inputText = "" },
+                        onClearInput = { inputTextValue = TextFieldValue("") },
                         onShowDeleteDialog = { showDeleteDialog = true },
                         onResetScroll = { userScrolledUp = false }
                     )
@@ -735,8 +738,8 @@ fun ChatScreenContent(
             // Input area
             // Allow input in draft mode even when not connected (session will be created on first send)
             ChatInputBar(
-                inputText = inputText,
-                onInputChange = { inputText = it },
+                inputTextValue = inputTextValue,
+                onInputChange = { inputTextValue = it },
                 isStreaming = isStreaming,
                 isConnected = connectionState == ConnectionState.Connected || isDraftSession,
                 attachedImages = attachedImages,
@@ -765,19 +768,19 @@ fun ChatScreenContent(
                                 command = command,
                                 args = commandArgs,
                                 viewModel = viewModel,
-                                onClearInput = { inputText = "" },
+                                onClearInput = { inputTextValue = TextFieldValue("") },
                                 onShowDeleteDialog = { showDeleteDialog = true },
                                 onResetScroll = { userScrolledUp = false }
                             )
                         } else {
                             // Unknown command - send as regular message to Claude
                             viewModel.sendMessage(inputText)
-                            inputText = ""
+                            inputTextValue = TextFieldValue("")
                             userScrolledUp = false  // Reset to enable auto-scroll for response
                         }
                     } else {
                         viewModel.sendMessage(inputText)
-                        inputText = ""
+                        inputTextValue = TextFieldValue("")
                         userScrolledUp = false  // Reset to enable auto-scroll for response
                     }
                 },
@@ -939,8 +942,8 @@ private fun ConnectionStatusBar(
  */
 @Composable
 private fun ChatInputBar(
-    inputText: String,
-    onInputChange: (String) -> Unit,
+    inputTextValue: TextFieldValue,
+    onInputChange: (TextFieldValue) -> Unit,
     isStreaming: Boolean,
     isConnected: Boolean,
     attachedImages: List<AttachedImage> = emptyList(),
@@ -951,7 +954,7 @@ private fun ChatInputBar(
     canFocus: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val hasContent = inputText.isNotBlank() || attachedImages.isNotEmpty()
+    val hasContent = inputTextValue.text.isNotBlank() || attachedImages.isNotEmpty()
 
     Surface(
         modifier = modifier,
@@ -991,7 +994,7 @@ private fun ChatInputBar(
                 }
 
                 OutlinedTextField(
-                    value = inputText,
+                    value = inputTextValue,
                     onValueChange = onInputChange,
                     modifier = Modifier
                         .weight(1f)
@@ -1006,8 +1009,17 @@ private fun ChatInputBar(
                                 // Desktop: Enter to send (without Shift), Shift+Enter for newline
                                 keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown -> {
                                     if (keyEvent.isShiftPressed) {
-                                        // Shift+Enter: Insert newline manually
-                                        onInputChange(inputText + "\n")
+                                        // Shift+Enter: Insert newline at cursor position and move cursor down
+                                        // If text is selected, replace selection with newline
+                                        val currentText = inputTextValue.text
+                                        val selectionStart = inputTextValue.selection.start
+                                        val selectionEnd = inputTextValue.selection.end
+                                        val newText = currentText.substring(0, selectionStart) + "\n" + currentText.substring(selectionEnd)
+                                        val newCursorPos = selectionStart + 1
+                                        onInputChange(TextFieldValue(
+                                            text = newText,
+                                            selection = TextRange(newCursorPos)
+                                        ))
                                         true // Consume the event
                                     } else if (hasContent && isConnected) {
                                         // Enter without Shift: Send message
