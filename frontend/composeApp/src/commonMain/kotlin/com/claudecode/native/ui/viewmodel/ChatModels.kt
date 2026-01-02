@@ -98,12 +98,14 @@ enum class QueuedMessageSource {
  * @param content The message content
  * @param queuedAt Timestamp when the message was queued (epoch milliseconds)
  * @param source Where the message originated from
+ * @param images Attached images (if any)
  */
 data class QueuedMessage(
     val id: String,
     val content: String,
     val queuedAt: Long,
-    val source: QueuedMessageSource = QueuedMessageSource.LOCAL
+    val source: QueuedMessageSource = QueuedMessageSource.LOCAL,
+    val images: List<AttachedImage> = emptyList()
 )
 
 /**
