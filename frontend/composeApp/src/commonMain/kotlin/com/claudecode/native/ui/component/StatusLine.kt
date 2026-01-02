@@ -96,12 +96,32 @@ fun StatusLine(
     }
 }
 
+// Claude Code CLI style status words - randomly selected when statusText is empty
+private val STATUS_WORDS = listOf(
+    "Accomplishing", "Actualizing", "Analyzing", "Baking", "Brewing",
+    "Calculating", "Cerebrating", "Channeling", "Churning", "Clauding",
+    "Coalescing", "Cogitating", "Computing", "Concocting", "Considering",
+    "Contemplating", "Cooking", "Crafting", "Creating", "Crunching",
+    "Deciphering", "Deliberating", "Determining", "Effecting", "Elucidating",
+    "Enchanting", "Engineering", "Envisioning", "Evaluating", "Examining",
+    "Executing", "Figuring", "Forging", "Formulating", "Generating",
+    "Illuminating", "Implementing", "Inferring", "Investigating", "Iterating",
+    "Manifesting", "Meditating", "Musing", "Orchestrating", "Parsing",
+    "Percolating", "Philosophizing", "Pondering", "Processing", "Producing",
+    "Prognosticating", "Radiating", "Reasoning", "Reflecting", "Ruminating",
+    "Shaping", "Simulating", "Speculating", "Strategizing", "Synthesizing",
+    "Thinking", "Transmuting", "Unraveling", "Weaving", "Working", "Wrangling"
+)
+
 @Composable
 private fun StatusLineContent(
     status: ProgressStatus,
     isTodoExpanded: Boolean = false,
     onToggleTodos: () -> Unit = {}
 ) {
+    // Random status word - remembered once per composition to avoid flickering
+    val randomStatusWord = remember { STATUS_WORDS.random() }
+
     // Spinner animation - cycles through spinner characters
     val infiniteTransition = rememberInfiniteTransition(label = "statusline_spinner")
     val animationPhase by infiniteTransition.animateFloat(
@@ -176,7 +196,7 @@ private fun StatusLineContent(
 
                 // Status text (main description)
                 Text(
-                    text = status.statusText.ifEmpty { "Processing" } + "…",
+                    text = status.statusText.ifEmpty { randomStatusWord } + "…",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
