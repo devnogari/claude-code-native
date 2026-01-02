@@ -84,10 +84,12 @@ data class ChatMessage(
  * Source of the queued message - tracks where the message originated from.
  */
 enum class QueuedMessageSource {
-    /** Message queued locally from this app */
+    /** Message queued locally from this app (offline fallback) */
     LOCAL,
     /** Message queued from Claude CLI (terminal) */
-    CLI
+    CLI,
+    /** Message stored on server (primary mode) */
+    SERVER
 }
 
 /**

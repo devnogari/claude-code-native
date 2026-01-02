@@ -8,6 +8,7 @@ import (
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
 	"github.com/devnogari/claude-code-native/backend/internal/message"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
+	"github.com/devnogari/claude-code-native/backend/internal/queue"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 )
@@ -23,8 +24,9 @@ var Module = fx.Module("ws",
 		convRepo *conversation.Repository,
 		projRepo *project.Repository,
 		msgRepo *message.Repository,
+		queueService queue.Service,
 	) *Handler {
-		return NewHandler(hub, config, logger, claudeMgr, convRepo, projRepo, msgRepo)
+		return NewHandler(hub, config, logger, claudeMgr, convRepo, projRepo, msgRepo, queueService)
 	}),
 	fx.Invoke(func(lc fx.Lifecycle, hub *Hub) {
 		lc.Append(fx.Hook{

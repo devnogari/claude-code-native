@@ -50,6 +50,15 @@ func (s *Server) setupRoutes() {
 	// Message routes
 	protected.Get("/conversations/:conversationId/messages", s.msgHandler.ListByConversation)
 
+	// Queue routes (for native app message queue)
+	protected.Get("/conversations/:id/queue", s.queueHandler.GetQueue)
+	protected.Post("/conversations/:id/queue", s.queueHandler.AddToQueue)
+	protected.Delete("/conversations/:id/queue/:messageId", s.queueHandler.RemoveFromQueue)
+	protected.Delete("/conversations/:id/queue", s.queueHandler.ClearQueue)
+
+	// Image routes (for queue message images)
+	protected.Get("/images/*", s.queueHandler.ServeImage)
+
 	// Command routes (slash commands)
 	protected.Post("/commands/list", s.commandHandler.List)
 	protected.Post("/commands/execute", s.commandHandler.Execute)

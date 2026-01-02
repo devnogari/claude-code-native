@@ -7,6 +7,7 @@ import com.claudecode.native.data.api.CommandApi
 import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.MessageApi
 import com.claudecode.native.data.api.ProjectApi
+import com.claudecode.native.data.api.QueueApi
 import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.data.repository.PreferencesRepository
 import com.claudecode.native.data.repository.ThemeRepository
@@ -74,6 +75,7 @@ val appModule = module {
     single { MessageApi(get()) }
     single { ClaudeHistoryApi(get()) }
     single { CommandApi(get()) }
+    single { QueueApi(get()) }
 
     // Repositories
     single { PreferencesRepository() }
@@ -82,7 +84,7 @@ val appModule = module {
 
     // ViewModels - use single to maintain state across recomposition (e.g., theme changes)
     single { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
-    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, HistoryWatchClient, CommandApi, CoroutineScope
+    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }  // WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, HistoryWatchClient, CommandApi, QueueApi, CoroutineScope
     single { ProjectListViewModel(get(), get(), get()) }  // ClaudeHistoryApi, FavoriteRepository, CoroutineScope
     single { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
     // WebSocket Client for real-time communication

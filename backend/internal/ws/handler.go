@@ -15,6 +15,7 @@ import (
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
 	"github.com/devnogari/claude-code-native/backend/internal/message"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
+	"github.com/devnogari/claude-code-native/backend/internal/queue"
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofrs/uuid/v5"
@@ -60,13 +61,14 @@ type MessageRepository interface {
 
 // Handler handles WebSocket connections and message routing
 type Handler struct {
-	hub       *Hub
-	config    *config.Config
-	logger    *zap.Logger
-	claudeMgr *claude.Manager
-	convRepo  ConversationRepository
-	projRepo  ProjectRepository
-	msgRepo   MessageRepository
+	hub          *Hub
+	config       *config.Config
+	logger       *zap.Logger
+	claudeMgr    *claude.Manager
+	convRepo     ConversationRepository
+	projRepo     ProjectRepository
+	msgRepo      MessageRepository
+	queueService queue.Service
 }
 
 // NewHandler creates a new WebSocket handler with all dependencies
@@ -78,15 +80,17 @@ func NewHandler(
 	convRepo ConversationRepository,
 	projRepo ProjectRepository,
 	msgRepo MessageRepository,
+	queueService queue.Service,
 ) *Handler {
 	return &Handler{
-		hub:       hub,
-		config:    config,
-		logger:    logger,
-		claudeMgr: claudeMgr,
-		convRepo:  convRepo,
-		projRepo:  projRepo,
-		msgRepo:   msgRepo,
+		hub:          hub,
+		config:       config,
+		logger:       logger,
+		claudeMgr:    claudeMgr,
+		convRepo:     convRepo,
+		projRepo:     projRepo,
+		msgRepo:      msgRepo,
+		queueService: queueService,
 	}
 }
 
@@ -258,6 +262,9 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 
 	// Send connection status (non-blocking)
 	h.sendStatusToClient(client, "connected")
+
+	// Send queue sync to client (non-blocking)
+	h.sendQueueSyncToClient(client)
 
 	// Start read and write pumps
 	go h.writePump(client)
@@ -881,3 +888,58 @@ func getMediaTypeFromExtension(ext string) string {
 
 // unused but kept for potential future use
 var _ = filepath.Base
+
+// Queue-related helper methods
+
+// sendQueueSyncToClient sends the current queue state to a client
+func (h *Handler) sendQueueSyncToClient(client *Client) {
+	ctx := context.Background()
+	messages, err := h.queueService.GetQueue(ctx, client.ConversationID)
+	if err != nil {
+		h.logger.Warn("failed to get queue for sync",
+			zap.String("conversationID", client.ConversationID.String()),
+			zap.Error(err))
+		return
+	}
+
+	payload := queue.QueueSyncPayload{
+		Messages: queue.ToResponseList(messages, h.queueService.GetImageURL),
+	}
+
+	msg := createQueueSyncMessage(payload)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("failed to marshal queue sync message", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	default:
+		// Buffer full, skip
+	}
+}
+
+// BroadcastQueueAdd broadcasts a queue_add message to all clients in a conversation
+func (h *Handler) BroadcastQueueAdd(convID uuid.UUID, msg *queue.QueuedMessage) {
+	payload := queue.ToAddPayload(msg, h.queueService.GetImageURL)
+	wsMsg := createQueueAddMessage(payload)
+	data, err := json.Marshal(wsMsg)
+	if err != nil {
+		h.logger.Error("failed to marshal queue add message", zap.Error(err))
+		return
+	}
+	h.hub.BroadcastToConversation(convID, data)
+}
+
+// BroadcastQueueRemove broadcasts a queue_remove message to all clients in a conversation
+func (h *Handler) BroadcastQueueRemove(convID uuid.UUID, messageID uuid.UUID) {
+	payload := queue.QueueRemovePayload{ID: messageID}
+	wsMsg := createQueueRemoveMessage(payload)
+	data, err := json.Marshal(wsMsg)
+	if err != nil {
+		h.logger.Error("failed to marshal queue remove message", zap.Error(err))
+		return
+	}
+	h.hub.BroadcastToConversation(convID, data)
+}
