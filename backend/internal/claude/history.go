@@ -16,12 +16,13 @@ var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 // ClaudeProject represents a discovered Claude Code project
 type ClaudeProject struct {
-	ID           string           `json:"id"`
-	Name         string           `json:"name"`
-	Path         string           `json:"path"`
-	EncodedPath  string           `json:"encoded_path"`
-	Sessions     []ClaudeSession  `json:"sessions"`
-	LastAccessed time.Time        `json:"last_accessed"`
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Path         string          `json:"path"`
+	EncodedPath  string          `json:"encoded_path"`
+	Sessions     []ClaudeSession `json:"sessions"`
+	LastAccessed time.Time       `json:"last_accessed"`
+	IsCompleted  bool            `json:"is_completed"` // Completion status from database
 }
 
 // ClaudeSession represents a conversation session in Claude Code

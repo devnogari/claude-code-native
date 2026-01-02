@@ -10,6 +10,7 @@ import (
 	"github.com/devnogari/claude-code-native/backend/internal/command"
 	"github.com/devnogari/claude-code-native/backend/internal/config"
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
+	"github.com/devnogari/claude-code-native/backend/internal/hook"
 	"github.com/devnogari/claude-code-native/backend/internal/message"
 	"github.com/devnogari/claude-code-native/backend/internal/middleware"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
@@ -44,6 +45,7 @@ type Server struct {
 	historyWatchHandler *claude.HistoryWatchHandler
 	syncHandler         *claude.SyncHandler
 	commandHandler      *command.Handler
+	hookHandler         *hook.Handler
 }
 
 type ServerParams struct {
@@ -89,6 +91,10 @@ func New(p ServerParams) *Server {
 	convHandler := conversation.NewHandler(p.ConvRepo, p.ProjectRepo)
 	msgHandler := message.NewHandler(p.MsgRepo)
 
+	// Create hook handler with adapter
+	hookRepoAdapter := hook.NewProjectRepoAdapter(p.ProjectRepo)
+	hookHandler := hook.NewHandler(hookRepoAdapter, p.Config.HookAPIKey)
+
 	s := &Server{
 		app:                 app,
 		config:              p.Config,
@@ -109,6 +115,7 @@ func New(p ServerParams) *Server {
 		historyWatchHandler: p.HistoryWatchHandler,
 		syncHandler:         p.SyncHandler,
 		commandHandler:      p.CommandHandler,
+		hookHandler:         hookHandler,
 	}
 
 	s.setupRoutes()
