@@ -1786,10 +1786,25 @@ class ChatViewModel(
                                             println("ChatViewModel: Dequeued message already confirmed by HistoryWatch, skipping duplicate")
                                         } else {
                                             val messageId = "pending_${generateMessageId()}"
+
+                                            // Build blocks with text and images
+                                            val blocks = mutableListOf<ContentBlock>()
+                                            if (msg.content.isNotBlank()) {
+                                                blocks.add(ContentBlock.Text(msg.content))
+                                            }
+                                            msg.images.forEach { img ->
+                                                blocks.add(ContentBlock.Image(
+                                                    ImageSource.Base64(
+                                                        data = kotlin.io.encoding.Base64.encode(img.data),
+                                                        mediaType = img.mediaType
+                                                    )
+                                                ))
+                                            }
+
                                             val userMessage = ChatMessage(
                                                 id = messageId,
                                                 role = MessageRole.USER,
-                                                blocks = listOf(ContentBlock.Text(msg.content)),
+                                                blocks = blocks,
                                                 isStreaming = false,
                                                 isPending = true
                                             )
@@ -1799,7 +1814,7 @@ class ChatViewModel(
                                                 pendingUserMessages[normalizedHash] = messageId
                                             }
                                             _messages.value = _messages.value + userMessage
-                                            println("ChatViewModel: Added dequeued message as pending user message (id=$messageId)")
+                                            println("ChatViewModel: Added dequeued message as pending user message (id=$messageId, images=${msg.images.size})")
                                         }
                                     }
 
