@@ -1,121 +1,98 @@
 package com.claudecode.native.util
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.runtime.*
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import java.awt.Window
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.awtTransferable
 import java.awt.datatransfer.DataFlavor
-import java.awt.dnd.*
 import java.io.File
 import java.nio.file.Files
 
 /**
- * Desktop (JVM) implementation of image drop target using AWT DropTarget.
- *
- * Note: This uses a global drop target on the window since Compose Multiplatform
- * doesn't yet have a stable Modifier-based drag and drop API. The entire window
- * acts as a drop zone when enabled.
+ * Desktop (JVM) implementation of image drop target using Compose's official
+ * dragAndDropTarget modifier API (available in Compose Multiplatform 1.7.0+).
  */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 actual fun Modifier.imageDropTarget(
     enabled: Boolean,
     onDragStateChange: (DropState) -> Unit,
     onImageDropped: (List<PickedImage>) -> Unit
 ): Modifier {
-    // Use rememberUpdatedState to capture latest callbacks without re-triggering DisposableEffect
+    if (!enabled) {
+        return this
+    }
+
     val currentOnDragStateChange by rememberUpdatedState(onDragStateChange)
     val currentOnImageDropped by rememberUpdatedState(onImageDropped)
 
-    DisposableEffect(enabled) {
-        if (!enabled) {
-            return@DisposableEffect onDispose { }
-        }
-
-        // Find all windows (includes ComposeWindow) - more reliable than Frame.getFrames()
-        val windows = Window.getWindows()
-        val dropTargets = mutableListOf<DropTarget>()
-
-        val dropTargetListener = object : DropTargetListener {
-            override fun dragEnter(dtde: DropTargetDragEvent) {
-                if (isImageDrag(dtde)) {
-                    dtde.acceptDrag(DnDConstants.ACTION_COPY)
-                    currentOnDragStateChange(DropState(isDragging = true, isHovering = true))
-                } else {
-                    dtde.rejectDrag()
-                }
-            }
-
-            override fun dragOver(dtde: DropTargetDragEvent) {
-                if (isImageDrag(dtde)) {
-                    dtde.acceptDrag(DnDConstants.ACTION_COPY)
-                }
-            }
-
-            override fun dropActionChanged(dtde: DropTargetDragEvent) {}
-
-            override fun dragExit(dte: DropTargetEvent) {
+    val dragAndDropTarget = remember {
+        object : DragAndDropTarget {
+            override fun onStarted(event: DragAndDropEvent) {
                 currentOnDragStateChange(DropState(isDragging = true, isHovering = false))
             }
 
-            override fun drop(dtde: DropTargetDropEvent) {
+            override fun onEntered(event: DragAndDropEvent) {
+                currentOnDragStateChange(DropState(isDragging = true, isHovering = true))
+            }
+
+            override fun onExited(event: DragAndDropEvent) {
+                currentOnDragStateChange(DropState(isDragging = true, isHovering = false))
+            }
+
+            override fun onEnded(event: DragAndDropEvent) {
+                currentOnDragStateChange(DropState(isDragging = false, isHovering = false))
+            }
+
+            override fun onDrop(event: DragAndDropEvent): Boolean {
+                val transferable = event.awtTransferable
+
+                if (!transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+                    return false
+                }
+
                 try {
-                    dtde.acceptDrop(DnDConstants.ACTION_COPY)
-                    val transferable = dtde.transferable
+                    @Suppress("UNCHECKED_CAST")
+                    val files = transferable.getTransferData(DataFlavor.javaFileListFlavor) as List<File>
 
-                    if (transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
-                        @Suppress("UNCHECKED_CAST")
-                        val files = transferable.getTransferData(DataFlavor.javaFileListFlavor) as List<File>
-
-                        val images = files.filter { isImageFile(it) }.mapNotNull { file ->
-                            try {
-                                val data = file.readBytes()
-                                // Use probed content type if available, fallback to extension
-                                val mediaType = Files.probeContentType(file.toPath())
-                                    ?: getMediaTypeFromExtension(file.extension)
-                                PickedImage(
-                                    data = data,
-                                    mediaType = mediaType,
-                                    fileName = file.name
-                                )
-                            } catch (e: Exception) {
-                                null
-                            }
+                    val images = files.filter { isImageFile(it) }.mapNotNull { file ->
+                        try {
+                            val data = file.readBytes()
+                            val mediaType = Files.probeContentType(file.toPath())
+                                ?: getMediaTypeFromExtension(file.extension)
+                            PickedImage(
+                                data = data,
+                                mediaType = mediaType,
+                                fileName = file.name
+                            )
+                        } catch (e: Exception) {
+                            null
                         }
+                    }
 
-                        if (images.isNotEmpty()) {
-                            currentOnImageDropped(images)
-                            dtde.dropComplete(true)
-                        } else {
-                            dtde.dropComplete(false)
-                        }
-                    } else {
-                        dtde.dropComplete(false)
+                    if (images.isNotEmpty()) {
+                        currentOnImageDropped(images)
+                        return true
                     }
                 } catch (e: Exception) {
-                    dtde.dropComplete(false)
-                } finally {
-                    currentOnDragStateChange(DropState(isDragging = false, isHovering = false))
+                    // Failed to process drop
                 }
-            }
 
-            private fun isImageDrag(dtde: DropTargetDragEvent): Boolean {
-                return dtde.isDataFlavorSupported(DataFlavor.javaFileListFlavor)
+                return false
             }
-        }
-
-        windows.forEach { window ->
-            if (window.isShowing) {
-                val dropTarget = DropTarget(window, DnDConstants.ACTION_COPY, dropTargetListener, true)
-                dropTargets.add(dropTarget)
-            }
-        }
-
-        onDispose {
-            dropTargets.forEach { it.removeDropTargetListener(dropTargetListener) }
-            dropTargets.clear()
         }
     }
 
-    return this
+    return this.dragAndDropTarget(
+        shouldStartDragAndDrop = { event ->
+            event.awtTransferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)
+        },
+        target = dragAndDropTarget
+    )
 }
 
 private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
@@ -128,7 +105,6 @@ private val IMAGE_MIME_TYPES = setOf(
  * Falls back to extension check if MIME type cannot be determined.
  */
 private fun isImageFile(file: File): Boolean {
-    // First try MIME type detection (more reliable than extension)
     try {
         val mimeType = Files.probeContentType(file.toPath())
         if (mimeType != null) {
@@ -137,7 +113,6 @@ private fun isImageFile(file: File): Boolean {
     } catch (e: Exception) {
         // Fallback to extension check
     }
-    // Fallback to extension check
     return file.extension.lowercase() in IMAGE_EXTENSIONS
 }
 
