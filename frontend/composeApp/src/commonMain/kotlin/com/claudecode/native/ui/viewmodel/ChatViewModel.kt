@@ -551,8 +551,11 @@ class ChatViewModel(
 
                 println("[$callId] Got ${response.messages.size} messages from API, processing...")
 
-                // Clear old state atomically ONLY after guard check passes
-                clearSessionState()
+                // Only clear state on initial load, not on foreground sync
+                // During sync, we want to preserve pending messages that are still being sent
+                if (callId != "SYNC") {
+                    clearSessionState()
+                }
 
                 // Process messages using existing logic
                 processLoadedMessages(response.messages)
