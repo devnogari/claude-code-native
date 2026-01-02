@@ -9,6 +9,7 @@ import com.claudecode.native.data.model.Command
 import com.claudecode.native.data.model.ExecuteCommandResponse
 import com.claudecode.native.data.model.ExecuteContext
 import com.claudecode.native.data.model.MessageRole
+import com.claudecode.native.data.model.SessionState
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.data.websocket.HistoryWatchClient
 import com.claudecode.native.data.websocket.HistoryWatchEvent
@@ -188,6 +189,7 @@ class ChatViewModel(
 
     // Per-conversation elapsed time tracking jobs (Map: conversationId -> Job)
     private val elapsedTimeJobs = mutableMapOf<String, Job>()
+
 
     // Per-conversation streaming start times (Map: conversationId -> timestamp)
     private val streamingStartTimes = mutableMapOf<String, Long>()
@@ -882,14 +884,20 @@ class ChatViewModel(
                             if (_isStreaming.value != stateResponse.isStreaming) {
                                 println("ChatViewModel: Foreground sync - updating streaming state: ${stateResponse.isStreaming}")
                                 _isStreaming.value = stateResponse.isStreaming
+                            }
+                        }
 
-                                if (stateResponse.isStreaming) {
-                                    if (!streamingStartTimes.containsKey(convId)) {
-                                        startProgressTracking("Processing")
-                                    }
-                                } else {
-                                    stopProgressTracking()
-                                }
+                        // Update progress tracking based on REST state
+                        // This is separate from streaming state to ensure progress is always synced
+                        if (stateResponse.isStreaming) {
+                            if (!streamingStartTimes.containsKey(convId)) {
+                                startProgressTracking("Processing")
+                            }
+                        } else {
+                            // Server says idle - always stop progress if it's running
+                            if (streamingStartTimes.containsKey(convId)) {
+                                println("ChatViewModel: Foreground sync - stopping progress (server confirmed idle)")
+                                stopProgressTracking()
                             }
                         }
 
@@ -934,47 +942,39 @@ class ChatViewModel(
      * Updates streaming state, progress status, and todos from server.
      * This should be called periodically or when WebSocket connection is unstable.
      *
-     * Note: Skips sync if WebSocket is actively receiving messages to avoid race conditions
-     * where stale REST responses might override fresher WebSocket state.
+     * REST API reads the actual session file and checks stop_reason to determine if
+     * streaming is truly complete, providing authoritative state information.
      */
     fun syncStateViaRest() {
         val encodedPath = currentEncodedPath ?: return
         val sessionId = currentClaudeSession ?: return
         val convId = currentConversationId ?: return
 
-        // Skip if WebSocket connection is healthy and actively receiving
-        // REST sync is a fallback for when WebSocket is unreliable
-        if (connectionState.value == ConnectionState.Connected && _isStreaming.value) {
-            println("ChatViewModel: Skipping REST sync - WebSocket is actively streaming")
-            return
-        }
-
         scope.launch {
             try {
                 println("ChatViewModel: Syncing state via REST for $encodedPath / $sessionId")
                 val stateResponse = claudeHistoryApi.getSessionState(encodedPath, sessionId)
 
-                // Double-check streaming hasn't started via WebSocket while we were fetching
-                // This prevents stale REST responses from overriding fresh WebSocket state
+                // REST API reads the actual file state and checks stop_reason,
+                // so it provides authoritative information about streaming completion
                 streamingMutex.withLock {
-                    if (_isStreaming.value && !stateResponse.isStreaming) {
-                        // WebSocket says streaming, REST says not - trust WebSocket (it's more recent)
-                        println("ChatViewModel: REST sync - skipping state update (WebSocket has fresher streaming state)")
-                        // Still update todos since they're additive
-                    } else if (_isStreaming.value != stateResponse.isStreaming) {
-                        println("ChatViewModel: REST sync - updating streaming state: ${stateResponse.isStreaming}")
+                    if (_isStreaming.value != stateResponse.isStreaming) {
+                        println("ChatViewModel: REST sync - updating streaming state: ${stateResponse.isStreaming} (was: ${_isStreaming.value})")
                         _isStreaming.value = stateResponse.isStreaming
+                    }
+                }
 
-                        // If server says streaming started but we didn't know, start progress tracking
-                        if (stateResponse.isStreaming) {
-                            // Don't start if already tracked
-                            if (!streamingStartTimes.containsKey(convId)) {
-                                startProgressTracking("Processing")
-                            }
-                        } else {
-                            // Server says not streaming, stop progress tracking
-                            stopProgressTracking()
-                        }
+                // Update progress tracking based on REST state
+                if (stateResponse.isStreaming) {
+                    // Server says streaming, start progress if not already
+                    if (!streamingStartTimes.containsKey(convId)) {
+                        startProgressTracking("Processing")
+                    }
+                } else {
+                    // Server says not streaming (has stop_reason), stop progress
+                    if (streamingStartTimes.containsKey(convId)) {
+                        println("ChatViewModel: REST sync - stopping progress (server confirmed idle)")
+                        stopProgressTracking()
                     }
                 }
 
@@ -1902,7 +1902,19 @@ class ChatViewModel(
                     }
                 }
 
-                // Streaming completion is handled by WebSocket COMPLETE message
+                // Check session state from HistoryWatch to detect streaming completion
+                // This is a fallback when WebSocket COMPLETE message is missed
+                if (event.sessionState == SessionState.IDLE) {
+                    streamingMutex.withLock {
+                        if (_isStreaming.value) {
+                            println("ChatViewModel: HistoryWatch detected IDLE state, finalizing streaming")
+                            _isStreaming.value = false
+                            isStreamingFromHistoryWatch = false
+                        }
+                    }
+                    // Stop progress tracking when session becomes idle
+                    stopProgressTracking()
+                }
             }
 
             is HistoryWatchEvent.Error -> {
