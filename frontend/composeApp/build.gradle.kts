@@ -10,6 +10,22 @@ plugins {
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.compose.hot.reload)
+    alias(libs.plugins.detekt)
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    allRules = false
+    config.setFrom("${rootProject.rootDir}/config/detekt/detekt.yml")
+    baseline = file("${rootProject.rootDir}/config/detekt/baseline.xml")
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
+    reports {
+        html.required.set(true)
+        xml.required.set(true)
+        sarif.required.set(true)
+    }
 }
 
 kotlin {
@@ -106,14 +122,17 @@ kotlin {
         }
 
         commonTest.dependencies {
-            implementation(kotlin("test"))
+            implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.turbine)
             implementation(libs.ktor.client.mock)
         }
 
         desktopTest.dependencies {
-            implementation(kotlin("test"))
+            implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.mockk)
+            implementation(libs.turbine)
             implementation(libs.ktor.client.mock)
         }
 
