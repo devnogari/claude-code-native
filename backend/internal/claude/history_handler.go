@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/devnogari/claude-code-native/backend/internal/project"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofrs/uuid/v5"
 	"go.uber.org/zap"
@@ -11,17 +12,19 @@ import (
 
 // HistoryHandler handles Claude Code history HTTP requests
 type HistoryHandler struct {
-	cache   *HistoryCache
-	favRepo *SessionFavoriteRepository
-	logger  *zap.Logger
+	cache       *HistoryCache
+	favRepo     *SessionFavoriteRepository
+	projectRepo *project.Repository
+	logger      *zap.Logger
 }
 
 // NewHistoryHandler creates a new history handler with cache and favorites
 func NewHistoryHandler(params HistoryHandlerParams) *HistoryHandler {
 	return &HistoryHandler{
-		cache:   params.Cache,
-		favRepo: params.FavRepo,
-		logger:  params.Logger,
+		cache:       params.Cache,
+		favRepo:     params.FavRepo,
+		projectRepo: params.ProjectRepo,
+		logger:      params.Logger,
 	}
 }
 
@@ -75,6 +78,24 @@ func (h *HistoryHandler) ListProjects(c *fiber.Ctx) error {
 	// Return empty array if no projects found
 	if projects == nil {
 		projects = []ClaudeProject{}
+	}
+
+	// Merge completion status from database
+	// Create a map of path -> isCompleted from database projects
+	dbProjects, err := h.projectRepo.FindByUserID(c.Context(), userID)
+	if err != nil {
+		h.logger.Warn("Failed to get projects from database", zap.Error(err))
+	} else {
+		completionMap := make(map[string]bool)
+		for _, p := range dbProjects {
+			completionMap[p.Path] = p.IsCompleted
+		}
+		// Set IsCompleted on each ClaudeProject
+		for i := range projects {
+			if completed, exists := completionMap[projects[i].Path]; exists {
+				projects[i].IsCompleted = completed
+			}
+		}
 	}
 
 	// Get all favorites for this user

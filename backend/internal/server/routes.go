@@ -22,6 +22,12 @@ func (s *Server) setupRoutes() {
 	authGroup.Post("/login", s.authHandler.Login)
 	authGroup.Post("/register", s.authHandler.Register)
 
+	// Hook routes (public, but API key protected)
+	// These are called by Claude CLI hooks, not by authenticated users
+	hookGroup := api.Group("/hooks")
+	hookGroup.Post("/session-complete", s.hookHandler.SessionComplete)
+	hookGroup.Post("/session-reopen", s.hookHandler.SessionReopen)
+
 	// Protected routes
 	protected := api.Group("")
 	protected.Use(s.authMiddleware.Authenticate)

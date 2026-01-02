@@ -9,10 +9,11 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Auth     AuthConfig
-	Claude   ClaudeConfig
+	Server     ServerConfig
+	Database   DatabaseConfig
+	Auth       AuthConfig
+	Claude     ClaudeConfig
+	HookAPIKey string // API key for hook endpoints (optional, empty allows all)
 }
 
 // ServerConfig holds HTTP server configuration
@@ -59,6 +60,7 @@ func New() (*Config, error) {
 		Claude: ClaudeConfig{
 			ProjectsPath: getEnv("CLAUDE_PROJECTS_PATH", "~/.claude"),
 		},
+		HookAPIKey: getEnv("HOOK_API_KEY", ""), // Empty allows all requests
 	}
 
 	return cfg, nil

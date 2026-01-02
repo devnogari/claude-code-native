@@ -186,3 +186,38 @@ func (r *Repository) UpdateLastAccessed(ctx context.Context, id uuid.UUID) error
 
 	return err
 }
+
+// FindByPathAnyUser finds a project by path regardless of user
+// Used for hook operations where we only have the path
+func (r *Repository) FindByPathAnyUser(ctx context.Context, path string) (*Project, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	project := new(Project)
+	err := r.db.NewSelect().
+		Model(project).
+		Where("path = ?", path).
+		Scan(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+	return project, nil
+}
+
+// MarkCompleted updates the is_completed status of a project
+func (r *Repository) MarkCompleted(ctx context.Context, id uuid.UUID, completed bool) error {
+	if r.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	_, err := r.db.NewUpdate().
+		Model((*Project)(nil)).
+		Set("is_completed = ?", completed).
+		Set("updated_at = NOW()").
+		Where("id = ?", id).
+		Exec(ctx)
+
+	return err
+}

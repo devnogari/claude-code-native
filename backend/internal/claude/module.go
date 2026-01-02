@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 
+	"github.com/devnogari/claude-code-native/backend/internal/project"
 	"github.com/uptrace/bun"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -24,10 +25,11 @@ var Module = fx.Module("claude",
 type HistoryHandlerParams struct {
 	fx.In
 
-	Cache   *HistoryCache
-	FavRepo *SessionFavoriteRepository
-	DB      *bun.DB
-	Logger  *zap.Logger
+	Cache       *HistoryCache
+	FavRepo     *SessionFavoriteRepository
+	ProjectRepo *project.Repository
+	DB          *bun.DB
+	Logger      *zap.Logger
 }
 
 // provideHistoryCache creates a new history cache for fx
