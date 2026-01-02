@@ -336,39 +336,8 @@ class ChatViewModel(
         return _queuedMessagesMap.value[convId] ?: emptyList()
     }
 
-    /**
-     * Syncs the queue from the server for the current conversation.
-     * Called on connection/reconnection to ensure queue is up-to-date.
-     * Merges server queue with any local-only messages that weren't synced.
-     */
-    private suspend fun syncQueueFromServer() {
-        val convId = _currentConversationIdFlow.value ?: return
-        try {
-            val response = queueApi.getQueue(convId)
-            val serverMessages = response.messages.map { dto ->
-                QueuedMessage(
-                    id = dto.id,
-                    content = dto.content,
-                    queuedAt = dto.queuedAt,
-                    source = QueuedMessageSource.SERVER,
-                    images = emptyList() // Server images are URLs, not local bytes
-                )
-            }
-
-            // Merge with local-only messages that haven't been synced
-            val currentQueue = getCurrentQueue()
-            val localOnlyMessages = currentQueue.filter { it.source == QueuedMessageSource.LOCAL }
-
-            updateQueueForConversation(convId) {
-                serverMessages + localOnlyMessages
-            }
-
-            DebugLogger.d(TAG, "Queue synced from server: ${serverMessages.size} server + ${localOnlyMessages.size} local")
-        } catch (e: Exception) {
-            DebugLogger.e(TAG, "Failed to sync queue from server: ${e.message}", e)
-            // Keep local queue on error - will retry on next connection
-        }
-    }
+    // Note: Queue synchronization is handled by WebSocket "queue_sync" messages
+    // which are received on connection and provide real-time queue state
 
     /**
      * Adds a message to the server queue, falling back to local-only on failure.
@@ -1627,13 +1596,10 @@ class ChatViewModel(
                         // Connection-related error: keep message in queue for retry when reconnected
                         DebugLogger.d(TAG, "Connection error while sending queued message (id=${queuedMessage.id}), will retry on reconnect: ${e.message}")
                     } else {
-                        // Other error: remove from queue (server will also remove via WebSocket event)
-                        DebugLogger.e(TAG, "Failed to send queued message: ${e.message}", e)
-                        // Remove from local state - server queue removal happens via WebSocket
-                        if (queuedMessage.source == QueuedMessageSource.LOCAL) {
-                            updateCurrentQueue { queue -> queue.filter { it.id != queuedMessage.id } }
-                        }
-                        _error.value = "Failed to send message: ${e.message}"
+                        // Other error: keep message in queue for future retry (don't lose the message)
+                        // The message will be retried when streaming completes or user reconnects
+                        DebugLogger.e(TAG, "Failed to send queued message (id=${queuedMessage.id}): ${e.message}", e)
+                        _error.value = "Failed to send queued message: ${e.message}"
                     }
                 }
             }

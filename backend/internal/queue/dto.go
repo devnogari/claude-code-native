@@ -36,11 +36,11 @@ type AddToQueueRequest struct {
 	Content string `json:"content" validate:"required,min=1"`
 }
 
-// ToResponse converts a QueuedMessage model to an API response.
-func ToResponse(msg *QueuedMessage, getImageURL func(string) string) QueuedMessageResponse {
-	images := make([]QueuedImageResponse, 0, len(msg.Images))
-	for _, img := range msg.Images {
-		images = append(images, QueuedImageResponse{
+// convertImagesToResponse converts a slice of QueuedMessageImage to API responses.
+func convertImagesToResponse(images []QueuedMessageImage, getImageURL func(string) string) []QueuedImageResponse {
+	result := make([]QueuedImageResponse, 0, len(images))
+	for _, img := range images {
+		result = append(result, QueuedImageResponse{
 			ID:        img.ID,
 			URL:       getImageURL(img.StoragePath),
 			MediaType: img.MediaType,
@@ -49,13 +49,17 @@ func ToResponse(msg *QueuedMessage, getImageURL func(string) string) QueuedMessa
 			Height:    img.Height,
 		})
 	}
+	return result
+}
 
+// ToResponse converts a QueuedMessage model to an API response.
+func ToResponse(msg *QueuedMessage, getImageURL func(string) string) QueuedMessageResponse {
 	return QueuedMessageResponse{
 		ID:             msg.ID,
 		ConversationID: msg.ConversationID,
 		Content:        msg.Content,
 		QueuedAt:       msg.QueuedAt.UnixMilli(),
-		Images:         images,
+		Images:         convertImagesToResponse(msg.Images, getImageURL),
 	}
 }
 
@@ -90,23 +94,11 @@ type QueueSyncPayload struct {
 
 // ToAddPayload converts a QueuedMessage to a WebSocket add payload.
 func ToAddPayload(msg *QueuedMessage, getImageURL func(string) string) QueueAddPayload {
-	images := make([]QueuedImageResponse, 0, len(msg.Images))
-	for _, img := range msg.Images {
-		images = append(images, QueuedImageResponse{
-			ID:        img.ID,
-			URL:       getImageURL(img.StoragePath),
-			MediaType: img.MediaType,
-			FileName:  img.FileName,
-			Width:     img.Width,
-			Height:    img.Height,
-		})
-	}
-
 	return QueueAddPayload{
 		ID:       msg.ID,
 		Content:  msg.Content,
 		QueuedAt: msg.QueuedAt.UnixMilli(),
-		Images:   images,
+		Images:   convertImagesToResponse(msg.Images, getImageURL),
 	}
 }
 

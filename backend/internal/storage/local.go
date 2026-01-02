@@ -73,13 +73,20 @@ func (s *LocalFileStorage) Get(ctx context.Context, path string) ([]byte, error)
 		return nil, ErrInvalidPath
 	}
 
-	// Prevent directory traversal
+	// Prevent directory traversal and absolute paths
 	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") {
+	if strings.Contains(cleanPath, "..") || filepath.IsAbs(cleanPath) {
 		return nil, ErrInvalidPath
 	}
 
 	fullPath := filepath.Join(s.basePath, cleanPath)
+
+	// Verify the resolved path is within basePath (defense in depth)
+	absBase, _ := filepath.Abs(s.basePath)
+	absPath, _ := filepath.Abs(fullPath)
+	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
+		return nil, ErrInvalidPath
+	}
 
 	data, err := os.ReadFile(fullPath)
 	if os.IsNotExist(err) {
@@ -98,13 +105,20 @@ func (s *LocalFileStorage) Delete(ctx context.Context, path string) error {
 		return ErrInvalidPath
 	}
 
-	// Prevent directory traversal
+	// Prevent directory traversal and absolute paths
 	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") {
+	if strings.Contains(cleanPath, "..") || filepath.IsAbs(cleanPath) {
 		return ErrInvalidPath
 	}
 
 	fullPath := filepath.Join(s.basePath, cleanPath)
+
+	// Verify the resolved path is within basePath (defense in depth)
+	absBase, _ := filepath.Abs(s.basePath)
+	absPath, _ := filepath.Abs(fullPath)
+	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
+		return ErrInvalidPath
+	}
 
 	err := os.Remove(fullPath)
 	if os.IsNotExist(err) {
