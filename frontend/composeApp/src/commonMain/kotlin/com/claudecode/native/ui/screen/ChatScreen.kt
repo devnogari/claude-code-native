@@ -701,7 +701,8 @@ fun ChatScreenContent(
             }
 
             // Slash command menu - shows when input starts with "/"
-            val showSlashMenu = inputText.startsWith("/") && !isStreaming
+            // Allow during streaming too (user can queue slash commands)
+            val showSlashMenu = inputText.startsWith("/")
             val slashFilter = if (inputText.startsWith("/")) {
                 inputText.removePrefix("/").takeWhile { !it.isWhitespace() }
             } else ""
