@@ -48,6 +48,12 @@ type HistoryCache struct {
 	// Track last known message UUID per session for detecting new messages
 	lastMessageUUID   map[string]string // keyed by "encodedPath/sessionID"
 	lastMessageUUIDMu sync.RWMutex
+
+	// Track last known session state for detecting state changes
+	// This ensures sessionState changes (e.g., STREAMING -> IDLE) are broadcast
+	// even when no new messages are detected (same UUID but updated stop_reason)
+	lastSessionState   map[string]SessionState // keyed by "encodedPath/sessionID"
+	lastSessionStateMu sync.RWMutex
 }
 
 // NewHistoryCache creates a new cache with file watching
@@ -61,13 +67,14 @@ func NewHistoryCache(logger *zap.Logger) (*HistoryCache, error) {
 	}
 
 	cache := &HistoryCache{
-		basePath:        basePath,
-		logger:          logger,
-		watcher:         watcher,
-		projects:        make(map[string]*ClaudeProject),
-		excluded:        make(map[string]bool),
-		subscribers:     make(map[string][]SessionChangeCallback),
-		lastMessageUUID: make(map[string]string),
+		basePath:         basePath,
+		logger:           logger,
+		watcher:          watcher,
+		projects:         make(map[string]*ClaudeProject),
+		excluded:         make(map[string]bool),
+		subscribers:      make(map[string][]SessionChangeCallback),
+		lastMessageUUID:  make(map[string]string),
+		lastSessionState: make(map[string]SessionState),
 	}
 
 	// Load excluded projects from persistent storage
@@ -698,7 +705,7 @@ func (c *HistoryCache) Subscribe(encodedPath, sessionID string, callback Session
 	defer c.subscribersMu.Unlock()
 	c.subscribers[key] = append(c.subscribers[key], callback)
 
-	// Initialize last message UUID
+	// Initialize last message UUID and session state
 	c.lastMessageUUIDMu.Lock()
 	if _, exists := c.lastMessageUUID[key]; !exists {
 		messages, _ := c.GetSessionMessages(encodedPath, sessionID)
@@ -714,6 +721,11 @@ func (c *HistoryCache) Subscribe(encodedPath, sessionID string, callback Session
 			}
 		}
 		c.lastMessageUUID[key] = lastUUID
+
+		// Also initialize session state to prevent spurious notification on first file change
+		c.lastSessionStateMu.Lock()
+		c.lastSessionState[key] = GetSessionState(messages)
+		c.lastSessionStateMu.Unlock()
 	}
 	c.lastMessageUUIDMu.Unlock()
 
@@ -733,6 +745,11 @@ func (c *HistoryCache) Unsubscribe(encodedPath, sessionID string) {
 	c.lastMessageUUIDMu.Lock()
 	delete(c.lastMessageUUID, key)
 	c.lastMessageUUIDMu.Unlock()
+
+	// Clean up session state tracking to prevent memory leak
+	c.lastSessionStateMu.Lock()
+	delete(c.lastSessionState, key)
+	c.lastSessionStateMu.Unlock()
 
 	c.logger.Debug("unsubscribed from session changes",
 		zap.String("encodedPath", encodedPath),
@@ -766,6 +783,11 @@ func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath str
 			zap.Error(err))
 		return
 	}
+
+	// Calculate current session state to detect state changes
+	// This ensures STREAMING -> IDLE transitions are broadcast even when
+	// no new messages are detected (same UUID but updated stop_reason)
+	currentSessionState := GetSessionState(messages)
 
 	// Get last known UUID
 	c.lastMessageUUIDMu.Lock()
@@ -809,7 +831,19 @@ func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath str
 	c.lastMessageUUID[key] = newLastUUID
 	c.lastMessageUUIDMu.Unlock()
 
-	if len(newMessages) == 0 {
+	// Check if session state changed
+	c.lastSessionStateMu.Lock()
+	lastSessionState := c.lastSessionState[key]
+	sessionStateChanged := currentSessionState != lastSessionState
+	if sessionStateChanged {
+		c.lastSessionState[key] = currentSessionState
+	}
+	c.lastSessionStateMu.Unlock()
+
+	// Skip callback only if BOTH: no new messages AND session state unchanged
+	// This ensures state changes (e.g., stop_reason added to existing message)
+	// are always broadcast to clients, even without new messages
+	if len(newMessages) == 0 && !sessionStateChanged {
 		return
 	}
 
@@ -817,7 +851,9 @@ func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath str
 		zap.String("sessionID", sessionID),
 		zap.Int("newMessages", len(newMessages)),
 		zap.String("lastUUID", lastUUID),
-		zap.String("newLastUUID", newLastUUID))
+		zap.String("newLastUUID", newLastUUID),
+		zap.String("sessionState", string(currentSessionState)),
+		zap.Bool("stateChanged", sessionStateChanged))
 
 	// Notify all subscribers
 	for _, callback := range callbacks {
