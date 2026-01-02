@@ -1,12 +1,15 @@
 package com.claudecode.native.util
 
-import kotlinx.coroutines.suspendCancellableCoroutine
-import org.w3c.dom.HTMLInputElement
-import org.w3c.files.FileReader
 import kotlinx.browser.document
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.khronos.webgl.ArrayBuffer
 import org.khronos.webgl.Uint8Array
 import org.khronos.webgl.get
+import org.w3c.dom.HTMLInputElement
+import org.w3c.files.FileReader
 import kotlin.coroutines.resume
 
 /**
@@ -20,7 +23,7 @@ actual class ImagePicker actual constructor() {
         input.accept = "image/png,image/jpeg,image/gif,image/webp,image/bmp"
         input.multiple = true
 
-        input.onchange = { event ->
+        input.onchange = { _ ->
             val files = input.files
             if (files == null || files.length == 0) {
                 continuation.resume(emptyList())
@@ -32,8 +35,10 @@ actual class ImagePicker actual constructor() {
                 for (i in 0 until files.length) {
                     val file = files.item(i) ?: continue
                     val reader = FileReader()
+                    val fileName = file.name
+                    val fileType = file.type
 
-                    reader.onload = { loadEvent ->
+                    reader.onload = {
                         val result = reader.result
                         if (result != null) {
                             // Result is ArrayBuffer, convert to ByteArray
@@ -41,17 +46,28 @@ actual class ImagePicker actual constructor() {
                             val uint8Array = Uint8Array(arrayBuffer)
                             val bytes = ByteArray(uint8Array.length) { idx -> uint8Array[idx] }
 
-                            pickedImages.add(
-                                PickedImage(
-                                    data = bytes,
-                                    mediaType = file.type,
-                                    fileName = file.name
+                            // Use async resize for WASM (Canvas API requires async)
+                            CoroutineScope(Dispatchers.Default).launch {
+                                val resized = ImageResizer.resizeAsync(bytes, fileType)
+
+                                pickedImages.add(
+                                    PickedImage(
+                                        data = resized.data,
+                                        mediaType = resized.mediaType,
+                                        fileName = fileName
+                                    )
                                 )
-                            )
-                        }
-                        processedCount++
-                        if (processedCount == totalCount) {
-                            continuation.resume(pickedImages.toList())
+
+                                processedCount++
+                                if (processedCount == totalCount) {
+                                    continuation.resume(pickedImages.toList())
+                                }
+                            }
+                        } else {
+                            processedCount++
+                            if (processedCount == totalCount) {
+                                continuation.resume(pickedImages.toList())
+                            }
                         }
                         Unit
                     }
