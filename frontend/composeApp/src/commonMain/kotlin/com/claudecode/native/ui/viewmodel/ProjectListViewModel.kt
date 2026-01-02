@@ -22,7 +22,11 @@ data class ProjectListUiState(
     val searchQuery: String = "",
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    // Selection mode for bulk session deletion
+    val selectionModeProjectId: String? = null, // Which project is in selection mode (null = none)
+    val selectedSessions: Set<String> = emptySet(), // Selected session IDs
+    val isBulkDeleting: Boolean = false // True when bulk delete is in progress
 )
 
 /**
@@ -218,15 +222,25 @@ class ProjectListViewModel(
 
     /**
      * Toggles the expanded state of a project.
+     * Also clears selection mode if the project being collapsed is in selection mode.
      */
     fun toggleProjectExpanded(projectId: String) {
         val currentExpanded = _uiState.value.expandedProjects
-        val newExpanded = if (projectId in currentExpanded) {
+        val isCollapsing = projectId in currentExpanded
+        val newExpanded = if (isCollapsing) {
             currentExpanded - projectId
         } else {
             currentExpanded + projectId
         }
-        _uiState.value = _uiState.value.copy(expandedProjects = newExpanded)
+
+        // Clear selection mode if collapsing the project that's in selection mode
+        val shouldClearSelection = isCollapsing && _uiState.value.selectionModeProjectId == projectId
+
+        _uiState.value = _uiState.value.copy(
+            expandedProjects = newExpanded,
+            selectionModeProjectId = if (shouldClearSelection) null else _uiState.value.selectionModeProjectId,
+            selectedSessions = if (shouldClearSelection) emptySet() else _uiState.value.selectedSessions
+        )
     }
 
     /**
@@ -399,5 +413,121 @@ class ProjectListViewModel(
         // Use "draft" as a special marker instead of generating a UUID
         // The actual session ID will be created when the first message is sent
         onNavigate(ChatViewModel.DRAFT_SESSION_MARKER, encodedPath)
+    }
+
+    // ==================== Selection Mode Functions ====================
+
+    /**
+     * Enters selection mode for a specific project.
+     *
+     * @param projectId The project ID to enter selection mode for
+     */
+    fun enterSelectionMode(projectId: String) {
+        _uiState.value = _uiState.value.copy(
+            selectionModeProjectId = projectId,
+            selectedSessions = emptySet()
+        )
+    }
+
+    /**
+     * Exits selection mode and clears all selections.
+     */
+    fun exitSelectionMode() {
+        _uiState.value = _uiState.value.copy(
+            selectionModeProjectId = null,
+            selectedSessions = emptySet()
+        )
+    }
+
+    /**
+     * Toggles the selection state of a session.
+     *
+     * @param sessionId The session ID to toggle
+     */
+    fun toggleSessionSelection(sessionId: String) {
+        val currentSelected = _uiState.value.selectedSessions
+        val newSelected = if (sessionId in currentSelected) {
+            currentSelected - sessionId
+        } else {
+            currentSelected + sessionId
+        }
+        _uiState.value = _uiState.value.copy(selectedSessions = newSelected)
+    }
+
+    /**
+     * Selects or deselects all sessions in the current selection mode project.
+     *
+     * @param selectAll If true, selects all sessions; if false, deselects all
+     */
+    fun selectAllSessions(selectAll: Boolean) {
+        val projectId = _uiState.value.selectionModeProjectId ?: return
+        val project = _uiState.value.projects.find { it.id == projectId } ?: return
+
+        val newSelected = if (selectAll) {
+            project.sessions.map { it.id }.toSet()
+        } else {
+            emptySet()
+        }
+        _uiState.value = _uiState.value.copy(selectedSessions = newSelected)
+    }
+
+    /**
+     * Deletes all selected sessions in bulk.
+     *
+     * @param onSuccess Callback when all deletions succeed
+     * @param onError Callback when any deletion fails
+     */
+    fun deleteSelectedSessions(
+        onSuccess: (count: Int) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val projectId = _uiState.value.selectionModeProjectId ?: return
+        val project = _uiState.value.projects.find { it.id == projectId } ?: return
+        val selectedIds = _uiState.value.selectedSessions.toList()
+
+        if (selectedIds.isEmpty()) {
+            onError("No sessions selected")
+            return
+        }
+
+        scope.launch {
+            _uiState.value = _uiState.value.copy(isBulkDeleting = true)
+
+            var successCount = 0
+            var lastError: String? = null
+
+            for (sessionId in selectedIds) {
+                val session = project.sessions.find { it.id == sessionId }
+                if (session != null) {
+                    try {
+                        claudeHistoryApi.deleteSession(
+                            sessionId = sessionId,
+                            projectPath = project.path,
+                            sourceEncodedPath = session.sourceEncodedPath
+                        )
+                        successCount++
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        lastError = e.toUserMessage()
+                    }
+                }
+            }
+
+            _uiState.value = _uiState.value.copy(
+                isBulkDeleting = false,
+                selectionModeProjectId = null,
+                selectedSessions = emptySet()
+            )
+
+            if (successCount > 0) {
+                onSuccess(successCount)
+                refresh() // Refresh list to reflect deletions
+            }
+
+            if (lastError != null && successCount < selectedIds.size) {
+                onError("Deleted $successCount/${selectedIds.size} sessions. Last error: $lastError")
+            }
+        }
     }
 }
