@@ -559,12 +559,15 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // 404 Not Found is expected for new sessions without history
-                // This is normal - the session file doesn't exist yet
-                val isNotFound = e.message?.contains("Not found", ignoreCase = true) == true ||
+                // 404 Not Found or 400 Bad Request is expected for new sessions without history
+                // This is normal - the session file doesn't exist yet or session ID is for a new draft
+                val isExpectedError = e.message?.contains("Not found", ignoreCase = true) == true ||
                         e.message?.contains("404", ignoreCase = true) == true ||
-                        e.message?.contains("resource not found", ignoreCase = true) == true
-                if (isNotFound) {
+                        e.message?.contains("resource not found", ignoreCase = true) == true ||
+                        e.message?.contains("Bad Request", ignoreCase = true) == true ||
+                        e.message?.contains("400", ignoreCase = true) == true ||
+                        e.message?.contains("session not found", ignoreCase = true) == true
+                if (isExpectedError) {
                     println("[$callId] No history found for session (this is normal for new chats)")
 
                     // GUARD CHECK: Verify we're still the active conversation before clearing state
