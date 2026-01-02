@@ -1127,7 +1127,11 @@ class ChatViewModel(
                             }
                         } catch (e: Exception) {
                             println("ChatViewModel: Failed to send queued message: ${e.message}")
-                            // Message stays in queue for display - user can cancel and resend if needed
+                            // Remove the failed message from queue and show error to user
+                            _queuedMessages.update { queue ->
+                                queue.filter { it.id != msg.id }
+                            }
+                            _error.value = "Failed to send message: ${e.message}"
                         }
                     }
                 }
@@ -1633,6 +1637,16 @@ class ChatViewModel(
                 streamingMutex.withLock {
                     _error.value = message.error ?: "Unknown error"
                     _isStreaming.value = false
+                }
+                // Remove the first queued message if any - it's likely the one that failed
+                // (FIFO queue: first message is the one being processed)
+                _queuedMessages.update { queue ->
+                    if (queue.isNotEmpty()) {
+                        println("ChatViewModel: Removing first queued message due to error")
+                        queue.drop(1)
+                    } else {
+                        queue
+                    }
                 }
             }
 
