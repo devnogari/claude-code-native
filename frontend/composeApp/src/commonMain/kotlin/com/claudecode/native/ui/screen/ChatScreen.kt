@@ -105,7 +105,7 @@ fun ChatScreen(
  * @param conversationId The conversation to connect to
  * @param viewModel ViewModel injected via Koin
  * @param onBack Callback when user wants to navigate back
- * @param onSessionCreated Callback when a new session is created from draft mode (for refreshing sidebar)
+ * @param onSessionCreated Callback when a new session is created from draft mode (sessionId, encodedPath for refreshing sidebar)
  * @param onNewSession Callback when user wants to start a new session (disabled during draft sessions)
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -114,7 +114,7 @@ fun ChatScreenContent(
     conversationId: String,
     viewModel: ChatViewModel = koinInject(),
     onBack: () -> Unit = {},
-    onSessionCreated: () -> Unit = {},
+    onSessionCreated: (sessionId: String, encodedPath: String) -> Unit = { _, _ -> },
     onNewSession: () -> Unit = {}
 ) {
     var inputText by remember { mutableStateOf("") }
@@ -178,9 +178,9 @@ fun ChatScreenContent(
 
     // Notify when a new session is created from draft mode
     LaunchedEffect(sessionCreatedEvent) {
-        if (sessionCreatedEvent != null) {
-            println("ChatScreen: Session created event received: $sessionCreatedEvent")
-            onSessionCreated()
+        sessionCreatedEvent?.let { sessionInfo ->
+            println("ChatScreen: Session created event received: sessionId=${sessionInfo.sessionId}, encodedPath=${sessionInfo.encodedPath}")
+            onSessionCreated(sessionInfo.sessionId, sessionInfo.encodedPath)
             viewModel.clearSessionCreatedEvent()
         }
     }

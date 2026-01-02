@@ -172,8 +172,9 @@ fun AppNavigation() {
             // Use adaptive layout for project list and chat screens
             val selectedConversationId = (screen as? Screen.Chat)?.conversationId
 
-            // State to trigger project list refresh
+            // State to trigger project list refresh with optional session info for polling
             var refreshTrigger by remember { mutableStateOf(0) }
+            var pendingSessionRefresh by remember { mutableStateOf<Pair<String, String>?>(null) }
 
             AdaptiveProjectLayout(
                 selectedConversationId = selectedConversationId,
@@ -183,8 +184,10 @@ fun AppNavigation() {
                 onSettingsClick = {
                     currentScreen = Screen.Settings
                 },
-                onSessionCreated = {
+                onSessionCreated = { sessionId, encodedPath ->
                     // Trigger project list refresh when a new session is created
+                    // Pass session info for polling-based refresh
+                    pendingSessionRefresh = Pair(sessionId, encodedPath)
                     refreshTrigger++
                 },
                 onNewSession = {
@@ -202,7 +205,11 @@ fun AppNavigation() {
                     ProjectListScreenContent(
                         onConversationSelected = onConversationSelected,
                         onSettingsClick = onSettingsClick,
-                        refreshTrigger = refreshTrigger
+                        refreshTrigger = refreshTrigger,
+                        pendingSessionRefresh = pendingSessionRefresh,
+                        onPendingSessionRefreshConsumed = {
+                            pendingSessionRefresh = null
+                        }
                     )
                 },
                 detailContent = { conversationId, onBack, onSessionCreated, onNewSession ->

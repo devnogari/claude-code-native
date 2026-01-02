@@ -71,6 +71,8 @@ fun ProjectListScreen(
  * @param onConversationSelected Callback when a conversation is ready
  * @param onSettingsClick Callback when settings is clicked
  * @param refreshTrigger Counter to trigger refresh when incremented (for external refresh requests)
+ * @param pendingSessionRefresh Session info (sessionId, encodedPath) to wait for in the projects API before refreshing
+ * @param onPendingSessionRefreshConsumed Callback when pendingSessionRefresh has been consumed (for clearing state)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,7 +80,9 @@ fun ProjectListScreenContent(
     viewModel: ProjectListViewModel = koinInject(),
     onConversationSelected: (String) -> Unit,
     onSettingsClick: () -> Unit = {},
-    refreshTrigger: Int = 0
+    refreshTrigger: Int = 0,
+    pendingSessionRefresh: Pair<String, String>? = null,  // (sessionId, encodedPath)
+    onPendingSessionRefreshConsumed: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val focusManager = LocalFocusManager.current
@@ -97,13 +101,22 @@ fun ProjectListScreenContent(
     var deleteResultMessage by remember { mutableStateOf<String?>(null) }
 
     // Refresh projects when refreshTrigger changes (e.g., when a new session is created)
-    LaunchedEffect(refreshTrigger) {
+    // When pendingSessionRefresh is provided, use polling-based refresh to wait for session to appear
+    LaunchedEffect(refreshTrigger, pendingSessionRefresh) {
         if (refreshTrigger > 0) {
-            // Add delay to allow filesystem to sync before refreshing
-            // New sessions need time to be written to disk before they can be read
-            println("ProjectListScreen: Refreshing due to external trigger (with delay)")
-            kotlinx.coroutines.delay(500)
-            viewModel.refresh()
+            if (pendingSessionRefresh != null) {
+                // Use polling-based refresh to wait for session to appear in projects API
+                val (sessionId, encodedPath) = pendingSessionRefresh
+                println("ProjectListScreen: Refreshing with polling for session $sessionId in $encodedPath")
+                viewModel.refreshAfterSessionCreated(sessionId, encodedPath)
+                // Clear the pending state after polling completes (whether successful or not)
+                onPendingSessionRefreshConsumed()
+            } else {
+                // Legacy fallback: simple refresh with delay
+                println("ProjectListScreen: Refreshing due to external trigger (with delay)")
+                kotlinx.coroutines.delay(500)
+                viewModel.refresh()
+            }
         }
     }
 
