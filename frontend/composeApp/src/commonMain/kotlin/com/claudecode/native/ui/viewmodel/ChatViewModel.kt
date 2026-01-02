@@ -31,7 +31,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlin.time.Clock
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -87,9 +90,18 @@ class ChatViewModel(
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
 
-    private val _queuedMessages = MutableStateFlow<List<QueuedMessage>>(emptyList())
-    /** Messages queued while streaming is in progress. */
-    val queuedMessages: StateFlow<List<QueuedMessage>> = _queuedMessages.asStateFlow()
+    /** Messages queued per conversation (Map<ConversationId, List<QueuedMessage>>). */
+    private val _queuedMessagesMap = MutableStateFlow<Map<String, List<QueuedMessage>>>(emptyMap())
+
+    /** Current conversation's queued messages (exposes only active conversation's queue). */
+    val queuedMessages: StateFlow<List<QueuedMessage>> by lazy {
+        combine(_queuedMessagesMap, _currentConversationIdFlow) { map, convId ->
+            convId?.let { map[it] } ?: emptyList()
+        }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }
+
+    /** Flow for current conversation ID to enable reactive queue filtering. */
+    private val _currentConversationIdFlow = MutableStateFlow<String?>(null)
 
     private val _error = MutableStateFlow<String?>(null)
     /** Current error message, if any. */
@@ -268,6 +280,39 @@ class ChatViewModel(
     private val maxQueuedMessages = 10
 
     /**
+     * Updates the queue for the current conversation.
+     * If conversationId is null, the update is silently ignored.
+     *
+     * @param transform Function to transform the current queue to a new queue
+     */
+    private fun updateCurrentQueue(transform: (List<QueuedMessage>) -> List<QueuedMessage>) {
+        val convId = currentConversationId ?: return
+        _queuedMessagesMap.update { map ->
+            map + (convId to transform(map[convId] ?: emptyList()))
+        }
+    }
+
+    /**
+     * Updates the queue for a specific conversation.
+     *
+     * @param conversationId The conversation ID to update
+     * @param transform Function to transform the current queue to a new queue
+     */
+    private fun updateQueueForConversation(conversationId: String, transform: (List<QueuedMessage>) -> List<QueuedMessage>) {
+        _queuedMessagesMap.update { map ->
+            map + (conversationId to transform(map[conversationId] ?: emptyList()))
+        }
+    }
+
+    /**
+     * Gets the current queue for the active conversation.
+     */
+    private fun getCurrentQueue(): List<QueuedMessage> {
+        val convId = currentConversationId ?: return emptyList()
+        return _queuedMessagesMap.value[convId] ?: emptyList()
+    }
+
+    /**
      * Clears all session state for switching conversations or starting fresh.
      */
     private suspend fun clearSessionState() {
@@ -334,12 +379,12 @@ class ChatViewModel(
      * Messages with images are sent with images, text-only messages are sent as text.
      */
     private fun retryQueuedMessages() {
-        val currentQueue = _queuedMessages.value
-        if (currentQueue.isEmpty()) return
+        val queue = getCurrentQueue()
+        if (queue.isEmpty()) return
 
-        DebugLogger.d(TAG, "Retrying ${currentQueue.size} queued messages after reconnection")
+        DebugLogger.d(TAG, "Retrying ${queue.size} queued messages after reconnection")
 
-        currentQueue.forEach { msg ->
+        queue.forEach { msg ->
             scope.launch {
                 try {
                     DebugLogger.d(TAG, "Retrying queued message (id=${msg.id})")
@@ -365,9 +410,7 @@ class ChatViewModel(
                         DebugLogger.d(TAG, "Connection error while retrying message (id=${msg.id}), will retry again: ${e.message}")
                     } else {
                         DebugLogger.e(TAG, "Failed to retry queued message (id=${msg.id}): ${e.message}", e)
-                        _queuedMessages.update { queue ->
-                            queue.filter { it.id != msg.id }
-                        }
+                        updateCurrentQueue { q -> q.filter { it.id != msg.id } }
                         _error.value = "Failed to send message: ${e.message}"
                     }
                 }
@@ -420,9 +463,8 @@ class ChatViewModel(
                     // State will be replaced atomically when new data loads successfully.
                     // If guard check fails (user switched rooms), we abort without clearing.
 
-                    // Only clear transient streaming state
+                    // Only clear transient streaming state (queue is preserved per conversation)
                     _isStreaming.value = false
-                    _queuedMessages.value = emptyList()
                     _error.value = null
                     _conversationTitle.value = null
                     _isDraftSession.value = false
@@ -435,6 +477,7 @@ class ChatViewModel(
 
                 // Set conversation ID immediately so subsequent connect() calls know to disconnect
                 currentConversationId = conversationId
+                _currentConversationIdFlow.value = conversationId
                 println("[$connectCallId] Set currentConversationId = $shortConvId")
 
                 val token = apiClient.getAuthToken() ?: run {
@@ -1108,6 +1151,7 @@ class ChatViewModel(
                 historyWatchClient.disconnect()
 
                 currentConversationId = null
+                _currentConversationIdFlow.value = null
                 currentEncodedPath = null
                 currentClaudeSession = null
                 currentProjectPath = null
@@ -1180,73 +1224,62 @@ class ChatViewModel(
         // Use atomic update to prevent race conditions with concurrent queue operations
         if (_isStreaming.value) {
             DebugLogger.d(TAG, "sendMessage(): Streaming in progress - queueing message")
-            var wasQueueFull = false
-            var addedMessage: QueuedMessage? = null
-            _queuedMessages.update { queue ->
-                if (queue.size >= maxQueuedMessages) {
-                    wasQueueFull = true
-                    queue  // Return unchanged
-                } else {
-                    val queuedMessage = QueuedMessage(
-                        id = generateMessageId(),
-                        content = content,
-                        queuedAt = Clock.System.now().toEpochMilliseconds(),
-                        source = QueuedMessageSource.LOCAL,
-                        images = images
-                    )
-                    addedMessage = queuedMessage
-                    DebugLogger.d(TAG, "Queued message while streaming (id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")
-                    queue + queuedMessage
-                }
-            }
-            if (wasQueueFull) {
+            val currentQueue = getCurrentQueue()
+            if (currentQueue.size >= maxQueuedMessages) {
                 _error.value = "Message queue is full ($maxQueuedMessages messages). Please wait for current response to complete."
-            } else {
-                // Clear attached images after queuing
-                if (images.isNotEmpty()) {
-                    clearAttachedImages()
-                }
+                return
+            }
 
-                // Trigger scroll to bottom when message is queued
-                _scrollToBottomSignal.update { it + 1 }
+            val queuedMessage = QueuedMessage(
+                id = generateMessageId(),
+                content = content,
+                queuedAt = Clock.System.now().toEpochMilliseconds(),
+                source = QueuedMessageSource.LOCAL,
+                images = images
+            )
+            updateCurrentQueue { queue -> queue + queuedMessage }
+            DebugLogger.d(TAG, "Queued message while streaming (id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")
 
-                // Send the queued message immediately - Claude Code CLI handles its own queue
-                // The message will be processed by Claude when ready
-                // Message stays in queue until CLI sends "dequeue" event
-                addedMessage?.let { msg ->
-                    scope.launch {
-                        try {
-                            DebugLogger.d(TAG, "Sending queued message to CLI (id=${msg.id})")
-                            if (msg.images.isEmpty()) {
-                                webSocketClient.sendChat(msg.content)
-                            } else {
-                                val imageDtos = msg.images.map { img ->
-                                    ImageContentDto(
-                                        type = "base64",
-                                        mediaType = img.mediaType,
-                                        data = Base64.encode(img.data)
-                                    )
-                                }
-                                webSocketClient.sendChatWithImages(msg.content, imageDtos)
-                            }
-                            DebugLogger.d(TAG, "Queued message sent to CLI, waiting for dequeue event (id=${msg.id})")
-                            // Don't remove from queue here - wait for CLI's dequeue event
-                        } catch (e: Exception) {
-                            val isConnectionError = e is kotlinx.coroutines.CancellationException ||
-                                (e is IllegalStateException && e.message?.contains("not connected") == true)
+            // Clear attached images after queuing
+            if (images.isNotEmpty()) {
+                clearAttachedImages()
+            }
 
-                            if (isConnectionError) {
-                                // Connection-related error: keep message in queue for retry when reconnected
-                                DebugLogger.d(TAG, "Connection error while sending queued message (id=${msg.id}), will retry on reconnect: ${e.message}")
-                            } else {
-                                // Other error: remove from queue and show error
-                                DebugLogger.e(TAG, "Failed to send queued message: ${e.message}", e)
-                                _queuedMessages.update { queue ->
-                                    queue.filter { it.id != msg.id }
-                                }
-                                _error.value = "Failed to send message: ${e.message}"
-                            }
+            // Trigger scroll to bottom when message is queued
+            _scrollToBottomSignal.update { it + 1 }
+
+            // Send the queued message immediately - Claude Code CLI handles its own queue
+            // The message will be processed by Claude when ready
+            // Message stays in queue until CLI sends "dequeue" event
+            scope.launch {
+                try {
+                    DebugLogger.d(TAG, "Sending queued message to CLI (id=${queuedMessage.id})")
+                    if (queuedMessage.images.isEmpty()) {
+                        webSocketClient.sendChat(queuedMessage.content)
+                    } else {
+                        val imageDtos = queuedMessage.images.map { img ->
+                            ImageContentDto(
+                                type = "base64",
+                                mediaType = img.mediaType,
+                                data = Base64.encode(img.data)
+                            )
                         }
+                        webSocketClient.sendChatWithImages(queuedMessage.content, imageDtos)
+                    }
+                    DebugLogger.d(TAG, "Queued message sent to CLI, waiting for dequeue event (id=${queuedMessage.id})")
+                    // Don't remove from queue here - wait for CLI's dequeue event
+                } catch (e: Exception) {
+                    val isConnectionError = e is kotlinx.coroutines.CancellationException ||
+                        (e is IllegalStateException && e.message?.contains("not connected") == true)
+
+                    if (isConnectionError) {
+                        // Connection-related error: keep message in queue for retry when reconnected
+                        DebugLogger.d(TAG, "Connection error while sending queued message (id=${queuedMessage.id}), will retry on reconnect: ${e.message}")
+                    } else {
+                        // Other error: remove from queue and show error
+                        DebugLogger.e(TAG, "Failed to send queued message: ${e.message}", e)
+                        updateCurrentQueue { queue -> queue.filter { it.id != queuedMessage.id } }
+                        _error.value = "Failed to send message: ${e.message}"
                     }
                 }
             }
@@ -1279,6 +1312,7 @@ class ChatViewModel(
             currentClaudeSession = newSessionId
             val newConversationId = "$newSessionId?project=$encodedPath"
             currentConversationId = newConversationId
+            _currentConversationIdFlow.value = newConversationId
 
             // Mark as no longer draft
             _isDraftSession.value = false
@@ -1449,9 +1483,9 @@ class ChatViewModel(
      * logs the queue state for debugging. Queue is cleared via dequeue events from CLI.
      */
     private suspend fun logQueueStatusOnStreamingComplete() {
-        val currentQueue = _queuedMessages.value
-        if (currentQueue.isNotEmpty()) {
-            println("ChatViewModel: Streaming complete, ${currentQueue.size} messages in queue (already sent to CLI)")
+        val queue = getCurrentQueue()
+        if (queue.isNotEmpty()) {
+            println("ChatViewModel: Streaming complete, ${queue.size} messages in queue (already sent to CLI)")
         }
     }
 
@@ -1463,44 +1497,35 @@ class ChatViewModel(
      * @param messageId The ID of the queued message to cancel
      */
     fun cancelQueuedMessage(messageId: String) {
-        var errorMessage: String? = null
-        _queuedMessages.update { queue ->
-            val message = queue.find { it.id == messageId }
-            when {
-                message == null -> {
-                    println("ChatViewModel: Cannot cancel - message not found: $messageId")
-                    queue  // Return unchanged
-                }
-                message.source == QueuedMessageSource.CLI -> {
-                    println("ChatViewModel: Cannot cancel CLI message from app: $messageId")
-                    errorMessage = "Cannot cancel messages queued from terminal"
-                    queue  // Return unchanged
-                }
-                else -> {
-                    println("ChatViewModel: Cancelled queued message: $messageId")
-                    queue.filter { it.id != messageId }
-                }
+        val queue = getCurrentQueue()
+        val message = queue.find { it.id == messageId }
+        when {
+            message == null -> {
+                println("ChatViewModel: Cannot cancel - message not found: $messageId")
+            }
+            message.source == QueuedMessageSource.CLI -> {
+                println("ChatViewModel: Cannot cancel CLI message from app: $messageId")
+                _error.value = "Cannot cancel messages queued from terminal"
+            }
+            else -> {
+                println("ChatViewModel: Cancelled queued message: $messageId")
+                updateCurrentQueue { q -> q.filter { it.id != messageId } }
             }
         }
-        // Set error outside of update to avoid nested state modifications
-        errorMessage?.let { _error.value = it }
     }
 
     /**
-     * Clears all locally queued messages.
+     * Clears all locally queued messages for the current conversation.
      * CLI-originated messages cannot be cleared from this app.
      * Uses atomic update to prevent race conditions.
      */
     fun clearLocalQueuedMessages() {
-        _queuedMessages.update { queue ->
-            val cliMessages = queue.filter { it.source == QueuedMessageSource.CLI }
-            val localCount = queue.size - cliMessages.size
-            if (localCount > 0) {
-                println("ChatViewModel: Cleared $localCount locally queued messages")
-                cliMessages
-            } else {
-                queue
-            }
+        val queue = getCurrentQueue()
+        val cliMessages = queue.filter { it.source == QueuedMessageSource.CLI }
+        val localCount = queue.size - cliMessages.size
+        if (localCount > 0) {
+            println("ChatViewModel: Cleared $localCount locally queued messages")
+            updateCurrentQueue { cliMessages }
         }
     }
 
@@ -1768,13 +1793,10 @@ class ChatViewModel(
                 }
                 // Remove the first queued message if any - it's likely the one that failed
                 // (FIFO queue: first message is the one being processed)
-                _queuedMessages.update { queue ->
-                    if (queue.isNotEmpty()) {
-                        println("ChatViewModel: Removing first queued message due to error")
-                        queue.drop(1)
-                    } else {
-                        queue
-                    }
+                val queue = getCurrentQueue()
+                if (queue.isNotEmpty()) {
+                    println("ChatViewModel: Removing first queued message due to error")
+                    updateCurrentQueue { q -> q.drop(1) }
                 }
             }
 
@@ -1846,34 +1868,25 @@ class ChatViewModel(
                                     queuedAt = Clock.System.now().toEpochMilliseconds(),
                                     source = QueuedMessageSource.CLI
                                 )
-                                _queuedMessages.update { queue -> queue + cliQueuedMessage }
+                                updateCurrentQueue { queue -> queue + cliQueuedMessage }
                                 println("ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")
                             }
                             "dequeue", "clear" -> {
                                 // Remove first message from queue (FIFO)
-                                var dequeuedMessage: QueuedMessage? = null
-                                _queuedMessages.update { queue ->
-                                    if (queue.isNotEmpty()) {
-                                        dequeuedMessage = queue.first()
-                                        println("ChatViewModel: Dequeued message from CLI (operation=$operation)")
-                                        queue.drop(1)
-                                    } else {
-                                        queue
-                                    }
+                                val queue = getCurrentQueue()
+                                if (queue.isNotEmpty()) {
+                                    println("ChatViewModel: Dequeued message from CLI (operation=$operation)")
+                                    updateCurrentQueue { q -> q.drop(1) }
                                 }
                             }
                             "remove" -> {
                                 // Remove first message from queue (FIFO) - same as dequeue
                                 // Each remove event removes one message at a time
-                                var removedMessage: QueuedMessage? = null
-                                _queuedMessages.update { queue ->
-                                    if (queue.isNotEmpty()) {
-                                        removedMessage = queue.first()
-                                        println("ChatViewModel: Remove operation - removing first queued message")
-                                        queue.drop(1)
-                                    } else {
-                                        queue
-                                    }
+                                val queue = getCurrentQueue()
+                                val removedMessage = queue.firstOrNull()
+                                if (removedMessage != null) {
+                                    println("ChatViewModel: Remove operation - removing first queued message")
+                                    updateCurrentQueue { q -> q.drop(1) }
                                 }
 
                                 // Add removed message as pending user message
@@ -2099,7 +2112,7 @@ class ChatViewModel(
                             // Also remove matching queued messages when user message is confirmed
                             if (newMsg.role == MessageRole.USER) {
                                 val normalizedContent = normalizeForComparison(newMsg.content)
-                                _queuedMessages.update { queue ->
+                                updateCurrentQueue { queue ->
                                     val matchingIndex = queue.indexOfFirst {
                                         normalizeForComparison(it.content) == normalizedContent
                                     }
