@@ -284,15 +284,24 @@ func (h *Handler) readPump(client *Client, projectPath string, claudeSessionID u
 			break
 		}
 
+		h.logger.Info("readPump: received WebSocket frame",
+			zap.String("clientID", client.ID.String()),
+			zap.Int("dataLen", len(data)))
+
 		// Parse incoming message
 		var msg IncomingMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			h.logger.Warn("failed to parse message",
 				zap.String("clientID", client.ID.String()),
+				zap.String("dataPreview", string(data[:min(len(data), 200)])),
 				zap.Error(err))
 			h.sendErrorToClient(client, "invalid message format")
 			continue
 		}
+
+		h.logger.Info("readPump: parsed message successfully",
+			zap.String("clientID", client.ID.String()),
+			zap.String("msgType", msg.Type))
 
 		// Handle message based on type
 		h.handleMessage(client, &msg, projectPath, claudeSessionID, isFilesystemSession)
@@ -335,8 +344,15 @@ func (h *Handler) writePump(client *Client) {
 
 // handleMessage routes incoming messages to appropriate handlers
 func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPath string, claudeSessionID uuid.UUID, isFilesystemSession bool) {
+	h.logger.Info("handleMessage() ENTRY",
+		zap.String("clientID", client.ID.String()),
+		zap.String("msgType", msg.Type),
+		zap.Int("contentLen", len(msg.Content)),
+		zap.Int("imageCount", len(msg.Images)))
+
 	switch msg.Type {
 	case MessageTypeChat:
+		h.logger.Info("handleMessage: routing to handleChatMessage")
 		h.handleChatMessage(client, msg.Content, msg.Images, projectPath, claudeSessionID, isFilesystemSession)
 	case MessageTypeStop:
 		h.handleStopMessage(client, claudeSessionID)
