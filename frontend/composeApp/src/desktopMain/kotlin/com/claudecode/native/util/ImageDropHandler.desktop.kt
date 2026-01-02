@@ -20,10 +20,11 @@ actual fun Modifier.imageDropTarget(
     onDragStateChange: (DropState) -> Unit,
     onImageDropped: (List<PickedImage>) -> Unit
 ): Modifier {
-    // Get the current window from LocalWindow if available
-    // We use a side effect to register/unregister the drop target
+    // Use rememberUpdatedState to capture latest callbacks without re-triggering DisposableEffect
+    val currentOnDragStateChange by rememberUpdatedState(onDragStateChange)
+    val currentOnImageDropped by rememberUpdatedState(onImageDropped)
 
-    DisposableEffect(enabled, onDragStateChange, onImageDropped) {
+    DisposableEffect(enabled) {
         if (!enabled) {
             return@DisposableEffect onDispose { }
         }
@@ -36,7 +37,7 @@ actual fun Modifier.imageDropTarget(
             override fun dragEnter(dtde: DropTargetDragEvent) {
                 if (isImageDrag(dtde)) {
                     dtde.acceptDrag(DnDConstants.ACTION_COPY)
-                    onDragStateChange(DropState(isDragging = true, isHovering = true))
+                    currentOnDragStateChange(DropState(isDragging = true, isHovering = true))
                 } else {
                     dtde.rejectDrag()
                 }
@@ -51,7 +52,7 @@ actual fun Modifier.imageDropTarget(
             override fun dropActionChanged(dtde: DropTargetDragEvent) {}
 
             override fun dragExit(dte: DropTargetEvent) {
-                onDragStateChange(DropState(isDragging = true, isHovering = false))
+                currentOnDragStateChange(DropState(isDragging = true, isHovering = false))
             }
 
             override fun drop(dtde: DropTargetDropEvent) {
@@ -63,9 +64,7 @@ actual fun Modifier.imageDropTarget(
                         @Suppress("UNCHECKED_CAST")
                         val files = transferable.getTransferData(DataFlavor.javaFileListFlavor) as List<File>
 
-                        val images = files.filter { file ->
-                            isImageFile(file)
-                        }.mapNotNull { file ->
+                        val images = files.filter { isImageFile(it) }.mapNotNull { file ->
                             try {
                                 val data = file.readBytes()
                                 // Use probed content type if available, fallback to extension
@@ -82,7 +81,7 @@ actual fun Modifier.imageDropTarget(
                         }
 
                         if (images.isNotEmpty()) {
-                            onImageDropped(images)
+                            currentOnImageDropped(images)
                             dtde.dropComplete(true)
                         } else {
                             dtde.dropComplete(false)
@@ -91,10 +90,9 @@ actual fun Modifier.imageDropTarget(
                         dtde.dropComplete(false)
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
                     dtde.dropComplete(false)
                 } finally {
-                    onDragStateChange(DropState(isDragging = false, isHovering = false))
+                    currentOnDragStateChange(DropState(isDragging = false, isHovering = false))
                 }
             }
 
