@@ -84,6 +84,7 @@ class WebSocketClient(
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+        encodeDefaults = true  // Include fields with default values (e.g., type="base64" for images)
     }
 
     /**
