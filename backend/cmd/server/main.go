@@ -13,7 +13,9 @@ import (
 	"github.com/devnogari/claude-code-native/backend/internal/message"
 	"github.com/devnogari/claude-code-native/backend/internal/middleware"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
+	"github.com/devnogari/claude-code-native/backend/internal/queue"
 	"github.com/devnogari/claude-code-native/backend/internal/server"
+	"github.com/devnogari/claude-code-native/backend/internal/storage"
 	"github.com/devnogari/claude-code-native/backend/internal/user"
 	"github.com/devnogari/claude-code-native/backend/internal/ws"
 	"go.uber.org/fx"
@@ -33,6 +35,8 @@ func main() {
 		project.Module,
 		conversation.Module,
 		message.Module,
+		storage.Module,
+		queue.Module,
 
 		// Real-time modules
 		claude.Module,

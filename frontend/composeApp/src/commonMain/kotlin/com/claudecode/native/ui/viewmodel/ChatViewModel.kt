@@ -5,6 +5,8 @@ import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.api.CommandApi
 import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.ProjectApi
+import com.claudecode.native.data.api.QueueApi
+import com.claudecode.native.data.model.QueuedMessageDto
 import com.claudecode.native.data.model.Command
 import com.claudecode.native.data.model.ExecuteCommandResponse
 import com.claudecode.native.data.model.ExecuteContext
@@ -16,7 +18,13 @@ import com.claudecode.native.data.websocket.HistoryWatchEvent
 import com.claudecode.native.data.websocket.IncomingMessage
 import com.claudecode.native.data.websocket.MessageType
 import com.claudecode.native.data.websocket.ImageContentDto
+import com.claudecode.native.data.websocket.QueueAddPayload
+import com.claudecode.native.data.websocket.QueueRemovePayload
+import com.claudecode.native.data.websocket.QueueSyncPayload
+import com.claudecode.native.data.websocket.QueueMessagePayload
 import com.claudecode.native.data.websocket.WebSocketClient
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
 import com.claudecode.native.ui.component.ProgressStatus
 import com.claudecode.native.util.DebugLogger
 import com.claudecode.native.util.toUserMessage
@@ -64,8 +72,11 @@ class ChatViewModel(
     private val claudeHistoryApi: ClaudeHistoryApi,
     private val historyWatchClient: HistoryWatchClient,
     private val commandApi: CommandApi,
+    private val queueApi: QueueApi,
     private val scope: CoroutineScope
 ) {
+    /** JSON parser for queue WebSocket payloads */
+    private val json = Json { ignoreUnknownKeys = true }
     /**
      * LOCK ORDERING (always acquire in this order to prevent deadlocks):
      * 1. streamingMutex - protects streaming state (_isStreaming, isStreamingFromHistoryWatch)
@@ -325,6 +336,150 @@ class ChatViewModel(
         return _queuedMessagesMap.value[convId] ?: emptyList()
     }
 
+    // Note: Queue synchronization is handled by WebSocket "queue_sync" messages
+    // which are received on connection and provide real-time queue state
+
+    /**
+     * Adds a message to the server queue, falling back to local-only on failure.
+     * @return true if successfully added to server, false if stored locally
+     */
+    private suspend fun addToServerQueue(content: String, images: List<AttachedImage>): QueuedMessage {
+        val convId = _currentConversationIdFlow.value
+
+        // If no conversation or offline, store locally
+        if (convId == null) {
+            return createLocalQueuedMessage(content, images)
+        }
+
+        return try {
+            val response = queueApi.addToQueue(convId, content)
+            val serverMsg = response.message
+            // Map server-returned images to ServerImage objects
+            val serverImages = serverMsg.images.map { imgDto ->
+                ServerImage(
+                    id = imgDto.id,
+                    url = imgDto.url,
+                    mediaType = imgDto.mediaType,
+                    fileName = imgDto.fileName,
+                    width = imgDto.width,
+                    height = imgDto.height
+                )
+            }
+            QueuedMessage(
+                id = serverMsg.id,
+                content = serverMsg.content,
+                queuedAt = serverMsg.queuedAt,
+                source = QueuedMessageSource.SERVER,
+                images = images, // Keep local images for immediate display (before server upload)
+                serverImages = serverImages // Server-persisted images (currently empty until upload is implemented)
+            )
+        } catch (e: Exception) {
+            DebugLogger.e(TAG, "Failed to add to server queue, storing locally: ${e.message}", e)
+            createLocalQueuedMessage(content, images)
+        }
+    }
+
+    /**
+     * Creates a local-only queued message (offline fallback).
+     */
+    private fun createLocalQueuedMessage(content: String, images: List<AttachedImage>): QueuedMessage {
+        return QueuedMessage(
+            id = generateMessageId(),
+            content = content,
+            queuedAt = Clock.System.now().toEpochMilliseconds(),
+            source = QueuedMessageSource.LOCAL,
+            images = images
+        )
+    }
+
+    /**
+     * Handles queue-related WebSocket messages (queue_add, queue_remove, queue_sync).
+     */
+    private fun handleQueueWebSocketMessage(message: IncomingMessage) {
+        val payload = message.payload ?: return
+
+        when (message.type) {
+            MessageType.QUEUE_ADD -> {
+                try {
+                    val addPayload = json.decodeFromJsonElement<QueueAddPayload>(payload)
+                    val serverImages = addPayload.images.map { img ->
+                        ServerImage(
+                            id = img.id,
+                            url = img.url,
+                            mediaType = img.mediaType,
+                            fileName = img.fileName,
+                            width = img.width,
+                            height = img.height
+                        )
+                    }
+                    val queuedMsg = QueuedMessage(
+                        id = addPayload.id,
+                        content = addPayload.content,
+                        queuedAt = addPayload.queuedAt,
+                        source = QueuedMessageSource.SERVER,
+                        serverImages = serverImages
+                    )
+                    updateCurrentQueue { queue ->
+                        // Avoid duplicates
+                        if (queue.none { it.id == addPayload.id }) {
+                            queue + queuedMsg
+                        } else {
+                            queue
+                        }
+                    }
+                    DebugLogger.d(TAG, "Queue add from WebSocket: id=${addPayload.id}, images=${serverImages.size}")
+                } catch (e: Exception) {
+                    DebugLogger.e(TAG, "Failed to parse queue_add payload: ${e.message}", e)
+                }
+            }
+
+            MessageType.QUEUE_REMOVE -> {
+                try {
+                    val removePayload = json.decodeFromJsonElement<QueueRemovePayload>(payload)
+                    updateCurrentQueue { queue ->
+                        queue.filter { it.id != removePayload.id }
+                    }
+                    DebugLogger.d(TAG, "Queue remove from WebSocket: id=${removePayload.id}")
+                } catch (e: Exception) {
+                    DebugLogger.e(TAG, "Failed to parse queue_remove payload: ${e.message}", e)
+                }
+            }
+
+            MessageType.QUEUE_SYNC -> {
+                try {
+                    val syncPayload = json.decodeFromJsonElement<QueueSyncPayload>(payload)
+                    val serverMessages = syncPayload.messages.map { msg ->
+                        val serverImages = msg.images.map { img ->
+                            ServerImage(
+                                id = img.id,
+                                url = img.url,
+                                mediaType = img.mediaType,
+                                fileName = img.fileName,
+                                width = img.width,
+                                height = img.height
+                            )
+                        }
+                        QueuedMessage(
+                            id = msg.id,
+                            content = msg.content,
+                            queuedAt = msg.queuedAt,
+                            source = QueuedMessageSource.SERVER,
+                            serverImages = serverImages
+                        )
+                    }
+                    // Keep local-only messages
+                    val currentQueue = getCurrentQueue()
+                    val localOnlyMessages = currentQueue.filter { it.source == QueuedMessageSource.LOCAL }
+
+                    updateCurrentQueue { serverMessages + localOnlyMessages }
+                    DebugLogger.d(TAG, "Queue sync from WebSocket: ${serverMessages.size} server + ${localOnlyMessages.size} local")
+                } catch (e: Exception) {
+                    DebugLogger.e(TAG, "Failed to parse queue_sync payload: ${e.message}", e)
+                }
+            }
+        }
+    }
+
     /**
      * Clears all session state for switching conversations or starting fresh.
      */
@@ -515,15 +670,60 @@ class ChatViewModel(
             }
         }
 
-        // Retry sending queued messages when reconnected
+        // Sync queue and retry local messages when reconnected
         scope.launch {
             var previousState: ConnectionState? = null
             connectionState.collect { newState ->
                 // Check if we just reconnected (transition to Connected from non-Connected state)
                 if (newState == ConnectionState.Connected && previousState != ConnectionState.Connected) {
+                    // Server will send queue_sync via WebSocket, but also sync local messages
+                    syncLocalMessagesToServer()
                     retryQueuedMessages()
                 }
                 previousState = newState
+            }
+        }
+    }
+
+    /**
+     * Syncs local-only messages to the server after reconnection.
+     * Processes messages sequentially to avoid race conditions with WebSocket queue_sync.
+     */
+    private fun syncLocalMessagesToServer() {
+        val queue = getCurrentQueue()
+        val localMessages = queue.filter { it.source == QueuedMessageSource.LOCAL }
+        if (localMessages.isEmpty()) return
+
+        DebugLogger.d(TAG, "Syncing ${localMessages.size} local messages to server")
+
+        // Process sequentially in a single coroutine to avoid race conditions
+        scope.launch {
+            val convId = _currentConversationIdFlow.value ?: return@launch
+
+            for (msg in localMessages) {
+                try {
+                    val response = queueApi.addToQueue(convId, msg.content)
+                    // Replace local message with server message
+                    updateCurrentQueue { q ->
+                        q.map { existing ->
+                            if (existing.id == msg.id) {
+                                QueuedMessage(
+                                    id = response.message.id,
+                                    content = response.message.content,
+                                    queuedAt = response.message.queuedAt,
+                                    source = QueuedMessageSource.SERVER,
+                                    images = msg.images // Keep local images
+                                )
+                            } else {
+                                existing
+                            }
+                        }
+                    }
+                    DebugLogger.d(TAG, "Synced local message to server: ${msg.id} -> ${response.message.id}")
+                } catch (e: Exception) {
+                    DebugLogger.e(TAG, "Failed to sync local message to server: ${e.message}", e)
+                    // Keep as local, will retry on next connection
+                }
             }
         }
     }
@@ -1376,10 +1576,9 @@ class ChatViewModel(
             return
         }
 
-        // If streaming is in progress, queue the message and send immediately
+        // If streaming is in progress, queue the message on the server (with local fallback)
         // Claude Code CLI will handle the queuing on its side
         // Both text and image messages can be queued
-        // Use atomic update to prevent race conditions with concurrent queue operations
         if (_isStreaming.value) {
             DebugLogger.d(TAG, "sendMessage(): Streaming in progress - queueing message")
             val currentQueue = getCurrentQueue()
@@ -1388,28 +1587,23 @@ class ChatViewModel(
                 return
             }
 
-            val queuedMessage = QueuedMessage(
-                id = generateMessageId(),
-                content = content,
-                queuedAt = Clock.System.now().toEpochMilliseconds(),
-                source = QueuedMessageSource.LOCAL,
-                images = images
-            )
-            updateCurrentQueue { queue -> queue + queuedMessage }
-            DebugLogger.d(TAG, "Queued message while streaming (id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")
-
-            // Clear attached images after queuing
-            if (images.isNotEmpty()) {
-                clearAttachedImages()
-            }
-
-            // Trigger scroll to bottom when message is queued
-            _scrollToBottomSignal.update { it + 1 }
-
-            // Send the queued message immediately - Claude Code CLI handles its own queue
-            // The message will be processed by Claude when ready
-            // Message stays in queue until CLI sends "dequeue" event
+            // Add to server queue (falls back to local on error)
             scope.launch {
+                val queuedMessage = addToServerQueue(content, images)
+                updateCurrentQueue { queue -> queue + queuedMessage }
+                DebugLogger.d(TAG, "Queued message (source=${queuedMessage.source}, id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")
+
+                // Clear attached images after queuing
+                if (images.isNotEmpty()) {
+                    clearAttachedImages()
+                }
+
+                // Trigger scroll to bottom when message is queued
+                _scrollToBottomSignal.update { it + 1 }
+
+                // Send the queued message immediately - Claude Code CLI handles its own queue
+                // The message will be processed by Claude when ready
+                // Message stays in queue until CLI sends "dequeue" event
                 try {
                     DebugLogger.d(TAG, "Sending queued message to CLI (id=${queuedMessage.id})")
                     if (queuedMessage.images.isEmpty()) {
@@ -1434,10 +1628,10 @@ class ChatViewModel(
                         // Connection-related error: keep message in queue for retry when reconnected
                         DebugLogger.d(TAG, "Connection error while sending queued message (id=${queuedMessage.id}), will retry on reconnect: ${e.message}")
                     } else {
-                        // Other error: remove from queue and show error
-                        DebugLogger.e(TAG, "Failed to send queued message: ${e.message}", e)
-                        updateCurrentQueue { queue -> queue.filter { it.id != queuedMessage.id } }
-                        _error.value = "Failed to send message: ${e.message}"
+                        // Other error: keep message in queue for future retry (don't lose the message)
+                        // The message will be retried when streaming completes or user reconnects
+                        DebugLogger.e(TAG, "Failed to send queued message (id=${queuedMessage.id}): ${e.message}", e)
+                        _error.value = "Failed to send queued message: ${e.message}"
                     }
                 }
             }
@@ -1666,24 +1860,55 @@ class ChatViewModel(
                 _error.value = "Cannot cancel messages queued from terminal"
             }
             else -> {
-                DebugLogger.d(TAG, "ChatViewModel: Cancelled queued message: $messageId")
+                DebugLogger.d(TAG, "Cancelling queued message: $messageId (source=${message.source})")
+                // Remove from local state immediately
                 updateCurrentQueue { q -> q.filter { it.id != messageId } }
+
+                // If it's a server message, also remove from server
+                if (message.source == QueuedMessageSource.SERVER) {
+                    scope.launch {
+                        try {
+                            val convId = _currentConversationIdFlow.value ?: return@launch
+                            queueApi.removeFromQueue(convId, messageId)
+                            DebugLogger.d(TAG, "Removed message from server queue: $messageId")
+                        } catch (e: Exception) {
+                            DebugLogger.e(TAG, "Failed to remove message from server queue: ${e.message}", e)
+                            // Already removed from local state, server will eventually sync
+                        }
+                    }
+                }
             }
         }
     }
 
     /**
-     * Clears all locally queued messages for the current conversation.
+     * Clears all queued messages for the current conversation (both local and server).
      * CLI-originated messages cannot be cleared from this app.
+     * Server messages are also cleared from the server via API call.
      * Uses atomic update to prevent race conditions.
      */
-    fun clearLocalQueuedMessages() {
+    fun clearQueuedMessages() {
         val queue = getCurrentQueue()
         val cliMessages = queue.filter { it.source == QueuedMessageSource.CLI }
-        val localCount = queue.size - cliMessages.size
-        if (localCount > 0) {
-            DebugLogger.d(TAG, "ChatViewModel: Cleared $localCount locally queued messages")
+        val clearableMessages = queue.filter { it.source != QueuedMessageSource.CLI }
+
+        if (clearableMessages.isNotEmpty()) {
+            DebugLogger.d(TAG, "Clearing ${clearableMessages.size} queued messages")
             updateCurrentQueue { cliMessages }
+
+            // Clear server queue if any server messages
+            val hasServerMessages = clearableMessages.any { it.source == QueuedMessageSource.SERVER }
+            if (hasServerMessages) {
+                scope.launch {
+                    try {
+                        val convId = _currentConversationIdFlow.value ?: return@launch
+                        queueApi.clearQueue(convId)
+                        DebugLogger.d(TAG, "Cleared server queue")
+                    } catch (e: Exception) {
+                        DebugLogger.e(TAG, "Failed to clear server queue: ${e.message}", e)
+                    }
+                }
+            }
         }
     }
 
@@ -1965,6 +2190,11 @@ class ChatViewModel(
 
             MessageType.PONG -> {
                 // Pong response to keep-alive ping
+            }
+
+            MessageType.QUEUE_ADD, MessageType.QUEUE_REMOVE, MessageType.QUEUE_SYNC -> {
+                // Handle queue updates from server
+                handleQueueWebSocketMessage(message)
             }
         }
     }

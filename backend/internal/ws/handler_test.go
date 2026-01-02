@@ -10,6 +10,7 @@ import (
 	"github.com/devnogari/claude-code-native/backend/internal/conversation"
 	"github.com/devnogari/claude-code-native/backend/internal/message"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
+	"github.com/devnogari/claude-code-native/backend/internal/queue"
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -237,6 +238,41 @@ func (m *mockMessageRepository) GetMaxSequenceNum(ctx context.Context, conversat
 	return 0, nil
 }
 
+type mockQueueService struct {
+	getQueueFunc func(ctx context.Context, conversationID uuid.UUID) ([]queue.QueuedMessage, error)
+}
+
+func (m *mockQueueService) AddToQueue(ctx context.Context, conversationID, userID uuid.UUID, content string, images []queue.ImageData) (*queue.QueuedMessage, error) {
+	return nil, nil
+}
+
+func (m *mockQueueService) GetQueue(ctx context.Context, conversationID uuid.UUID) ([]queue.QueuedMessage, error) {
+	if m.getQueueFunc != nil {
+		return m.getQueueFunc(ctx, conversationID)
+	}
+	return nil, nil
+}
+
+func (m *mockQueueService) GetNextMessage(ctx context.Context, conversationID uuid.UUID) (*queue.QueuedMessage, error) {
+	return nil, nil
+}
+
+func (m *mockQueueService) RemoveFromQueue(ctx context.Context, messageID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockQueueService) ClearQueue(ctx context.Context, conversationID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockQueueService) GetImageURL(storagePath string) string {
+	return ""
+}
+
+func (m *mockQueueService) GetImageData(ctx context.Context, storagePath string) ([]byte, error) {
+	return nil, nil
+}
+
 // --- Handler Tests ---
 
 func TestNewHandler(t *testing.T) {
@@ -248,8 +284,9 @@ func TestNewHandler(t *testing.T) {
 		convRepo := &mockConversationRepository{}
 		projRepo := &mockProjectRepository{}
 		msgRepo := &mockMessageRepository{}
+		queueSvc := &mockQueueService{}
 
-		handler := NewHandler(hub, cfg, logger, claudeMgr, convRepo, projRepo, msgRepo)
+		handler := NewHandler(hub, cfg, logger, claudeMgr, convRepo, projRepo, msgRepo, queueSvc)
 
 		require.NotNil(t, handler)
 		assert.Equal(t, hub, handler.hub)
@@ -259,6 +296,7 @@ func TestNewHandler(t *testing.T) {
 		assert.Equal(t, convRepo, handler.convRepo)
 		assert.Equal(t, projRepo, handler.projRepo)
 		assert.Equal(t, msgRepo, handler.msgRepo)
+		assert.Equal(t, queueSvc, handler.queueService)
 	})
 
 	t.Run("handler has correct type", func(t *testing.T) {
@@ -269,8 +307,9 @@ func TestNewHandler(t *testing.T) {
 		convRepo := &mockConversationRepository{}
 		projRepo := &mockProjectRepository{}
 		msgRepo := &mockMessageRepository{}
+		queueSvc := &mockQueueService{}
 
-		handler := NewHandler(hub, cfg, logger, claudeMgr, convRepo, projRepo, msgRepo)
+		handler := NewHandler(hub, cfg, logger, claudeMgr, convRepo, projRepo, msgRepo, queueSvc)
 
 		// Verify the handler is of correct type
 		var _ *Handler = handler
