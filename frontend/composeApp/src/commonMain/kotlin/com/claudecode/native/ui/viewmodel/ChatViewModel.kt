@@ -282,11 +282,12 @@ class ChatViewModel(
     /**
      * Updates the queue for the current conversation.
      * If conversationId is null, the update is silently ignored.
+     * Uses _currentConversationIdFlow for consistency with queuedMessages StateFlow.
      *
      * @param transform Function to transform the current queue to a new queue
      */
     private fun updateCurrentQueue(transform: (List<QueuedMessage>) -> List<QueuedMessage>) {
-        val convId = currentConversationId ?: return
+        val convId = _currentConversationIdFlow.value ?: return
         _queuedMessagesMap.update { map ->
             map + (convId to transform(map[convId] ?: emptyList()))
         }
@@ -306,9 +307,10 @@ class ChatViewModel(
 
     /**
      * Gets the current queue for the active conversation.
+     * Uses _currentConversationIdFlow for consistency with queuedMessages StateFlow.
      */
     private fun getCurrentQueue(): List<QueuedMessage> {
-        val convId = currentConversationId ?: return emptyList()
+        val convId = _currentConversationIdFlow.value ?: return emptyList()
         return _queuedMessagesMap.value[convId] ?: emptyList()
     }
 

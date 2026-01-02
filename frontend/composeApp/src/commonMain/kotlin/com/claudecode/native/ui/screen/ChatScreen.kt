@@ -341,7 +341,8 @@ fun ChatScreenContent(
                         showDeleteDialog = false
                         viewModel.deleteSession(
                             onSuccess = {
-                                deleteMessage = "Session deleted successfully"
+                                // Navigate back to project list after deletion
+                                onBack()
                             },
                             onError = { errorMsg ->
                                 deleteMessage = errorMsg
