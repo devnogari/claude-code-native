@@ -315,6 +315,63 @@ class ChatViewModel(
                 handleHistoryWatchEvent(event)
             }
         }
+
+        // Retry sending queued messages when reconnected
+        scope.launch {
+            var previousState: ConnectionState? = null
+            connectionState.collect { newState ->
+                // Check if we just reconnected (transition to Connected from non-Connected state)
+                if (newState == ConnectionState.Connected && previousState != ConnectionState.Connected) {
+                    retryQueuedMessages()
+                }
+                previousState = newState
+            }
+        }
+    }
+
+    /**
+     * Retries sending all queued messages after reconnection.
+     * Messages with images are sent with images, text-only messages are sent as text.
+     */
+    private fun retryQueuedMessages() {
+        val currentQueue = _queuedMessages.value
+        if (currentQueue.isEmpty()) return
+
+        DebugLogger.d(TAG, "Retrying ${currentQueue.size} queued messages after reconnection")
+
+        currentQueue.forEach { msg ->
+            scope.launch {
+                try {
+                    DebugLogger.d(TAG, "Retrying queued message (id=${msg.id})")
+                    if (msg.images.isEmpty()) {
+                        webSocketClient.sendChat(msg.content)
+                    } else {
+                        val imageDtos = msg.images.map { img ->
+                            ImageContentDto(
+                                type = "base64",
+                                mediaType = img.mediaType,
+                                data = Base64.encode(img.data)
+                            )
+                        }
+                        webSocketClient.sendChatWithImages(msg.content, imageDtos)
+                    }
+                    DebugLogger.d(TAG, "Successfully retried queued message (id=${msg.id})")
+                } catch (e: Exception) {
+                    val isConnectionError = e is kotlinx.coroutines.CancellationException ||
+                        (e is IllegalStateException && e.message?.contains("not connected") == true)
+
+                    if (isConnectionError) {
+                        DebugLogger.d(TAG, "Connection error while retrying message (id=${msg.id}), will retry again: ${e.message}")
+                    } else {
+                        DebugLogger.e(TAG, "Failed to retry queued message (id=${msg.id}): ${e.message}", e)
+                        _queuedMessages.update { queue ->
+                            queue.filter { it.id != msg.id }
+                        }
+                        _error.value = "Failed to send message: ${e.message}"
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -1150,12 +1207,20 @@ class ChatViewModel(
                                 webSocketClient.sendChatWithImages(msg.content, imageDtos)
                             }
                         } catch (e: Exception) {
-                            DebugLogger.e(TAG, "Failed to send queued message: ${e.message}", e)
-                            // Remove the failed message from queue and show error to user
-                            _queuedMessages.update { queue ->
-                                queue.filter { it.id != msg.id }
+                            val isConnectionError = e is kotlinx.coroutines.CancellationException ||
+                                (e is IllegalStateException && e.message?.contains("not connected") == true)
+
+                            if (isConnectionError) {
+                                // Connection-related error: keep message in queue for retry when reconnected
+                                DebugLogger.d(TAG, "Connection error while sending queued message (id=${msg.id}), will retry on reconnect: ${e.message}")
+                            } else {
+                                // Other error: remove from queue and show error
+                                DebugLogger.e(TAG, "Failed to send queued message: ${e.message}", e)
+                                _queuedMessages.update { queue ->
+                                    queue.filter { it.id != msg.id }
+                                }
+                                _error.value = "Failed to send message: ${e.message}"
                             }
-                            _error.value = "Failed to send message: ${e.message}"
                         }
                     }
                 }
