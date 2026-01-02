@@ -124,7 +124,7 @@ func (p *Process) StartWithPrompt(prompt string) error {
 
 // StartWithPromptAndImages launches Claude CLI with the given prompt and optional images
 // Uses --print for non-interactive mode and --continue for conversation context
-// Images are passed using the --images flag (comma-separated file paths)
+// Images are included in the prompt using @ mentions (e.g., @/path/to/image.png)
 func (p *Process) StartWithPromptAndImages(prompt string, imagePaths []string) error {
 	p.mu.Lock()
 	if p.Status == ProcessStatusRunning {
@@ -176,16 +176,23 @@ func (p *Process) StartWithPromptAndImages(prompt string, imagePaths []string) e
 			zap.String("conversationID", p.ConversationID.String()))
 	}
 
-	// Add image paths if provided
-	// Claude CLI accepts --images flag with comma-separated paths
+	// Build final prompt with image @ mentions if provided
+	// Claude CLI uses @/path/to/image.png syntax to reference files/images
+	finalPrompt := prompt
 	if len(imagePaths) > 0 {
-		args = append(args, "--images", strings.Join(imagePaths, ","))
-		p.logger.Debug("adding images to claude command",
-			zap.Strings("imagePaths", imagePaths))
+		// Prepend image @ mentions to the prompt
+		var imageMentions []string
+		for _, path := range imagePaths {
+			imageMentions = append(imageMentions, "@"+path)
+		}
+		finalPrompt = strings.Join(imageMentions, " ") + " " + prompt
+		p.logger.Debug("adding images to prompt via @ mentions",
+			zap.Strings("imagePaths", imagePaths),
+			zap.String("finalPrompt", finalPrompt[:min(len(finalPrompt), 200)]))
 	}
 
 	// Add the prompt as the final argument
-	args = append(args, prompt)
+	args = append(args, finalPrompt)
 
 	p.logger.Debug("executing claude command",
 		zap.Strings("args", args),
