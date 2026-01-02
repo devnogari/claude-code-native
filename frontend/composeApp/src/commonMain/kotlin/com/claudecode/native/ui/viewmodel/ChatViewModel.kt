@@ -2063,7 +2063,7 @@ class ChatViewModel(
      *
      * @param statusText Initial status text to display (e.g., "Thinking", "Processing")
      */
-    private fun startProgressTracking(statusText: String = "Processing") {
+    private fun startProgressTracking(statusText: String = "") {
         val convId = currentConversationId ?: return
 
         streamingStartTimes[convId] = Clock.System.now().toEpochMilliseconds()
