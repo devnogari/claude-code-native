@@ -356,6 +356,11 @@ class ChatViewModel(
                         webSocketClient.sendChatWithImages(msg.content, imageDtos)
                     }
                     DebugLogger.d(TAG, "Successfully retried queued message (id=${msg.id})")
+                    // Remove from queue after successful send
+                    // CLI will send dequeue event, but we remove now to prevent double-processing
+                    _queuedMessages.update { queue ->
+                        queue.filter { it.id != msg.id }
+                    }
                 } catch (e: Exception) {
                     val isConnectionError = e is kotlinx.coroutines.CancellationException ||
                         (e is IllegalStateException && e.message?.contains("not connected") == true)
@@ -1205,6 +1210,12 @@ class ChatViewModel(
                                     )
                                 }
                                 webSocketClient.sendChatWithImages(msg.content, imageDtos)
+                            }
+                            // Remove from queue after successful send
+                            // CLI will send dequeue event, but we remove now to prevent UI showing stale queue
+                            DebugLogger.d(TAG, "Queued message sent successfully, removing from queue (id=${msg.id})")
+                            _queuedMessages.update { queue ->
+                                queue.filter { it.id != msg.id }
                             }
                         } catch (e: Exception) {
                             val isConnectionError = e is kotlinx.coroutines.CancellationException ||

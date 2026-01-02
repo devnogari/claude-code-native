@@ -2,6 +2,8 @@ package com.claudecode.native.util
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import java.io.ByteArrayOutputStream
 import kotlin.math.min
 
@@ -73,10 +75,26 @@ actual object ImageResizer {
             val format = if (outputAsJpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG
             val quality = (config.quality * 100).toInt()
 
+            // For JPEG output, need to handle transparency by adding white background
+            val bitmapToCompress = if (outputAsJpeg && scaledBitmap.hasAlpha()) {
+                val rgbBitmap = Bitmap.createBitmap(
+                    scaledBitmap.width,
+                    scaledBitmap.height,
+                    Bitmap.Config.RGB_565
+                )
+                val canvas = Canvas(rgbBitmap)
+                canvas.drawColor(Color.WHITE)
+                canvas.drawBitmap(scaledBitmap, 0f, 0f, null)
+                scaledBitmap.recycle()
+                rgbBitmap
+            } else {
+                scaledBitmap
+            }
+
             // Compress
             val outputStream = ByteArrayOutputStream()
-            scaledBitmap.compress(format, quality, outputStream)
-            scaledBitmap.recycle()
+            bitmapToCompress.compress(format, quality, outputStream)
+            bitmapToCompress.recycle()
 
             val outputBytes = outputStream.toByteArray()
 

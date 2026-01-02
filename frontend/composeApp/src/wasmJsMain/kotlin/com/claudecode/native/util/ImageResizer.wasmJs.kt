@@ -19,6 +19,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.js.JsAny
 import kotlin.js.JsArray
+import kotlin.js.toJsString
 import kotlin.math.min
 
 /**
@@ -84,16 +85,23 @@ actual object ImageResizer {
                 val newWidth = (originalWidth * scaleFactor).toInt()
                 val newHeight = (originalHeight * scaleFactor).toInt()
 
+                // Determine output format
+                val outputAsJpeg = needsConversion || mediaType == "image/jpeg"
+
                 // Create canvas and draw resized image
                 val canvas = document.createElement("canvas") as HTMLCanvasElement
                 canvas.width = newWidth
                 canvas.height = newHeight
 
                 val ctx = canvas.getContext("2d") as CanvasRenderingContext2D
-                ctx.drawImage(img, 0.0, 0.0, newWidth.toDouble(), newHeight.toDouble())
 
-                // Determine output format
-                val outputAsJpeg = needsConversion || mediaType == "image/jpeg"
+                // For JPEG output, fill with white background first to handle transparency
+                if (outputAsJpeg) {
+                    ctx.fillStyle = "white".toJsString()
+                    ctx.fillRect(0.0, 0.0, newWidth.toDouble(), newHeight.toDouble())
+                }
+
+                ctx.drawImage(img, 0.0, 0.0, newWidth.toDouble(), newHeight.toDouble())
                 val outputMediaType = if (outputAsJpeg) "image/jpeg" else mediaType
                 val quality = if (outputAsJpeg) config.quality.toDouble() else 1.0
 
