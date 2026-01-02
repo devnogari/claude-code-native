@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +12,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
 )
+
+const excludedProjectsFile = ".excluded_projects"
 
 // SessionChangeCallback is called when a session file changes
 type SessionChangeCallback func(encodedPath, sessionID string, newMessages []ClaudeMessage)
@@ -66,6 +69,9 @@ func NewHistoryCache(logger *zap.Logger) (*HistoryCache, error) {
 		subscribers:     make(map[string][]SessionChangeCallback),
 		lastMessageUUID: make(map[string]string),
 	}
+
+	// Load excluded projects from persistent storage
+	cache.loadExcludedProjects()
 
 	// Initial load
 	if err := cache.loadAll(); err != nil {
@@ -558,6 +564,7 @@ func (c *HistoryCache) Refresh() {
 
 // DeleteProject removes a project from the cache and adds it to the excluded list
 // This does NOT delete files on disk - only hides from the project list
+// The exclusion is persisted to disk so it survives server restarts
 func (c *HistoryCache) DeleteProject(encodedPath string) {
 	// Add to excluded list first
 	c.excludedMu.Lock()
@@ -569,8 +576,73 @@ func (c *HistoryCache) DeleteProject(encodedPath string) {
 	delete(c.projects, encodedPath)
 	c.mu.Unlock()
 
+	// Persist to file
+	c.saveExcludedProjects()
+
 	c.logger.Info("deleted project from cache and added to excluded list",
 		zap.String("project", encodedPath))
+}
+
+// loadExcludedProjects loads the excluded projects list from persistent storage
+func (c *HistoryCache) loadExcludedProjects() {
+	filePath := filepath.Join(c.basePath, excludedProjectsFile)
+	file, err := os.Open(filePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			c.logger.Warn("failed to open excluded projects file", zap.Error(err))
+		}
+		return
+	}
+	defer file.Close()
+
+	c.excludedMu.Lock()
+	defer c.excludedMu.Unlock()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" && !strings.HasPrefix(line, "#") {
+			c.excluded[line] = true
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		c.logger.Warn("error reading excluded projects file", zap.Error(err))
+	}
+
+	c.logger.Info("loaded excluded projects", zap.Int("count", len(c.excluded)))
+}
+
+// saveExcludedProjects saves the excluded projects list to persistent storage
+func (c *HistoryCache) saveExcludedProjects() {
+	filePath := filepath.Join(c.basePath, excludedProjectsFile)
+
+	c.excludedMu.RLock()
+	projects := make([]string, 0, len(c.excluded))
+	for encodedPath := range c.excluded {
+		projects = append(projects, encodedPath)
+	}
+	c.excludedMu.RUnlock()
+
+	// Sort for consistent file output
+	sort.Strings(projects)
+
+	file, err := os.Create(filePath)
+	if err != nil {
+		c.logger.Error("failed to create excluded projects file", zap.Error(err))
+		return
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	writer.WriteString("# Excluded projects - these won't appear in the project list\n")
+	writer.WriteString("# Delete lines to restore projects\n")
+	for _, p := range projects {
+		writer.WriteString(p + "\n")
+	}
+	writer.Flush()
+
+	c.logger.Debug("saved excluded projects", zap.Int("count", len(projects)))
 }
 
 // GetSessionMessagesPaginated returns messages with pagination (most recent first)
