@@ -390,12 +390,22 @@ class ChatViewModel(
             MessageType.QUEUE_ADD -> {
                 try {
                     val addPayload = json.decodeFromJsonElement<QueueAddPayload>(payload)
+                    val serverImages = addPayload.images.map { img ->
+                        ServerImage(
+                            id = img.id,
+                            url = img.url,
+                            mediaType = img.mediaType,
+                            fileName = img.fileName,
+                            width = img.width,
+                            height = img.height
+                        )
+                    }
                     val queuedMsg = QueuedMessage(
                         id = addPayload.id,
                         content = addPayload.content,
                         queuedAt = addPayload.queuedAt,
                         source = QueuedMessageSource.SERVER,
-                        images = emptyList()
+                        serverImages = serverImages
                     )
                     updateCurrentQueue { queue ->
                         // Avoid duplicates
@@ -405,7 +415,7 @@ class ChatViewModel(
                             queue
                         }
                     }
-                    DebugLogger.d(TAG, "Queue add from WebSocket: id=${addPayload.id}")
+                    DebugLogger.d(TAG, "Queue add from WebSocket: id=${addPayload.id}, images=${serverImages.size}")
                 } catch (e: Exception) {
                     DebugLogger.e(TAG, "Failed to parse queue_add payload: ${e.message}", e)
                 }
@@ -427,12 +437,22 @@ class ChatViewModel(
                 try {
                     val syncPayload = json.decodeFromJsonElement<QueueSyncPayload>(payload)
                     val serverMessages = syncPayload.messages.map { msg ->
+                        val serverImages = msg.images.map { img ->
+                            ServerImage(
+                                id = img.id,
+                                url = img.url,
+                                mediaType = img.mediaType,
+                                fileName = img.fileName,
+                                width = img.width,
+                                height = img.height
+                            )
+                        }
                         QueuedMessage(
                             id = msg.id,
                             content = msg.content,
                             queuedAt = msg.queuedAt,
                             source = QueuedMessageSource.SERVER,
-                            images = emptyList()
+                            serverImages = serverImages
                         )
                     }
                     // Keep local-only messages

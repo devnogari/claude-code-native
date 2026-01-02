@@ -107,7 +107,8 @@ data class QueuedMessage(
     val content: String,
     val queuedAt: Long,
     val source: QueuedMessageSource = QueuedMessageSource.LOCAL,
-    val images: List<AttachedImage> = emptyList()
+    val images: List<AttachedImage> = emptyList(),
+    val serverImages: List<ServerImage> = emptyList()  // Images from server (URL-based)
 )
 
 /**
@@ -138,3 +139,23 @@ data class AttachedImage(
 
     override fun hashCode(): Int = id.hashCode()
 }
+
+/**
+ * Image received from the server (via WebSocket queue events).
+ * Unlike AttachedImage, this has a URL instead of raw bytes.
+ *
+ * @param id Unique identifier for the image
+ * @param url URL to fetch the image from the server
+ * @param mediaType MIME type (e.g., "image/png", "image/jpeg")
+ * @param fileName Original file name (if available)
+ * @param width Image width in pixels (if known)
+ * @param height Image height in pixels (if known)
+ */
+data class ServerImage(
+    val id: String,
+    val url: String,
+    val mediaType: String,
+    val fileName: String? = null,
+    val width: Int? = null,
+    val height: Int? = null
+)
