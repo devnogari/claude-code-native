@@ -46,11 +46,21 @@ actual object ImageResizer {
             val newWidth = (originalWidth * scaleFactor).toInt()
             val newHeight = (originalHeight * scaleFactor).toInt()
 
+            // Determine if output will be JPEG (needs RGB, no alpha)
+            val outputAsJpeg = needsConversion || mediaType == "image/jpeg"
+
             // Resize the image if needed
             val resizedImage = if (needsScaling) {
                 val scaled = originalImage.getScaledInstance(newWidth, newHeight, Image.SCALE_SMOOTH)
-                val buffered = BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB)
+                // Use RGB for JPEG (no alpha), ARGB for PNG (with alpha)
+                val imageType = if (outputAsJpeg) BufferedImage.TYPE_INT_RGB else BufferedImage.TYPE_INT_ARGB
+                val buffered = BufferedImage(newWidth, newHeight, imageType)
                 val g2d = buffered.createGraphics()
+                // Fill with white background for JPEG to handle transparency
+                if (outputAsJpeg) {
+                    g2d.color = java.awt.Color.WHITE
+                    g2d.fillRect(0, 0, newWidth, newHeight)
+                }
                 g2d.drawImage(scaled, 0, 0, null)
                 g2d.dispose()
                 buffered
@@ -59,6 +69,9 @@ actual object ImageResizer {
                 if (needsConversion && originalImage.type != BufferedImage.TYPE_INT_RGB) {
                     val rgbImage = BufferedImage(originalWidth, originalHeight, BufferedImage.TYPE_INT_RGB)
                     val g2d = rgbImage.createGraphics()
+                    // Fill with white background for JPEG to handle transparency
+                    g2d.color = java.awt.Color.WHITE
+                    g2d.fillRect(0, 0, originalWidth, originalHeight)
                     g2d.drawImage(originalImage, 0, 0, null)
                     g2d.dispose()
                     rgbImage
@@ -68,7 +81,6 @@ actual object ImageResizer {
             }
 
             // Determine output format
-            val outputAsJpeg = needsConversion || mediaType == "image/jpeg"
             val outputMediaType = if (outputAsJpeg) "image/jpeg" else mediaType
             val formatName = if (outputAsJpeg) "jpeg" else "png"
 

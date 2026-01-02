@@ -9,8 +9,10 @@ import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.CGSizeMake
 import platform.Foundation.NSData
 import platform.Foundation.create
+import platform.UIKit.UIColor
 import platform.UIKit.UIGraphicsBeginImageContextWithOptions
 import platform.UIKit.UIGraphicsEndImageContext
+import platform.UIKit.UIGraphicsGetCurrentContext
 import platform.UIKit.UIGraphicsGetImageFromCurrentImageContext
 import platform.UIKit.UIImage
 import platform.UIKit.UIImageJPEGRepresentation
@@ -61,16 +63,19 @@ actual object ImageResizer {
         val newWidth = (originalWidth * scaleFactor).toInt()
         val newHeight = (originalHeight * scaleFactor).toInt()
 
-        // Resize the image
-        val resizedImage = if (needsScaling) {
-            resizeImage(originalImage, newWidth, newHeight)
-        } else {
-            originalImage
-        } ?: return ResizedImage(data, mediaType, wasResized = false)
-
         // Determine output format
         val outputAsJpeg = needsConversion || mediaType == "image/jpeg"
         val outputMediaType = if (outputAsJpeg) "image/jpeg" else mediaType
+
+        // Resize the image (with white background for JPEG to handle transparency)
+        val resizedImage = if (needsScaling) {
+            resizeImage(originalImage, newWidth, newHeight, opaqueBackground = outputAsJpeg)
+        } else if (outputAsJpeg) {
+            // Need to add white background even without scaling for JPEG conversion
+            resizeImage(originalImage, originalWidth.toInt(), originalHeight.toInt(), opaqueBackground = true)
+        } else {
+            originalImage
+        } ?: return ResizedImage(data, mediaType, wasResized = false)
 
         // Compress to target format
         val outputData = if (outputAsJpeg) {
@@ -89,10 +94,28 @@ actual object ImageResizer {
         }
     }
 
-    private fun resizeImage(image: UIImage, targetWidth: Int, targetHeight: Int): UIImage? {
+    private fun resizeImage(
+        image: UIImage,
+        targetWidth: Int,
+        targetHeight: Int,
+        opaqueBackground: Boolean = false
+    ): UIImage? {
         val size = CGSizeMake(targetWidth.toDouble(), targetHeight.toDouble())
 
-        UIGraphicsBeginImageContextWithOptions(size, false, 1.0)
+        // opaque = true for JPEG (fills with white), false for PNG (keeps transparency)
+        UIGraphicsBeginImageContextWithOptions(size, opaqueBackground, 1.0)
+
+        // If opaque, fill with white background first (for JPEG transparency handling)
+        if (opaqueBackground) {
+            val context = UIGraphicsGetCurrentContext()
+            if (context != null) {
+                UIColor.whiteColor.setFill()
+                platform.CoreGraphics.CGContextFillRect(
+                    context,
+                    CGRectMake(0.0, 0.0, targetWidth.toDouble(), targetHeight.toDouble())
+                )
+            }
+        }
 
         image.drawInRect(CGRectMake(0.0, 0.0, targetWidth.toDouble(), targetHeight.toDouble()))
 
