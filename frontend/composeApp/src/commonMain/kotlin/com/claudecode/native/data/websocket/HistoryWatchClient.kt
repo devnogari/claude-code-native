@@ -191,15 +191,16 @@ class HistoryWatchClient(
                     val sessionId = currentSessionId
                     val encodedPath = currentEncodedPath
                     if (sessionId != null && encodedPath != null) {
-                        message.messages?.let { messages ->
-                            _events.emit(HistoryWatchEvent.NewMessages(
-                                sessionId = sessionId,
-                                encodedPath = encodedPath,
-                                messages = messages,
-                                sessionState = message.sessionState ?: SessionState.IDLE,
-                                todos = message.todos ?: emptyList()
-                            ))
-                        }
+                        // Always emit event when sessionState is present, even if messages is null/empty.
+                        // Backend uses `omitempty` which omits empty arrays, resulting in null here.
+                        // This is critical for detecting STREAMING -> IDLE state transitions.
+                        _events.emit(HistoryWatchEvent.NewMessages(
+                            sessionId = sessionId,
+                            encodedPath = encodedPath,
+                            messages = message.messages ?: emptyList(),
+                            sessionState = message.sessionState ?: SessionState.IDLE,
+                            todos = message.todos ?: emptyList()
+                        ))
                     }
                 }
                 HistoryWatchMessageType.ERROR -> {
