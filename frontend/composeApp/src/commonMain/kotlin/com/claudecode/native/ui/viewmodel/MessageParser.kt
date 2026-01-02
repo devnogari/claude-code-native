@@ -1,5 +1,6 @@
 package com.claudecode.native.ui.viewmodel
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -28,6 +29,28 @@ object MessageParser {
 
         when (content) {
             is String -> {
+                // Check if string is a JSON array (e.g., image content from history reload)
+                val trimmed = content.trim()
+                if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                    try {
+                        val jsonArray = Json.parseToJsonElement(trimmed) as? JsonArray
+                        if (jsonArray != null) {
+                            for (element in jsonArray) {
+                                when (element) {
+                                    is JsonPrimitive -> {
+                                        val cleaned = cleanThinkingTags(element.content)
+                                        if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
+                                    }
+                                    is JsonObject -> processJsonElementToBlocks(element, blocks, messageUuid)
+                                    else -> {}
+                                }
+                            }
+                            return blocks
+                        }
+                    } catch (e: Exception) {
+                        // Not valid JSON, treat as regular text
+                    }
+                }
                 val cleaned = cleanThinkingTags(content)
                 if (cleaned.isNotBlank()) blocks.add(ContentBlock.Text(cleaned))
             }
