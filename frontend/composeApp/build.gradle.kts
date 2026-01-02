@@ -176,6 +176,15 @@ compose.desktop {
 
             macOS {
                 bundleID = "com.claudecode.native"
+                iconFile.set(project.file("src/desktopMain/resources/icon.png"))
+            }
+
+            windows {
+                iconFile.set(project.file("src/desktopMain/resources/icon.png"))
+            }
+
+            linux {
+                iconFile.set(project.file("src/desktopMain/resources/icon.png"))
             }
         }
     }
