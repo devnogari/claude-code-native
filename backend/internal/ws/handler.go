@@ -33,8 +33,8 @@ const (
 	pingPeriod = (pongWait * 9) / 10
 
 	// maxMessageSize is the maximum message size allowed from peer
-	// Increased to 10MB to support image attachments (base64 encoded)
-	maxMessageSize = 10 * 1024 * 1024 // 10MB
+	// Increased to 50MB to support large image attachments (base64 encoded iPad screenshots can be 20MB+)
+	maxMessageSize = 50 * 1024 * 1024 // 50MB
 
 	// maxContentLength is the maximum content length for chat messages
 	maxContentLength = 100 * 1024 // 100KB
