@@ -1608,6 +1608,7 @@ class ChatViewModel(
 
             MessageType.COMPLETE -> {
                 // Finalize the streaming message
+                println("ChatViewModel: Received COMPLETE message, calling finalizeStreamingMessage()")
                 finalizeStreamingMessage()
             }
 
@@ -2084,13 +2085,20 @@ class ChatViewModel(
      * Stops tracking for the current conversation only.
      */
     private fun stopProgressTracking() {
-        val convId = currentConversationId ?: return
+        val convId = currentConversationId
+        println("ChatViewModel: stopProgressTracking() called, convId=$convId")
+        if (convId == null) {
+            println("ChatViewModel: stopProgressTracking() - convId is null, returning early")
+            return
+        }
 
         elapsedTimeJobs[convId]?.cancel()
         elapsedTimeJobs.remove(convId)
         streamingStartTimes.remove(convId)
 
-        _progressStatusMap[convId]?.value = ProgressStatus(isActive = false)
+        val progressFlow = _progressStatusMap[convId]
+        println("ChatViewModel: stopProgressTracking() - progressFlow exists: ${progressFlow != null}, setting isActive=false")
+        progressFlow?.value = ProgressStatus(isActive = false)
     }
 
 }
