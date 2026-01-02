@@ -122,6 +122,12 @@ private fun StatusLineContent(
     // Random status word - remembered once per composition to avoid flickering
     val randomStatusWord = remember { STATUS_WORDS.random() }
 
+    // Claude Code CLI priority: statusText > in_progress todo's activeForm > random word
+    val inProgressTodo = status.todos.find { it.isInProgress }
+    val displayStatusText = status.statusText.ifEmpty {
+        inProgressTodo?.activeForm ?: randomStatusWord
+    }
+
     // Spinner animation - cycles through spinner characters
     val infiniteTransition = rememberInfiniteTransition(label = "statusline_spinner")
     val animationPhase by infiniteTransition.animateFloat(
@@ -196,7 +202,7 @@ private fun StatusLineContent(
 
                 // Status text (main description)
                 Text(
-                    text = status.statusText.ifEmpty { randomStatusWord } + "…",
+                    text = displayStatusText + "…",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
