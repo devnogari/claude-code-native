@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.claudecode.native.util.openUrl
 
 /**
  * Renders markdown text with basic formatting support.
@@ -397,7 +398,12 @@ private fun AnnotatedString.Builder.appendInlineFormatting(
                     append(remaining.substring(0, i))
                     val linkText = linkMatch.groupValues[1]
                     val url = linkMatch.groupValues[2]
-                    withLink(LinkAnnotation.Url(url)) {
+                    withLink(
+                        LinkAnnotation.Url(
+                            url = url,
+                            linkInteractionListener = { openUrl(url) }
+                        )
+                    ) {
                         withStyle(
                             SpanStyle(
                                 color = linkColor,
@@ -408,6 +414,36 @@ private fun AnnotatedString.Builder.appendInlineFormatting(
                         }
                     }
                     remaining = remaining.substring(i + linkMatch.value.length)
+                    i = 0
+                } else {
+                    i++
+                }
+            }
+            // Bare URLs: https://... or http://...
+            remaining.substring(i).startsWith("http://") || remaining.substring(i).startsWith("https://") -> {
+                // Match URL until whitespace, closing paren, or end of string
+                val urlMatch = Regex("https?://[^\\s)\\]>\"']+").find(remaining.substring(i))
+                if (urlMatch != null && urlMatch.range.first == 0) {
+                    append(remaining.substring(0, i))
+                    val url = urlMatch.value.trimEnd('.', ',', ':', ';', '!', '?') // Remove trailing punctuation
+                    withLink(
+                        LinkAnnotation.Url(
+                            url = url,
+                            linkInteractionListener = { openUrl(url) }
+                        )
+                    ) {
+                        withStyle(
+                            SpanStyle(
+                                color = linkColor,
+                                textDecoration = TextDecoration.Underline
+                            )
+                        ) {
+                            append(url)
+                        }
+                    }
+                    // Adjust remaining to account for trimmed punctuation
+                    val actualLength = url.length
+                    remaining = remaining.substring(i + actualLength)
                     i = 0
                 } else {
                     i++
