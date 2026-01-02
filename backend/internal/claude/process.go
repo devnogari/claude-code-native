@@ -36,16 +36,12 @@ type ContentBlock struct {
 func ParseStreamJSON(line string) (text string, isDisplayable bool) {
 	var msg StreamMessage
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		fmt.Printf("[DEBUG] ParseStreamJSON: failed to unmarshal: %v, line: %s\n", err, line[:min(len(line), 200)])
 		return "", false
 	}
-
-	fmt.Printf("[DEBUG] ParseStreamJSON: type=%s, subtype=%s, hasMessage=%v\n", msg.Type, msg.Subtype, msg.Message != nil)
 
 	// Only extract text from assistant messages
 	if msg.Type == "assistant" && msg.Message != nil {
 		for _, block := range msg.Message.Content {
-			fmt.Printf("[DEBUG] ParseStreamJSON: block type=%s, hasText=%v\n", block.Type, block.Text != "")
 			if block.Type == "text" && block.Text != "" {
 				return block.Text, true
 			}
@@ -77,6 +73,14 @@ type OutputMessage struct {
 }
 
 // Process represents a Claude CLI process session
+//
+// Mutex lock order to prevent deadlocks:
+//  1. stdinMu - acquired first for stdin operations
+//  2. mu - acquired second for state access
+//  3. imagesMu - acquired last for image tracking
+//
+// When Close() needs to coordinate with SendMessage(), it acquires stdinMu
+// before mu to ensure no writes are in progress during cleanup.
 type Process struct {
 	ConversationID uuid.UUID
 	WorkDir        string
@@ -93,6 +97,11 @@ type Process struct {
 	hasRun         bool           // Track if process has run before (for --continue flag)
 	wg             sync.WaitGroup // Track goroutines for cleanup synchronization
 	closed         bool           // Track if channels have been closed
+	stdin          io.WriteCloser // stdin pipe for interactive mode
+	stdinMu        sync.Mutex     // Mutex for thread-safe stdin writes
+	interactive    bool           // True if running in interactive mode
+	pendingImages  []string       // Temporary image files to clean up when process closes
+	imagesMu       sync.Mutex     // Mutex for pendingImages access
 }
 
 // NewProcess creates a new Process for a conversation
@@ -252,6 +261,202 @@ func (p *Process) StartWithPromptAndImages(prompt string, imagePaths []string) e
 	return nil
 }
 
+// StartInteractive launches Claude CLI in interactive mode
+// This allows sending multiple messages via stdin while the process is running
+func (p *Process) StartInteractive() error {
+	p.mu.Lock()
+	if p.Status == ProcessStatusRunning {
+		p.mu.Unlock()
+		return fmt.Errorf("process already running")
+	}
+
+	// Reset channels for reuse if this is a subsequent run
+	if p.hasRun {
+		p.mu.Unlock()
+		p.wg.Wait()
+		p.mu.Lock()
+		p.Done = make(chan struct{})
+		p.Output = make(chan OutputMessage, 100)
+		p.Error = make(chan error, 10)
+		p.closeOnce = sync.Once{}
+		p.closed = false
+	}
+	p.mu.Unlock()
+
+	// Build command arguments for interactive mode (no --print flag)
+	// --output-format stream-json: stream JSON chunks for real-time updates
+	// --verbose: required for stream-json
+	// --dangerously-skip-permissions: skip permission prompts for automated usage
+	args := []string{
+		"--output-format", "stream-json",
+		"--verbose",
+		"--dangerously-skip-permissions",
+	}
+
+	// Check if a Claude session file already exists for this conversation
+	sessionExists := p.checkSessionExists()
+	if sessionExists {
+		args = append(args, "--resume", p.ConversationID.String())
+		p.logger.Debug("resuming existing claude session (interactive)",
+			zap.String("conversationID", p.ConversationID.String()))
+	} else {
+		args = append(args, "--session-id", p.ConversationID.String())
+		p.logger.Debug("creating new claude session (interactive)",
+			zap.String("conversationID", p.ConversationID.String()))
+	}
+
+	p.logger.Debug("executing claude command (interactive mode)",
+		zap.Strings("args", args),
+		zap.String("workDir", p.WorkDir))
+
+	cmd := exec.Command("claude", args...)
+	cmd.Dir = p.WorkDir
+	if len(p.Env) > 0 {
+		cmd.Env = append(cmd.Environ(), p.Env...)
+	}
+
+	// Setup stdin pipe for sending messages
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	// Start the process
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start claude: %w", err)
+	}
+
+	p.mu.Lock()
+	p.Cmd = cmd
+	p.stdin = stdin
+	p.interactive = true
+	now := time.Now()
+	p.StartedAt = &now
+	p.Status = ProcessStatusRunning
+	p.hasRun = true
+	p.mu.Unlock()
+
+	p.logger.Info("claude process started (interactive mode)",
+		zap.String("conversationID", p.ConversationID.String()),
+		zap.Int("pid", cmd.Process.Pid))
+
+	// Start goroutines for I/O handling
+	p.wg.Add(3)
+	go func() {
+		defer p.wg.Done()
+		p.readOutput(stdout, "stdout")
+	}()
+	go func() {
+		defer p.wg.Done()
+		p.readOutput(stderr, "stderr")
+	}()
+	go func() {
+		defer p.wg.Done()
+		p.waitForExit()
+	}()
+
+	return nil
+}
+
+// SendMessage sends a message to the running Claude process via stdin
+// This works only in interactive mode (started with StartInteractive)
+// Images are included using @ mentions (e.g., @/path/to/image.png)
+func (p *Process) SendMessage(content string, imagePaths []string) error {
+	p.mu.RLock()
+	if !p.interactive {
+		p.mu.RUnlock()
+		return fmt.Errorf("process not in interactive mode")
+	}
+	if p.Status != ProcessStatusRunning {
+		p.mu.RUnlock()
+		return fmt.Errorf("process not running")
+	}
+	if p.stdin == nil {
+		p.mu.RUnlock()
+		return fmt.Errorf("stdin not available")
+	}
+	p.mu.RUnlock()
+
+	// Build message with image @ mentions if provided
+	message := content
+	if len(imagePaths) > 0 {
+		var imageMentions []string
+		for _, path := range imagePaths {
+			imageMentions = append(imageMentions, "@"+path)
+		}
+		message = strings.Join(imageMentions, " ") + " " + content
+	}
+
+	// Thread-safe write to stdin
+	p.stdinMu.Lock()
+	defer p.stdinMu.Unlock()
+
+	// Write message followed by newline
+	_, err := fmt.Fprintln(p.stdin, message)
+	if err != nil {
+		return fmt.Errorf("failed to write to stdin: %w", err)
+	}
+
+	p.logger.Debug("sent message to claude stdin",
+		zap.String("conversationID", p.ConversationID.String()),
+		zap.Int("contentLength", len(content)),
+		zap.Int("imageCount", len(imagePaths)))
+
+	return nil
+}
+
+// IsInteractive returns true if the process is running in interactive mode
+func (p *Process) IsInteractive() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.interactive
+}
+
+// TrackImages adds image paths to be cleaned up when the process closes
+// This ensures temporary image files are deleted even for queued messages
+func (p *Process) TrackImages(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	p.imagesMu.Lock()
+	defer p.imagesMu.Unlock()
+	p.pendingImages = append(p.pendingImages, paths...)
+	p.logger.Debug("tracking images for cleanup",
+		zap.Int("count", len(paths)),
+		zap.Int("total", len(p.pendingImages)))
+}
+
+// cleanupImages removes all tracked temporary image files
+func (p *Process) cleanupImages() {
+	p.imagesMu.Lock()
+	images := p.pendingImages
+	p.pendingImages = nil
+	p.imagesMu.Unlock()
+
+	if len(images) == 0 {
+		return
+	}
+
+	p.logger.Debug("cleaning up temporary images", zap.Int("count", len(images)))
+	for _, path := range images {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			p.logger.Warn("failed to remove temp image",
+				zap.String("path", path),
+				zap.Error(err))
+		}
+	}
+}
+
 // readOutput reads from a pipe and sends to output channel
 func (p *Process) readOutput(pipe io.Reader, outputType string) {
 	scanner := bufio.NewScanner(pipe)
@@ -370,13 +575,28 @@ func (p *Process) GetStatus() string {
 	return p.Status
 }
 
-// Close closes the process channels safely using sync.Once
+// Close closes the process channels and stdin safely using sync.Once
 // All channels are closed to prevent goroutine leaks
+// Also cleans up any tracked temporary images
 func (p *Process) Close() {
 	p.closeOnce.Do(func() {
+		// First, acquire stdinMu to prevent any concurrent writes
+		// This ensures no SendMessage() is in progress when we close stdin
+		p.stdinMu.Lock()
 		p.mu.Lock()
 		p.closed = true
+		// Close stdin if in interactive mode
+		if p.stdin != nil {
+			p.stdin.Close()
+			p.stdin = nil
+		}
+		p.interactive = false
 		p.mu.Unlock()
+		p.stdinMu.Unlock()
+
+		// Clean up any tracked temporary images
+		p.cleanupImages()
+
 		close(p.Done)
 		close(p.Output)
 		close(p.Error)
