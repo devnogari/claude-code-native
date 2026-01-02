@@ -221,19 +221,25 @@ fun ChatScreenContent(
     // (in loadMessages/loadMessagesFromFilesystem after currentProjectPath is determined)
 
     // Sync messages when app returns to foreground (skip initial resume)
-    // NOTE: Only keyed on lifecycleOwner, NOT conversationId
-    // We don't want to disconnect when switching rooms - only when leaving ChatScreen entirely
+    // NOTE: Keyed on Unit to prevent spurious disconnects on iOS
+    // On iOS, LocalLifecycleOwner.current can change during keyboard events or view transitions,
+    // which would trigger onDispose and disconnect the WebSocket unexpectedly.
+    // Using Unit ensures disconnect only happens when ChatScreen is truly removed from composition.
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    // Use rememberUpdatedState to ensure syncOnForeground always uses the latest callback
+    val currentHasInitialized by rememberUpdatedState(hasInitialized)
+    DisposableEffect(Unit) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME && hasInitialized) {
+            if (event == Lifecycle.Event.ON_RESUME && currentHasInitialized) {
                 println("ChatScreen: ON_RESUME - syncing messages")
                 viewModel.syncOnForeground()
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
+        // Capture the lifecycle owner at effect creation time
+        val capturedLifecycleOwner = lifecycleOwner
+        capturedLifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
+            capturedLifecycleOwner.lifecycle.removeObserver(observer)
             // Only disconnect when truly leaving ChatScreen (e.g., navigating to settings)
             // Not when switching between rooms
             viewModel.disconnect()
