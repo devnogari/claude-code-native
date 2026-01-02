@@ -1687,9 +1687,11 @@ class ChatViewModel(
                             "dequeue", "clear" -> {
                                 // Remove from queued messages and add to messages as pending user message
                                 // This ensures the message stays visible in UI while waiting for history confirmation
-                                val dequeuedMessage = _queuedMessages.value.firstOrNull()
+                                // Capture the dequeued message atomically inside the update block to prevent TOCTOU race
+                                var dequeuedMessage: QueuedMessage? = null
                                 _queuedMessages.update { queue ->
                                     if (queue.isNotEmpty()) {
+                                        dequeuedMessage = queue.first()
                                         println("ChatViewModel: Dequeued message from CLI")
                                         queue.drop(1)
                                     } else {
@@ -1698,18 +1700,18 @@ class ChatViewModel(
                                 }
 
                                 // Add dequeued message to messages list as pending user message
-                                if (dequeuedMessage != null) {
+                                dequeuedMessage?.let { msg ->
                                     val messageId = "pending_${generateMessageId()}"
                                     val userMessage = ChatMessage(
                                         id = messageId,
                                         role = MessageRole.USER,
-                                        blocks = listOf(ContentBlock.Text(dequeuedMessage.content)),
+                                        blocks = listOf(ContentBlock.Text(msg.content)),
                                         isStreaming = false,
                                         isPending = true
                                     )
 
                                     // Track pending message for duplicate prevention
-                                    val normalizedHash = normalizeForComparison(dequeuedMessage.content).hashCode()
+                                    val normalizedHash = normalizeForComparison(msg.content).hashCode()
                                     mutex.withLock {
                                         mapsMutex.withLock {
                                             pendingUserMessages[normalizedHash] = messageId
@@ -1717,6 +1719,9 @@ class ChatViewModel(
                                         _messages.value = _messages.value + userMessage
                                         println("ChatViewModel: Added dequeued message as pending user message (id=$messageId)")
                                     }
+
+                                    // Trigger scroll to bottom for the dequeued message
+                                    _scrollToBottomSignal.update { it + 1 }
                                 }
                             }
                         }
