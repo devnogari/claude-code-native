@@ -21,6 +21,12 @@ const (
 	MessageTypePing = "ping"
 	// MessageTypePong is sent by server in response to ping
 	MessageTypePong = "pong"
+	// MessageTypeQueueAdd is sent by server when a message is added to the queue
+	MessageTypeQueueAdd = "queue_add"
+	// MessageTypeQueueRemove is sent by server when a message is removed from the queue
+	MessageTypeQueueRemove = "queue_remove"
+	// MessageTypeQueueSync is sent by server to sync the full queue state
+	MessageTypeQueueSync = "queue_sync"
 )
 
 // ImageContent represents an image attachment in a chat message
@@ -96,5 +102,35 @@ func createOutgoingComplete(convID interface{ String() string }) *OutgoingMessag
 	return &OutgoingMessage{
 		Type:           MessageTypeComplete,
 		ConversationID: convID.String(),
+	}
+}
+
+// QueueMessage represents a WebSocket message for queue operations
+type QueueMessage struct {
+	Type    string      `json:"type"`
+	Payload interface{} `json:"payload"`
+}
+
+// createQueueAddMessage creates a queue_add message
+func createQueueAddMessage(payload interface{}) *QueueMessage {
+	return &QueueMessage{
+		Type:    MessageTypeQueueAdd,
+		Payload: payload,
+	}
+}
+
+// createQueueRemoveMessage creates a queue_remove message
+func createQueueRemoveMessage(payload interface{}) *QueueMessage {
+	return &QueueMessage{
+		Type:    MessageTypeQueueRemove,
+		Payload: payload,
+	}
+}
+
+// createQueueSyncMessage creates a queue_sync message
+func createQueueSyncMessage(payload interface{}) *QueueMessage {
+	return &QueueMessage{
+		Type:    MessageTypeQueueSync,
+		Payload: payload,
 	}
 }

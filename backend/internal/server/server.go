@@ -14,6 +14,7 @@ import (
 	"github.com/devnogari/claude-code-native/backend/internal/message"
 	"github.com/devnogari/claude-code-native/backend/internal/middleware"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
+	"github.com/devnogari/claude-code-native/backend/internal/queue"
 	"github.com/devnogari/claude-code-native/backend/internal/user"
 	"github.com/devnogari/claude-code-native/backend/internal/ws"
 	"github.com/gofiber/fiber/v2"
@@ -40,6 +41,7 @@ type Server struct {
 	projectHandler      *project.Handler
 	convHandler         *conversation.Handler
 	msgHandler          *message.Handler
+	queueHandler        *queue.Handler
 	wsHandler           *ws.Handler
 	historyHandler      *claude.HistoryHandler
 	historyWatchHandler *claude.HistoryWatchHandler
@@ -58,6 +60,7 @@ type ServerParams struct {
 	ProjectRepo         *project.Repository
 	ConvRepo            *conversation.Repository
 	MsgRepo             *message.Repository
+	QueueHandler        *queue.Handler
 	WSHandler           *ws.Handler
 	SyncHandler         *claude.SyncHandler
 	HistoryHandler      *claude.HistoryHandler
@@ -110,6 +113,7 @@ func New(p ServerParams) *Server {
 		projectHandler:      projectHandler,
 		convHandler:         convHandler,
 		msgHandler:          msgHandler,
+		queueHandler:        p.QueueHandler,
 		wsHandler:           p.WSHandler,
 		historyHandler:      p.HistoryHandler,
 		historyWatchHandler: p.HistoryWatchHandler,
@@ -117,6 +121,9 @@ func New(p ServerParams) *Server {
 		commandHandler:      p.CommandHandler,
 		hookHandler:         hookHandler,
 	}
+
+	// Set up queue handler broadcaster (ws.Handler implements queue.QueueBroadcaster)
+	p.QueueHandler.SetBroadcaster(p.WSHandler)
 
 	s.setupRoutes()
 

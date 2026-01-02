@@ -13,7 +13,14 @@ type Config struct {
 	Database   DatabaseConfig
 	Auth       AuthConfig
 	Claude     ClaudeConfig
+	Storage    StorageConfig
 	HookAPIKey string // API key for hook endpoints (optional, empty allows all)
+}
+
+// StorageConfig holds file storage configuration
+type StorageConfig struct {
+	BasePath string // Local file storage path (e.g., "./uploads")
+	BaseURL  string // URL prefix for serving files (e.g., "/api/v1/images")
 }
 
 // ServerConfig holds HTTP server configuration
@@ -59,6 +66,10 @@ func New() (*Config, error) {
 		},
 		Claude: ClaudeConfig{
 			ProjectsPath: getEnv("CLAUDE_PROJECTS_PATH", "~/.claude"),
+		},
+		Storage: StorageConfig{
+			BasePath: getEnv("STORAGE_PATH", "./uploads"),
+			BaseURL:  getEnv("STORAGE_URL", "/api/v1/images"),
 		},
 		HookAPIKey: getEnv("HOOK_API_KEY", ""), // Empty allows all requests
 	}
