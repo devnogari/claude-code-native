@@ -65,6 +65,7 @@ import com.claudecode.native.ui.viewmodel.ImageSource
 import com.claudecode.native.ui.viewmodel.QueuedMessageSource
 import com.claudecode.native.util.ImagePicker
 import com.claudecode.native.util.PickedImage
+import com.claudecode.native.util.Platform
 import org.koin.compose.koinInject
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.animation.AnimatedVisibility
@@ -181,7 +182,9 @@ fun ChatScreenContent(
 
     val messages by viewModel.messages.collectAsState()
     val isStreaming by viewModel.isStreaming.collectAsState()
-    val queuedMessages by viewModel.queuedMessages.collectAsState()
+    // Re-collect queuedMessages when conversation changes (queuedMessages is a computed property
+    // that returns different StateFlow based on currentConversationId)
+    val queuedMessages by remember(conversationId) { viewModel.queuedMessages }.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
     val conversationTitle by viewModel.conversationTitle.collectAsState()
@@ -1049,9 +1052,13 @@ private fun ChatInputBar(
                     },
                     enabled = true,  // Always enabled - allow typing to queue messages during streaming
                     singleLine = false,
-                    maxLines = 4,
-                    // iOS: Use keyboard send action
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    minLines = 1,
+                    maxLines = 8,  // Allow more lines for multiline input (Shift+Enter to add newlines on desktop)
+                    // iOS: Use Default action to allow Enter for newlines (send via button only)
+                    // Desktop/Web: Use Send action (Enter sends, Shift+Enter for newlines)
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = if (Platform.isIOS) ImeAction.Default else ImeAction.Send
+                    ),
                     keyboardActions = KeyboardActions(
                         onSend = {
                             if (hasContent && isConnected) {

@@ -1882,17 +1882,21 @@ class ChatViewModel(
                                 }
                             }
                             "remove" -> {
-                                // Remove first message from queue (FIFO) - same as dequeue
-                                // Each remove event removes one message at a time
+                                // Remove all messages queued before the remove event timestamp
+                                // This ensures proper cleanup when CLI processes queued messages
+                                val removeTimestamp = claudeMsg.timestamp?.toEpochMilliseconds()
+                                    ?: Clock.System.now().toEpochMilliseconds()
+
                                 val queue = getCurrentQueue()
-                                val removedMessage = queue.firstOrNull()
-                                if (removedMessage != null) {
-                                    println("ChatViewModel: Remove operation - removing first queued message")
-                                    updateCurrentQueue { q -> q.drop(1) }
+                                val messagesToRemove = queue.filter { it.queuedAt <= removeTimestamp }
+
+                                if (messagesToRemove.isNotEmpty()) {
+                                    println("ChatViewModel: Remove operation - removing ${messagesToRemove.size} queued message(s) before timestamp $removeTimestamp")
+                                    updateCurrentQueue { q -> q.filter { it.queuedAt > removeTimestamp } }
                                 }
 
-                                // Add removed message as pending user message
-                                removedMessage?.let { msg ->
+                                // Add removed messages as pending user messages
+                                messagesToRemove.forEach { msg ->
                                     val normalizedContent = normalizeForComparison(msg.content)
                                     val normalizedHash = normalizedContent.hashCode()
 
