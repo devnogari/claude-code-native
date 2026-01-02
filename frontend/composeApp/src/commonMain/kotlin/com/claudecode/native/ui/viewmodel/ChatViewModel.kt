@@ -1845,14 +1845,67 @@ class ChatViewModel(
                                 // Remove all messages queued before the timestamp
                                 // This handles timing issues where multiple messages were queued
                                 val removeTimestamp = claudeMsg.timestamp?.toEpochMilliseconds() ?: Long.MAX_VALUE
+                                var removedMessages: List<QueuedMessage> = emptyList()
                                 _queuedMessages.update { queue ->
                                     val (toRemove, toKeep) = queue.partition { it.queuedAt <= removeTimestamp }
+                                    removedMessages = toRemove
                                     if (toRemove.isNotEmpty()) {
                                         println("ChatViewModel: Remove operation - cleared ${toRemove.size} queued messages (timestamp=$removeTimestamp)")
                                     }
                                     toKeep
                                 }
-                                // Note: No need to add pending messages here - HistoryWatch will provide the actual messages
+
+                                // Add removed messages as pending user messages
+                                // This ensures they appear in the chat while waiting for history confirmation
+                                for (msg in removedMessages) {
+                                    val normalizedContent = normalizeForComparison(msg.content)
+                                    val normalizedHash = normalizedContent.hashCode()
+
+                                    mutex.withLock {
+                                        // Check if already confirmed by HistoryWatch
+                                        val alreadyConfirmed = _messages.value.any { existingMsg ->
+                                            existingMsg.role == MessageRole.USER &&
+                                            !existingMsg.isPending &&
+                                            normalizeForComparison(existingMsg.content) == normalizedContent
+                                        }
+
+                                        if (alreadyConfirmed) {
+                                            println("ChatViewModel: Removed message already confirmed, skipping")
+                                        } else {
+                                            val messageId = "pending_${generateMessageId()}"
+                                            val blocks = mutableListOf<ContentBlock>()
+                                            if (msg.content.isNotBlank()) {
+                                                blocks.add(ContentBlock.Text(msg.content))
+                                            }
+                                            msg.images.forEach { img ->
+                                                blocks.add(ContentBlock.Image(
+                                                    ImageSource.Base64(
+                                                        data = kotlin.io.encoding.Base64.encode(img.data),
+                                                        mediaType = img.mediaType
+                                                    )
+                                                ))
+                                            }
+
+                                            val userMessage = ChatMessage(
+                                                id = messageId,
+                                                role = MessageRole.USER,
+                                                blocks = blocks,
+                                                isStreaming = false,
+                                                isPending = true
+                                            )
+
+                                            mapsMutex.withLock {
+                                                pendingUserMessages[normalizedHash] = messageId
+                                            }
+                                            _messages.value = _messages.value + userMessage
+                                            println("ChatViewModel: Added removed message as pending (id=$messageId)")
+                                        }
+                                    }
+                                }
+
+                                if (removedMessages.isNotEmpty()) {
+                                    _scrollToBottomSignal.update { it + 1 }
+                                }
                             }
                         }
                     }
