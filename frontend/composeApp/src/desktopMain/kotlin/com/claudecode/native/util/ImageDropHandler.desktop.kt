@@ -2,6 +2,7 @@ package com.claudecode.native.util
 
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import java.awt.Window
 import java.awt.datatransfer.DataFlavor
 import java.awt.dnd.*
 import java.io.File
@@ -29,8 +30,8 @@ actual fun Modifier.imageDropTarget(
             return@DisposableEffect onDispose { }
         }
 
-        // Find all frames and add drop target to each
-        val frames = java.awt.Frame.getFrames()
+        // Find all windows (includes ComposeWindow) - more reliable than Frame.getFrames()
+        val windows = Window.getWindows()
         val dropTargets = mutableListOf<DropTarget>()
 
         val dropTargetListener = object : DropTargetListener {
@@ -101,9 +102,11 @@ actual fun Modifier.imageDropTarget(
             }
         }
 
-        frames.forEach { frame ->
-            val dropTarget = DropTarget(frame, DnDConstants.ACTION_COPY, dropTargetListener, true)
-            dropTargets.add(dropTarget)
+        windows.forEach { window ->
+            if (window.isShowing) {
+                val dropTarget = DropTarget(window, DnDConstants.ACTION_COPY, dropTargetListener, true)
+                dropTargets.add(dropTarget)
+            }
         }
 
         onDispose {
