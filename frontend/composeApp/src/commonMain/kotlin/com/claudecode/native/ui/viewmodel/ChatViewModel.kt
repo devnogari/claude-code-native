@@ -1842,22 +1842,21 @@ class ChatViewModel(
                                 }
                             }
                             "remove" -> {
-                                // Remove all messages queued before the timestamp
-                                // This handles timing issues where multiple messages were queued
-                                val removeTimestamp = claudeMsg.timestamp?.toEpochMilliseconds() ?: Long.MAX_VALUE
-                                var removedMessages: List<QueuedMessage> = emptyList()
+                                // Remove first message from queue (FIFO) - same as dequeue
+                                // Each remove event removes one message at a time
+                                var removedMessage: QueuedMessage? = null
                                 _queuedMessages.update { queue ->
-                                    val (toRemove, toKeep) = queue.partition { it.queuedAt <= removeTimestamp }
-                                    removedMessages = toRemove
-                                    if (toRemove.isNotEmpty()) {
-                                        println("ChatViewModel: Remove operation - cleared ${toRemove.size} queued messages (timestamp=$removeTimestamp)")
+                                    if (queue.isNotEmpty()) {
+                                        removedMessage = queue.first()
+                                        println("ChatViewModel: Remove operation - removing first queued message")
+                                        queue.drop(1)
+                                    } else {
+                                        queue
                                     }
-                                    toKeep
                                 }
 
-                                // Add removed messages as pending user messages
-                                // This ensures they appear in the chat while waiting for history confirmation
-                                for (msg in removedMessages) {
+                                // Add removed message as pending user message
+                                removedMessage?.let { msg ->
                                     val normalizedContent = normalizeForComparison(msg.content)
                                     val normalizedHash = normalizedContent.hashCode()
 
@@ -1901,9 +1900,7 @@ class ChatViewModel(
                                             println("ChatViewModel: Added removed message as pending (id=$messageId)")
                                         }
                                     }
-                                }
 
-                                if (removedMessages.isNotEmpty()) {
                                     _scrollToBottomSignal.update { it + 1 }
                                 }
                             }
