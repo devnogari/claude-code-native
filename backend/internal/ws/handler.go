@@ -674,9 +674,23 @@ func (h *Handler) sendStreamToClient(client *Client, content string) {
 func (h *Handler) sendCompleteToClient(client *Client) {
 	msg := createOutgoingComplete(client.ConversationID)
 	data, _ := json.Marshal(msg)
+
+	// Complete message is critical - retry with timeout if buffer is full
 	select {
 	case client.Send <- data:
+		return
 	default:
+		// Buffer full, retry with timeout
+	}
+
+	// Retry with timeout to ensure complete message is delivered
+	select {
+	case client.Send <- data:
+	case <-time.After(2 * time.Second):
+		h.logger.Warn("failed to send complete message: buffer full after timeout",
+			zap.String("clientID", client.ID.String()),
+			zap.String("conversationID", client.ConversationID.String()))
+	case <-client.Done:
 	}
 }
 
