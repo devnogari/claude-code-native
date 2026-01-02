@@ -5,6 +5,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -12,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -19,7 +21,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.claudecode.native.util.openUrl
 
 /**
  * Renders markdown text with basic formatting support.
@@ -48,6 +49,7 @@ fun MarkdownText(
     val codeBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
     val codeTextColor = MaterialTheme.colorScheme.onSurfaceVariant
     val linkColor = MaterialTheme.colorScheme.primary
+    val uriHandler = LocalUriHandler.current
 
     // Parse the markdown into blocks (code blocks vs regular text)
     val blocks = remember(text) { parseMarkdownBlocks(text) }
@@ -69,9 +71,25 @@ fun MarkdownText(
                             parseInlineMarkdown(block.content, color, linkColor, codeBackgroundColor, style)
                         }
 
-                        Text(
+                        // Note: Using ClickableText instead of Text with LinkAnnotation because
+                        // LinkAnnotation.Url doesn't reliably handle clicks on iOS.
+                        // ClickableText is deprecated but works cross-platform.
+                        @Suppress("DEPRECATION")
+                        ClickableText(
                             text = annotatedString,
-                            style = style.copy(color = color)
+                            style = style.copy(color = color),
+                            onClick = { offset ->
+                                annotatedString
+                                    .getStringAnnotations(tag = "URL", start = offset, end = offset)
+                                    .firstOrNull()
+                                    ?.let { annotation ->
+                                        try {
+                                            uriHandler.openUri(annotation.item)
+                                        } catch (e: Exception) {
+                                            println("Failed to open URL: ${annotation.item} - ${e.message}")
+                                        }
+                                    }
+                            }
                         )
                     }
                 }
@@ -423,21 +441,16 @@ private fun AnnotatedString.Builder.appendInlineFormatting(
                     append(remaining.substring(0, i))
                     val linkText = linkMatch.groupValues[1]
                     val url = linkMatch.groupValues[2]
-                    withLink(
-                        LinkAnnotation.Url(
-                            url = url,
-                            linkInteractionListener = { openUrl(url) }
+                    pushStringAnnotation(tag = "URL", annotation = url)
+                    withStyle(
+                        SpanStyle(
+                            color = linkColor,
+                            textDecoration = TextDecoration.Underline
                         )
                     ) {
-                        withStyle(
-                            SpanStyle(
-                                color = linkColor,
-                                textDecoration = TextDecoration.Underline
-                            )
-                        ) {
-                            append(linkText)
-                        }
+                        append(linkText)
                     }
+                    pop()
                     remaining = remaining.substring(i + linkMatch.value.length)
                     i = 0
                 } else {
@@ -451,21 +464,16 @@ private fun AnnotatedString.Builder.appendInlineFormatting(
                 if (urlMatch != null && urlMatch.range.first == 0) {
                     append(remaining.substring(0, i))
                     val url = urlMatch.value.trimEnd('.', ',', ':', ';', '!', '?') // Remove trailing punctuation
-                    withLink(
-                        LinkAnnotation.Url(
-                            url = url,
-                            linkInteractionListener = { openUrl(url) }
+                    pushStringAnnotation(tag = "URL", annotation = url)
+                    withStyle(
+                        SpanStyle(
+                            color = linkColor,
+                            textDecoration = TextDecoration.Underline
                         )
                     ) {
-                        withStyle(
-                            SpanStyle(
-                                color = linkColor,
-                                textDecoration = TextDecoration.Underline
-                            )
-                        ) {
-                            append(url)
-                        }
+                        append(url)
                     }
+                    pop()
                     // Adjust remaining to account for trimmed punctuation
                     val actualLength = url.length
                     remaining = remaining.substring(i + actualLength)
