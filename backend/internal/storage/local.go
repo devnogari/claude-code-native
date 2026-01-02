@@ -146,8 +146,9 @@ func extensionFromMediaType(mediaType string) string {
 	}
 }
 
-// mediaTypeFromExtension returns the media type for a given file extension.
-func mediaTypeFromExtension(ext string) string {
+// MediaTypeFromExtension returns the media type for a given file extension.
+// Exported for use by other packages (e.g., queue handler for serving images).
+func MediaTypeFromExtension(ext string) string {
 	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
 	case "png":
 		return "image/png"
@@ -162,4 +163,10 @@ func mediaTypeFromExtension(ext string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// MediaTypeFromPath returns the media type based on the file path's extension.
+func MediaTypeFromPath(path string) string {
+	ext := filepath.Ext(path)
+	return MediaTypeFromExtension(ext)
 }

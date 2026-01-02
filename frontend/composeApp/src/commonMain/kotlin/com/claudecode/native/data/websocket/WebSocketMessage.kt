@@ -107,7 +107,7 @@ object MessageType {
 data class QueueAddPayload(
     val id: String,
     val content: String,
-    val queuedAt: Long,
+    @SerialName("queued_at") val queuedAt: Long,
     val images: List<QueueImagePayload> = emptyList()
 )
 

@@ -2,9 +2,12 @@ package queue
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"io"
 	"strings"
 
+	"github.com/devnogari/claude-code-native/backend/internal/storage"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofrs/uuid/v5"
 	"go.uber.org/zap"
@@ -14,6 +17,7 @@ import (
 type QueueBroadcaster interface {
 	BroadcastQueueAdd(convID uuid.UUID, msg *QueuedMessage)
 	BroadcastQueueRemove(convID uuid.UUID, messageID uuid.UUID)
+	BroadcastQueueSync(convID uuid.UUID, messages []QueuedMessage)
 }
 
 // ConversationInfo holds minimal conversation data for authorization
@@ -83,7 +87,7 @@ func (h *Handler) verifyConversationAccess(ctx context.Context, conversationID, 
 	// Find the conversation
 	conv, err := h.convFinder.FindConversationByID(ctx, conversationID)
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "conversation not found")
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to get conversation")
@@ -92,7 +96,7 @@ func (h *Handler) verifyConversationAccess(ctx context.Context, conversationID, 
 	// Find the project to verify ownership
 	proj, err := h.projFinder.FindProjectByID(ctx, conv.ProjectID)
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "project not found")
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "failed to get project")
@@ -275,7 +279,7 @@ func (h *Handler) RemoveFromQueue(c *fiber.Ctx) error {
 		})
 	}
 
-	messageID, err := uuid.FromString(c.Params("messageId"))
+	messageID, err := uuid.FromString(c.Params("message_id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "invalid message ID",
@@ -348,6 +352,11 @@ func (h *Handler) ClearQueue(c *fiber.Ctx) error {
 		})
 	}
 
+	// Broadcast queue_sync with empty queue to all clients in this conversation
+	if h.broadcaster != nil {
+		h.broadcaster.BroadcastQueueSync(conversationID, []QueuedMessage{})
+	}
+
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -370,19 +379,8 @@ func (h *Handler) ServeImage(c *fiber.Ctx) error {
 		})
 	}
 
-	// Determine content type from path extension
-	contentType := "application/octet-stream"
-	lowerPath := strings.ToLower(path)
-	switch {
-	case strings.HasSuffix(lowerPath, ".png"):
-		contentType = "image/png"
-	case strings.HasSuffix(lowerPath, ".jpg"), strings.HasSuffix(lowerPath, ".jpeg"):
-		contentType = "image/jpeg"
-	case strings.HasSuffix(lowerPath, ".gif"):
-		contentType = "image/gif"
-	case strings.HasSuffix(lowerPath, ".webp"):
-		contentType = "image/webp"
-	}
+	// Determine content type from path extension using centralized function
+	contentType := storage.MediaTypeFromPath(path)
 
 	c.Set("Content-Type", contentType)
 	c.Set("Cache-Control", "public, max-age=31536000") // Cache for 1 year (images are immutable)

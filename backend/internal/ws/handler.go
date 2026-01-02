@@ -943,3 +943,17 @@ func (h *Handler) BroadcastQueueRemove(convID uuid.UUID, messageID uuid.UUID) {
 	}
 	h.hub.BroadcastToConversation(convID, data)
 }
+
+// BroadcastQueueSync broadcasts a queue_sync message to all clients in a conversation
+func (h *Handler) BroadcastQueueSync(convID uuid.UUID, messages []queue.QueuedMessage) {
+	payload := queue.QueueSyncPayload{
+		Messages: queue.ToResponseList(messages, h.queueService.GetImageURL),
+	}
+	wsMsg := createQueueSyncMessage(payload)
+	data, err := json.Marshal(wsMsg)
+	if err != nil {
+		h.logger.Error("failed to marshal queue sync message", zap.Error(err))
+		return
+	}
+	h.hub.BroadcastToConversation(convID, data)
+}

@@ -91,7 +91,11 @@ func (s *service) AddToQueue(ctx context.Context, conversationID, userID uuid.UU
 		if err := s.repo.CreateImage(ctx, img); err != nil {
 			s.logger.Error("failed to create image record", zap.Error(err))
 			// Try to clean up the saved file
-			_ = s.storage.Delete(ctx, storagePath)
+			if delErr := s.storage.Delete(ctx, storagePath); delErr != nil {
+				s.logger.Warn("failed to clean up orphaned image file",
+					zap.String("path", storagePath),
+					zap.Error(delErr))
+			}
 			continue
 		}
 

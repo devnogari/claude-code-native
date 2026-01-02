@@ -74,7 +74,7 @@ func ToResponseList(messages []QueuedMessage, getImageURL func(string) string) [
 type QueueAddPayload struct {
 	ID             uuid.UUID             `json:"id"`
 	Content        string                `json:"content"`
-	QueuedAt       int64                 `json:"queuedAt"` // Unix milliseconds
+	QueuedAt       int64                 `json:"queued_at"` // Unix milliseconds
 	Images         []QueuedImageResponse `json:"images,omitempty"`
 }
 
