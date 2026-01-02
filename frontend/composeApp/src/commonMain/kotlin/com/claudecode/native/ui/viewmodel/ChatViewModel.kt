@@ -1822,7 +1822,7 @@ class ChatViewModel(
                                 _queuedMessages.update { queue -> queue + cliQueuedMessage }
                                 println("ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")
                             }
-                            "dequeue", "clear" -> {
+                            "dequeue", "clear", "remove" -> {
                                 // Remove from queued messages and add to messages as pending user message
                                 // This ensures the message stays visible in UI while waiting for history confirmation
                                 // Capture the dequeued message atomically inside the update block to prevent TOCTOU race
@@ -1830,7 +1830,7 @@ class ChatViewModel(
                                 _queuedMessages.update { queue ->
                                     if (queue.isNotEmpty()) {
                                         dequeuedMessage = queue.first()
-                                        println("ChatViewModel: Dequeued message from CLI")
+                                        println("ChatViewModel: Dequeued message from CLI (operation=$operation)")
                                         queue.drop(1)
                                     } else {
                                         queue
