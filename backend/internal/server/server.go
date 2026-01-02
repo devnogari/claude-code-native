@@ -93,7 +93,7 @@ func New(p ServerParams) *Server {
 
 	// Create hook handler with adapter
 	hookRepoAdapter := hook.NewProjectRepoAdapter(p.ProjectRepo)
-	hookHandler := hook.NewHandler(hookRepoAdapter, p.Config.HookAPIKey)
+	hookHandler := hook.NewHandler(hookRepoAdapter, p.Config.HookAPIKey, p.Logger)
 
 	s := &Server{
 		app:                 app,

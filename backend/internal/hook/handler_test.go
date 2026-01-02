@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // mockProjectRepo implements ProjectRepository for testing
@@ -32,6 +34,11 @@ func (m *mockProjectRepo) MarkCompleted(ctx context.Context, id uuid.UUID, compl
 		return m.markCompletedFn(ctx, id, completed)
 	}
 	return errors.New("not implemented")
+}
+
+func testLogger() *zap.Logger {
+	// Use nop logger for tests to avoid noise
+	return zap.NewNop()
 }
 
 func setupTestApp(handler *Handler) *fiber.App {
@@ -56,7 +63,7 @@ func TestSessionComplete_Success(t *testing.T) {
 			if path == "/Users/test/project" {
 				return project, nil
 			}
-			return nil, errors.New("sql: no rows in result set")
+			return nil, sql.ErrNoRows
 		},
 		markCompletedFn: func(ctx context.Context, id uuid.UUID, completed bool) error {
 			assert.Equal(t, projectID, id)
@@ -65,7 +72,7 @@ func TestSessionComplete_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewHandler(repo, "")
+	handler := NewHandler(repo, "", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -110,7 +117,7 @@ func TestSessionComplete_WithAPIKey_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewHandler(repo, "secret-api-key")
+	handler := NewHandler(repo, "secret-api-key", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -145,7 +152,7 @@ func TestSessionComplete_WithBearerToken_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewHandler(repo, "secret-api-key")
+	handler := NewHandler(repo, "secret-api-key", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -165,7 +172,7 @@ func TestSessionComplete_WithBearerToken_Success(t *testing.T) {
 
 func TestSessionComplete_InvalidAPIKey(t *testing.T) {
 	repo := &mockProjectRepo{}
-	handler := NewHandler(repo, "secret-api-key")
+	handler := NewHandler(repo, "secret-api-key", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -185,7 +192,7 @@ func TestSessionComplete_InvalidAPIKey(t *testing.T) {
 
 func TestSessionComplete_MissingAPIKey(t *testing.T) {
 	repo := &mockProjectRepo{}
-	handler := NewHandler(repo, "secret-api-key")
+	handler := NewHandler(repo, "secret-api-key", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -204,7 +211,7 @@ func TestSessionComplete_MissingAPIKey(t *testing.T) {
 
 func TestSessionComplete_MissingSessionID(t *testing.T) {
 	repo := &mockProjectRepo{}
-	handler := NewHandler(repo, "")
+	handler := NewHandler(repo, "", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -227,7 +234,7 @@ func TestSessionComplete_MissingSessionID(t *testing.T) {
 
 func TestSessionComplete_MissingCwd(t *testing.T) {
 	repo := &mockProjectRepo{}
-	handler := NewHandler(repo, "")
+	handler := NewHandler(repo, "", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -251,11 +258,11 @@ func TestSessionComplete_MissingCwd(t *testing.T) {
 func TestSessionComplete_ProjectNotFound(t *testing.T) {
 	repo := &mockProjectRepo{
 		findByPathAnyUserFn: func(ctx context.Context, path string) (*Project, error) {
-			return nil, errors.New("sql: no rows in result set")
+			return nil, sql.ErrNoRows
 		},
 	}
 
-	handler := NewHandler(repo, "")
+	handler := NewHandler(repo, "", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -292,7 +299,7 @@ func TestSessionReopen_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewHandler(repo, "")
+	handler := NewHandler(repo, "", testLogger())
 	app := setupTestApp(handler)
 
 	reqBody := SessionCompleteRequest{
@@ -318,7 +325,7 @@ func TestSessionReopen_Success(t *testing.T) {
 
 func TestSessionComplete_InvalidJSON(t *testing.T) {
 	repo := &mockProjectRepo{}
-	handler := NewHandler(repo, "")
+	handler := NewHandler(repo, "", testLogger())
 	app := setupTestApp(handler)
 
 	req := httptest.NewRequest("POST", "/api/v1/hooks/session-complete", bytes.NewReader([]byte("invalid json")))
@@ -327,4 +334,82 @@ func TestSessionComplete_InvalidJSON(t *testing.T) {
 	resp, err := app.Test(req)
 	require.NoError(t, err)
 	assert.Equal(t, fiber.StatusBadRequest, resp.StatusCode)
+}
+
+func TestSessionComplete_MarkCompletedFails(t *testing.T) {
+	projectID, _ := uuid.NewV7()
+	project := &Project{
+		ID:   projectID,
+		Name: "Test Project",
+		Path: "/Users/test/project",
+	}
+
+	repo := &mockProjectRepo{
+		findByPathAnyUserFn: func(ctx context.Context, path string) (*Project, error) {
+			return project, nil
+		},
+		markCompletedFn: func(ctx context.Context, id uuid.UUID, completed bool) error {
+			return errors.New("database error")
+		},
+	}
+
+	handler := NewHandler(repo, "", testLogger())
+	app := setupTestApp(handler)
+
+	reqBody := SessionCompleteRequest{
+		SessionID: "abc123",
+		Cwd:       "/Users/test/project",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest("POST", "/api/v1/hooks/session-complete", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	assert.Equal(t, fiber.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestSessionComplete_FindProjectInternalError(t *testing.T) {
+	repo := &mockProjectRepo{
+		findByPathAnyUserFn: func(ctx context.Context, path string) (*Project, error) {
+			return nil, errors.New("database connection error")
+		},
+	}
+
+	handler := NewHandler(repo, "", testLogger())
+	app := setupTestApp(handler)
+
+	reqBody := SessionCompleteRequest{
+		SessionID: "abc123",
+		Cwd:       "/Users/test/project",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest("POST", "/api/v1/hooks/session-complete", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	assert.Equal(t, fiber.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestSessionReopen_InvalidAPIKey(t *testing.T) {
+	repo := &mockProjectRepo{}
+	handler := NewHandler(repo, "secret-api-key", testLogger())
+	app := setupTestApp(handler)
+
+	reqBody := SessionCompleteRequest{
+		SessionID: "abc123",
+		Cwd:       "/Users/test/project",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest("POST", "/api/v1/hooks/session-reopen", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "wrong-key")
+
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	assert.Equal(t, fiber.StatusUnauthorized, resp.StatusCode)
 }

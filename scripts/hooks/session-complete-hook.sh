@@ -37,17 +37,13 @@ ENDPOINT="${API_URL}/api/v1/hooks/session-complete"
 # Read JSON input from stdin
 INPUT=$(cat)
 
-# Extract fields from JSON using jq (install if not present)
+# Check for jq dependency
 if ! command -v jq &> /dev/null; then
-    echo "Warning: jq not installed, attempting to install..." >&2
-    if command -v brew &> /dev/null; then
-        brew install jq
-    elif command -v apt-get &> /dev/null; then
-        sudo apt-get install -y jq
-    else
-        echo "Error: jq is required but not installed. Please install jq." >&2
-        exit 1
-    fi
+    echo "Error: jq is required but not installed. Please install jq:" >&2
+    echo "  - macOS: brew install jq" >&2
+    echo "  - Ubuntu/Debian: sudo apt-get install jq" >&2
+    echo "  - Fedora: sudo dnf install jq" >&2
+    exit 1
 fi
 
 # Parse the input JSON
