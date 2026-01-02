@@ -1022,10 +1022,12 @@ class ChatViewModel(
             return
         }
 
-        // If streaming is in progress, queue the message (with limit check)
+        // If streaming is in progress, queue the message and send immediately
+        // Claude Code CLI will handle the queuing on its side
         // Use atomic update to prevent race conditions with concurrent queue operations
         if (_isStreaming.value) {
             var wasQueueFull = false
+            var addedMessage: QueuedMessage? = null
             _queuedMessages.update { queue ->
                 if (queue.size >= maxQueuedMessages) {
                     wasQueueFull = true
@@ -1037,12 +1039,30 @@ class ChatViewModel(
                         queuedAt = Clock.System.now().toEpochMilliseconds(),
                         source = QueuedMessageSource.LOCAL
                     )
+                    addedMessage = queuedMessage
                     println("ChatViewModel: Queued message while streaming (id=${queuedMessage.id}): ${content.take(50)}...")
                     queue + queuedMessage
                 }
             }
             if (wasQueueFull) {
                 _error.value = "Message queue is full ($maxQueuedMessages messages). Please wait for current response to complete."
+            } else {
+                // Trigger scroll to bottom when message is queued
+                _scrollToBottomSignal.update { it + 1 }
+
+                // Send the queued message immediately - Claude Code CLI handles its own queue
+                // The message will be processed by Claude when ready
+                addedMessage?.let { msg ->
+                    scope.launch {
+                        try {
+                            println("ChatViewModel: Sending queued message to CLI (id=${msg.id})")
+                            webSocketClient.sendChat(msg.content)
+                        } catch (e: Exception) {
+                            println("ChatViewModel: Failed to send queued message: ${e.message}")
+                            // Message stays in queue for display - user can cancel and resend if needed
+                        }
+                    }
+                }
             }
             return
         }
@@ -1201,24 +1221,15 @@ class ChatViewModel(
     }
 
     /**
-     * Processes the next queued message, if any.
-     * Called after streaming completes.
-     * Uses atomic update to prevent race conditions.
+     * Logs queue status when streaming completes.
+     * Messages are now sent immediately when queued, so this function only
+     * logs the queue state for debugging. Queue is cleared via dequeue events from CLI.
      */
-    private suspend fun processNextQueuedMessage() {
-        var nextMessageContent: String? = null
-        _queuedMessages.update { queue ->
-            if (queue.isNotEmpty()) {
-                val nextMessage = queue.first()
-                nextMessageContent = nextMessage.content
-                println("ChatViewModel: Processing queued message (id=${nextMessage.id}): ${nextMessage.content.take(50)}...")
-                queue.drop(1)
-            } else {
-                queue
-            }
+    private suspend fun logQueueStatusOnStreamingComplete() {
+        val currentQueue = _queuedMessages.value
+        if (currentQueue.isNotEmpty()) {
+            println("ChatViewModel: Streaming complete, ${currentQueue.size} messages in queue (already sent to CLI)")
         }
-        // Send outside of update to avoid nested state modifications
-        nextMessageContent?.let { sendMessageInternal(it) }
     }
 
     /**
@@ -1882,8 +1893,8 @@ class ChatViewModel(
         // Trigger scroll to bottom signal for UI (atomic update)
         _scrollToBottomSignal.update { it + 1 }
 
-        // Process next queued message if any (outside the lock to avoid deadlock)
-        processNextQueuedMessage()
+        // Log queue status (messages are already sent to CLI, cleared via dequeue events)
+        logQueueStatusOnStreamingComplete()
     }
 
     @OptIn(ExperimentalUuidApi::class)
