@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -20,7 +21,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.claudecode.native.util.openUrl
 
 /**
  * Renders markdown text with basic formatting support.
@@ -49,6 +49,7 @@ fun MarkdownText(
     val codeBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
     val codeTextColor = MaterialTheme.colorScheme.onSurfaceVariant
     val linkColor = MaterialTheme.colorScheme.primary
+    val uriHandler = LocalUriHandler.current
 
     // Parse the markdown into blocks (code blocks vs regular text)
     val blocks = remember(text) { parseMarkdownBlocks(text) }
@@ -71,8 +72,8 @@ fun MarkdownText(
                         }
 
                         // Note: Using ClickableText instead of Text with LinkAnnotation because
-                        // LinkAnnotation.Url doesn't reliably handle clicks on iOS and Desktop.
-                        // Using platform-specific openUrl() for reliable cross-platform URL opening.
+                        // LinkAnnotation.Url doesn't reliably handle clicks on iOS.
+                        // ClickableText is deprecated but works cross-platform.
                         @Suppress("DEPRECATION")
                         ClickableText(
                             text = annotatedString,
@@ -82,7 +83,11 @@ fun MarkdownText(
                                     .getStringAnnotations(tag = "URL", start = offset, end = offset)
                                     .firstOrNull()
                                     ?.let { annotation ->
-                                        openUrl(annotation.item)
+                                        try {
+                                            uriHandler.openUri(annotation.item)
+                                        } catch (e: Exception) {
+                                            println("Failed to open URL: ${annotation.item} - ${e.message}")
+                                        }
                                     }
                             }
                         )
