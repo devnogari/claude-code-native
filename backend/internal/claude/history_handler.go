@@ -403,6 +403,12 @@ func (h *HistoryHandler) GetSessionState(c *fiber.Ctx) error {
 	// Determine session state from messages
 	sessionState := GetSessionState(messages)
 
+	// Debug logging for session state determination
+	h.logger.Debug("GetSessionState result",
+		zap.String("sessionID", sessionID),
+		zap.String("sessionState", string(sessionState)),
+		zap.Int("messageCount", len(messages)))
+
 	// Get todos for this session
 	todos, _ := GetSessionTodos(sessionID)
 	if todos == nil {
