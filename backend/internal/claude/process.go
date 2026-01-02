@@ -283,11 +283,15 @@ func (p *Process) StartInteractive() error {
 	}
 	p.mu.Unlock()
 
-	// Build command arguments for interactive mode (no --print flag)
+	// Build command arguments for streaming mode with JSON input/output
+	// --print: required for --input-format
+	// --input-format stream-json: accept JSON messages via stdin
 	// --output-format stream-json: stream JSON chunks for real-time updates
-	// --verbose: required for stream-json
+	// --verbose: required for stream-json output
 	// --dangerously-skip-permissions: skip permission prompts for automated usage
 	args := []string{
+		"--print",
+		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--dangerously-skip-permissions",
@@ -368,9 +372,29 @@ func (p *Process) StartInteractive() error {
 	return nil
 }
 
+// StreamInputMessage represents a JSON message sent to Claude CLI via stdin
+// when using --input-format stream-json
+type StreamInputMessage struct {
+	Type    string              `json:"type"`
+	Message StreamInputContent `json:"message"`
+}
+
+// StreamInputContent represents the message content for stream-json input
+type StreamInputContent struct {
+	Role    string               `json:"role"`
+	Content []StreamContentBlock `json:"content"`
+}
+
+// StreamContentBlock represents a content block in the input message
+type StreamContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
 // SendMessage sends a message to the running Claude process via stdin
-// This works only in interactive mode (started with StartInteractive)
-// Images are included using @ mentions (e.g., @/path/to/image.png)
+// This works only in streaming mode (started with StartInteractive)
+// Messages are formatted as JSON for --input-format stream-json
+// Images are included using @ mentions in the text content
 func (p *Process) SendMessage(content string, imagePaths []string) error {
 	p.mu.RLock()
 	if !p.interactive {
@@ -387,22 +411,38 @@ func (p *Process) SendMessage(content string, imagePaths []string) error {
 	}
 	p.mu.RUnlock()
 
-	// Build message with image @ mentions if provided
-	message := content
+	// Build message text with image @ mentions if provided
+	messageText := content
 	if len(imagePaths) > 0 {
 		var imageMentions []string
 		for _, path := range imagePaths {
 			imageMentions = append(imageMentions, "@"+path)
 		}
-		message = strings.Join(imageMentions, " ") + " " + content
+		messageText = strings.Join(imageMentions, " ") + " " + content
+	}
+
+	// Create JSON message for stream-json input format
+	inputMsg := StreamInputMessage{
+		Type: "user",
+		Message: StreamInputContent{
+			Role: "user",
+			Content: []StreamContentBlock{
+				{Type: "text", Text: messageText},
+			},
+		},
+	}
+
+	jsonBytes, err := json.Marshal(inputMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
 	// Thread-safe write to stdin
 	p.stdinMu.Lock()
 	defer p.stdinMu.Unlock()
 
-	// Write message followed by newline
-	_, err := fmt.Fprintln(p.stdin, message)
+	// Write JSON message followed by newline
+	_, err = fmt.Fprintln(p.stdin, string(jsonBytes))
 	if err != nil {
 		return fmt.Errorf("failed to write to stdin: %w", err)
 	}
