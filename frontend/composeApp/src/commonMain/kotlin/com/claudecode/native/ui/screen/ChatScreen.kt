@@ -178,7 +178,9 @@ fun ChatScreenContent(
     val scrollToBottomSignal by viewModel.scrollToBottomSignal.collectAsState()
     val isDraftSession by viewModel.isDraftSession.collectAsState()
     val sessionCreatedEvent by viewModel.sessionCreatedEvent.collectAsState()
-    val progressStatus by viewModel.progressStatus.collectAsState()
+    // Re-collect progressStatus when conversation changes (progressStatus is a computed property
+    // that returns different StateFlow based on currentConversationId)
+    val progressStatus by remember(conversationId) { viewModel.progressStatus }.collectAsState()
     val attachedImages by viewModel.attachedImages.collectAsState()
 
     // Image picker
