@@ -136,6 +136,14 @@ private fun CodeBlockView(
 }
 
 /**
+ * Data class for cached code block line info
+ */
+private data class CodeLineInfo(
+    val line: String,
+    val colorType: Int // 0=default, 1=dimmed, 2=addition, 3=deletion, 4=hunk
+)
+
+/**
  * Renders diff code with colored lines.
  * - Lines starting with + are green (additions)
  * - Lines starting with - are red (deletions)
@@ -151,33 +159,50 @@ private fun DiffCodeBlock(
     val hunkHeaderColor = Color(0xFF60A5FA) // Blue
     val additionBgColor = Color(0xFF22C55E).copy(alpha = 0.15f)
     val deletionBgColor = Color(0xFFEF4444).copy(alpha = 0.15f)
+    val dimmedColor = textColor.copy(alpha = 0.7f)
+
+    // Cache parsed lines to avoid recomputing on each recomposition
+    val parsedLines = remember(code) {
+        code.lines().map { line ->
+            val colorType = when {
+                line.startsWith("+++") || line.startsWith("---") -> 1
+                line.startsWith("+") -> 2
+                line.startsWith("-") -> 3
+                line.startsWith("@@") -> 4
+                else -> 0
+            }
+            CodeLineInfo(line, colorType)
+        }
+    }
 
     Column {
-        code.lines().forEach { line ->
-            val (lineColor, bgColor) = when {
-                line.startsWith("+++") || line.startsWith("---") -> textColor.copy(alpha = 0.7f) to Color.Transparent
-                line.startsWith("+") -> additionColor to additionBgColor
-                line.startsWith("-") -> deletionColor to deletionBgColor
-                line.startsWith("@@") -> hunkHeaderColor to Color.Transparent
-                else -> textColor to Color.Transparent
-            }
-
-            Text(
-                text = line,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 20.sp
-                ),
-                color = lineColor,
-                modifier = if (bgColor != Color.Transparent) {
-                    Modifier
-                        .fillMaxWidth()
-                        .background(bgColor)
-                        .padding(horizontal = 4.dp)
-                } else {
-                    Modifier.padding(horizontal = 4.dp)
+        parsedLines.forEachIndexed { index, lineInfo ->
+            androidx.compose.runtime.key(index) {
+                val (lineColor, bgColor) = when (lineInfo.colorType) {
+                    1 -> dimmedColor to Color.Transparent
+                    2 -> additionColor to additionBgColor
+                    3 -> deletionColor to deletionBgColor
+                    4 -> hunkHeaderColor to Color.Transparent
+                    else -> textColor to Color.Transparent
                 }
-            )
+
+                Text(
+                    text = lineInfo.line,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 20.sp
+                    ),
+                    color = lineColor,
+                    modifier = if (bgColor != Color.Transparent) {
+                        Modifier
+                            .fillMaxWidth()
+                            .background(bgColor)
+                            .padding(horizontal = 4.dp)
+                    } else {
+                        Modifier.padding(horizontal = 4.dp)
+                    }
+                )
+            }
         }
     }
 }

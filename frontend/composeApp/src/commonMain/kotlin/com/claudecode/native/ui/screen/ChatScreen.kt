@@ -558,8 +558,13 @@ fun ChatScreenContent(
             }
 
             // Messages list - filter out empty messages
-            val filteredMessages = messages.filter { msg ->
-                msg.blocks.isNotEmpty()
+            // Memoize to avoid recreating on every recomposition
+            val filteredMessages = remember(messages) {
+                messages.filter { msg -> msg.blocks.isNotEmpty() }
+            }
+            // Pre-compute reversed list for LazyColumn with reverseLayout
+            val reversedMessages = remember(filteredMessages) {
+                filteredMessages.reversed()
             }
 
             Box(
@@ -620,7 +625,7 @@ fun ChatScreenContent(
 
                     // Messages in reverse order (newest at index 0 = bottom)
                     items(
-                        items = filteredMessages.reversed(),
+                        items = reversedMessages,
                         key = { it.id }
                     ) { message ->
                         MessageBubble(message = message)
