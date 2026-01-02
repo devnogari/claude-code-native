@@ -1811,6 +1811,12 @@ class ChatViewModel(
 
                         when (operation) {
                             "enqueue" -> {
+                                // Skip system notifications (bash-notification, etc.) - not user messages
+                                if (queueContent.trimStart().startsWith("<bash-notification>")) {
+                                    println("ChatViewModel: Skipping bash-notification enqueue (not a user message)")
+                                    continue
+                                }
+
                                 // Add to queued messages (from Claude CLI's perspective)
                                 // Use UUID-style ID to avoid timestamp collision
                                 val cliQueuedMessage = QueuedMessage(
