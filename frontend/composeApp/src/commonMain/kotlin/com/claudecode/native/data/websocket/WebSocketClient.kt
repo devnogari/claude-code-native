@@ -1,6 +1,7 @@
 package com.claudecode.native.data.websocket
 
 import com.claudecode.native.data.storage.TokenStorage
+import com.claudecode.native.util.DebugLogger
 import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
@@ -55,6 +56,7 @@ class WebSocketClient(
     private val config: WebSocketConfig = WebSocketConfig()
 ) {
     companion object {
+        private const val TAG = "WebSocketClient"
         private const val DEFAULT_HOST = "localhost:8083"
         private const val API_PATH = "/api/v1"
     }
@@ -267,12 +269,17 @@ class WebSocketClient(
      * @throws IllegalStateException if not connected
      */
     suspend fun send(message: OutgoingMessage) {
+        DebugLogger.d(TAG, "send() called, type=${message.type}, hasContent=${message.content != null}, hasImages=${message.images?.isNotEmpty() == true}")
         mutex.withLock {
             val currentSession = session
             if (currentSession == null || _connectionState.value != ConnectionState.Connected) {
+                DebugLogger.e(TAG, "ERROR - not connected! session=$currentSession, state=${_connectionState.value}")
                 throw IllegalStateException("WebSocket is not connected")
             }
-            currentSession.send(Frame.Text(json.encodeToString(message)))
+            val jsonMsg = json.encodeToString(message)
+            DebugLogger.d(TAG, "Sending frame, length=${jsonMsg.length}, preview=${jsonMsg.take(200)}...")
+            currentSession.send(Frame.Text(jsonMsg))
+            DebugLogger.d(TAG, "Frame sent successfully")
         }
     }
 
@@ -282,6 +289,7 @@ class WebSocketClient(
      * @param content The user's message content
      */
     suspend fun sendChat(content: String) {
+        DebugLogger.d(TAG, "sendChat() called, content='${content.take(50)}...'")
         send(OutgoingMessage.chat(content))
     }
 
@@ -292,6 +300,10 @@ class WebSocketClient(
      * @param images List of base64-encoded images to attach
      */
     suspend fun sendChatWithImages(content: String, images: List<ImageContentDto>) {
+        DebugLogger.d(TAG, "sendChatWithImages() called, content='${content.take(50)}...', imageCount=${images.size}")
+        images.forEachIndexed { idx, img ->
+            DebugLogger.d(TAG, "  image[$idx]: mediaType=${img.mediaType}, dataLength=${img.data.length}")
+        }
         send(OutgoingMessage.chatWithImages(content, images))
     }
 

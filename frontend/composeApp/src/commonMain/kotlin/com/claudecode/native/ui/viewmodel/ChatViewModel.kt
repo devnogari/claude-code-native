@@ -18,6 +18,7 @@ import com.claudecode.native.data.websocket.MessageType
 import com.claudecode.native.data.websocket.ImageContentDto
 import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.ui.component.ProgressStatus
+import com.claudecode.native.util.DebugLogger
 import com.claudecode.native.util.toUserMessage
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -229,6 +230,7 @@ class ChatViewModel(
     // Key: content hash, Value: message ID
     private val pendingUserMessages = mutableMapOf<Int, String>()
     companion object {
+        private const val TAG = "ChatViewModel"
         /** Marker for draft sessions that haven't been created yet. */
         const val DRAFT_SESSION_MARKER = "draft"
         /** Number of attempts to wait for WebSocket connection. */
@@ -1066,14 +1068,21 @@ class ChatViewModel(
      * @param content The message text to send
      */
     fun sendMessage(content: String) {
+        DebugLogger.d(TAG, "sendMessage() ENTRY: content='${content.take(50)}...'")
         val images = _attachedImages.value
-        if (content.isBlank() && images.isEmpty()) return
+        DebugLogger.d(TAG, "sendMessage(): attachedImages=${images.size}, isDraft=${_isDraftSession.value}, connectionState=${connectionState.value}, isStreaming=${_isStreaming.value}")
+
+        if (content.isBlank() && images.isEmpty()) {
+            DebugLogger.d(TAG, "sendMessage(): EARLY RETURN - content blank and no images")
+            return
+        }
 
         // Clear attached images immediately after capturing them
         _attachedImages.value = emptyList()
 
         // For draft sessions, we need to create the session first
         if (_isDraftSession.value) {
+            DebugLogger.d(TAG, "sendMessage(): Draft session - calling createSessionAndSendMessage()")
             scope.launch {
                 createSessionAndSendMessage(content, images)
             }
@@ -1081,6 +1090,7 @@ class ChatViewModel(
         }
 
         if (connectionState.value != ConnectionState.Connected) {
+            DebugLogger.w(TAG, "sendMessage(): EARLY RETURN - not connected!")
             _error.value = "Not connected"
             return
         }
@@ -1090,6 +1100,7 @@ class ChatViewModel(
         // Both text and image messages can be queued
         // Use atomic update to prevent race conditions with concurrent queue operations
         if (_isStreaming.value) {
+            DebugLogger.d(TAG, "sendMessage(): Streaming in progress - queueing message")
             var wasQueueFull = false
             var addedMessage: QueuedMessage? = null
             _queuedMessages.update { queue ->
@@ -1105,7 +1116,7 @@ class ChatViewModel(
                         images = images
                     )
                     addedMessage = queuedMessage
-                    println("ChatViewModel: Queued message while streaming (id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")
+                    DebugLogger.d(TAG, "Queued message while streaming (id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")
                     queue + queuedMessage
                 }
             }
@@ -1125,7 +1136,7 @@ class ChatViewModel(
                 addedMessage?.let { msg ->
                     scope.launch {
                         try {
-                            println("ChatViewModel: Sending queued message to CLI (id=${msg.id})")
+                            DebugLogger.d(TAG, "Sending queued message to CLI (id=${msg.id})")
                             if (msg.images.isEmpty()) {
                                 webSocketClient.sendChat(msg.content)
                             } else {
@@ -1139,7 +1150,7 @@ class ChatViewModel(
                                 webSocketClient.sendChatWithImages(msg.content, imageDtos)
                             }
                         } catch (e: Exception) {
-                            println("ChatViewModel: Failed to send queued message: ${e.message}")
+                            DebugLogger.e(TAG, "Failed to send queued message: ${e.message}", e)
                             // Remove the failed message from queue and show error to user
                             _queuedMessages.update { queue ->
                                 queue.filter { it.id != msg.id }
@@ -1152,6 +1163,7 @@ class ChatViewModel(
             return
         }
 
+        DebugLogger.d(TAG, "sendMessage(): Not streaming - calling sendMessageInternal()")
         scope.launch {
             sendMessageInternal(content, images)
         }
@@ -1257,6 +1269,7 @@ class ChatViewModel(
      */
     @OptIn(ExperimentalEncodingApi::class)
     private suspend fun sendMessageInternal(content: String, images: List<AttachedImage> = emptyList()) {
+        DebugLogger.d(TAG, "sendMessageInternal() ENTRY: content='${content.take(50)}...', imageCount=${images.size}")
         try {
             // Build content blocks (text + images)
             val blocks = mutableListOf<ContentBlock>()
@@ -1283,31 +1296,43 @@ class ChatViewModel(
             // Use normalized content hash to handle whitespace differences in serialization
             // Lock ordering: mutex (#2) → mapsMutex (#3) to prevent deadlocks
             val normalizedHash = normalizeForComparison(content).hashCode()
-            println("ChatViewModel: Added pending user message (hash=$normalizedHash, images=${images.size}): ${content.take(50)}...")
+            DebugLogger.d(TAG, "Added pending user message (hash=$normalizedHash, images=${images.size}): ${content.take(50)}...")
 
             mutex.withLock {
                 mapsMutex.withLock {
                     pendingUserMessages[normalizedHash] = messageId
                 }
                 _messages.value = _messages.value + userMessage
-                println("ChatViewModel:1054 - Added user message id=${userMessage.id}, total=${_messages.value.size}")
+                DebugLogger.d(TAG, "Added user message id=${userMessage.id}, total=${_messages.value.size}")
             }
 
             // Trigger scroll to bottom for the new user message (atomic update)
             _scrollToBottomSignal.update { it + 1 }
 
             // Send via WebSocket (with images if present)
-            if (images.isEmpty()) {
-                webSocketClient.sendChat(content)
-            } else {
-                val imageDtos = images.map { img ->
-                    ImageContentDto(
-                        type = "base64",
-                        mediaType = img.mediaType,
-                        data = Base64.encode(img.data)
-                    )
+            DebugLogger.d(TAG, "About to send message via WebSocket, content='${content.take(50)}...', imageCount=${images.size}")
+            try {
+                if (images.isEmpty()) {
+                    DebugLogger.d(TAG, "Calling webSocketClient.sendChat()")
+                    webSocketClient.sendChat(content)
+                    DebugLogger.d(TAG, "sendChat() completed successfully")
+                } else {
+                    DebugLogger.d(TAG, "Preparing imageDtos for ${images.size} images")
+                    val imageDtos = images.map { img ->
+                        DebugLogger.d(TAG, "  Converting image: mediaType=${img.mediaType}, dataSize=${img.data.size}")
+                        ImageContentDto(
+                            type = "base64",
+                            mediaType = img.mediaType,
+                            data = Base64.encode(img.data)
+                        )
+                    }
+                    DebugLogger.d(TAG, "Calling webSocketClient.sendChatWithImages()")
+                    webSocketClient.sendChatWithImages(content, imageDtos)
+                    DebugLogger.d(TAG, "sendChatWithImages() completed successfully")
                 }
-                webSocketClient.sendChatWithImages(content, imageDtos)
+            } catch (e: Exception) {
+                DebugLogger.e(TAG, "ERROR sending message: ${e.message}", e)
+                throw e
             }
 
             // Prepare for streaming response (use streamingMutex for consistency with other handlers)
