@@ -68,21 +68,24 @@ actual object ImageResizer {
         val outputMediaType = if (outputAsJpeg) "image/jpeg" else mediaType
 
         // Resize the image (with white background for JPEG to handle transparency)
-        val resizedImage = if (needsScaling) {
+        val resizedImageOrNull: UIImage? = if (needsScaling) {
             resizeImage(originalImage, newWidth, newHeight, opaqueBackground = outputAsJpeg)
         } else if (outputAsJpeg) {
             // Need to add white background even without scaling for JPEG conversion
             resizeImage(originalImage, originalWidth.toInt(), originalHeight.toInt(), opaqueBackground = true)
         } else {
             originalImage
-        } ?: return ResizedImage(data, mediaType, wasResized = false)
+        }
+
+        val resizedImage = resizedImageOrNull
+            ?: return ResizedImage(data, mediaType, wasResized = false)
 
         // Compress to target format
-        val outputData = if (outputAsJpeg) {
+        val outputData = (if (outputAsJpeg) {
             UIImageJPEGRepresentation(resizedImage, config.quality.toDouble())
         } else {
             UIImagePNGRepresentation(resizedImage)
-        } ?: return ResizedImage(data, mediaType, wasResized = false)
+        }) ?: return ResizedImage(data, mediaType, wasResized = false)
 
         val outputBytes = outputData.toByteArray()
 
