@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.ui.viewmodel.ChatMessage
 import com.claudecode.native.ui.viewmodel.ContentBlock
+import com.claudecode.native.ui.viewmodel.ImageSource
 import com.claudecode.native.ui.viewmodel.ToolUseInfo
 
 /**
@@ -110,15 +111,18 @@ fun MessageBubble(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (isUser) {
-                // User messages: render all text blocks as a single bubble
+                // User messages: render text blocks and image blocks
                 val textContent = message.blocks
                     .filterIsInstance<ContentBlock.Text>()
                     .joinToString("\n\n") { it.content }
+                val imageBlocks = message.blocks.filterIsInstance<ContentBlock.Image>()
 
-                if (textContent.isNotBlank()) {
-                    Column(
-                        horizontalAlignment = Alignment.End
-                    ) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Render text bubble if there's text content
+                    if (textContent.isNotBlank()) {
                         Box(
                             modifier = Modifier
                                 .widthIn(max = userMaxWidth)
@@ -138,25 +142,33 @@ fun MessageBubble(
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
+                    }
 
-                        // Show pending indicator for user messages
-                        if (message.isPending) {
-                            Row(
-                                modifier = Modifier.padding(top = 4.dp, end = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(10.dp),
-                                    strokeWidth = 1.5.dp,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                                Text(
-                                    text = "Sending...",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
+                    // Render attached images
+                    imageBlocks.forEach { imageBlock ->
+                        ImageBlock(
+                            source = imageBlock.source,
+                            modifier = Modifier.widthIn(max = userMaxWidth)
+                        )
+                    }
+
+                    // Show pending indicator for user messages
+                    if (message.isPending) {
+                        Row(
+                            modifier = Modifier.padding(top = 4.dp, end = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(10.dp),
+                                strokeWidth = 1.5.dp,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            Text(
+                                text = "Sending...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
                         }
                     }
                 }
@@ -196,6 +208,12 @@ fun MessageBubble(
                             Box(modifier = Modifier.widthIn(max = assistantMaxWidth)) {
                                 ToolUseItem(tool = block.info)
                             }
+                        }
+                        is ContentBlock.Image -> {
+                            ImageBlock(
+                                source = block.source,
+                                modifier = Modifier.widthIn(max = assistantMaxWidth)
+                            )
                         }
                     }
                 }
@@ -386,6 +404,43 @@ private fun MessageInspectDialog(
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.error
                                             )
+                                        }
+                                    }
+                                }
+                            }
+                            is ContentBlock.Image -> {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(8.dp)
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "[$index] Image Block",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        when (val source = block.source) {
+                                            is ImageSource.Base64 -> {
+                                                Text(
+                                                    text = "Type: Base64",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = "Media Type: ${source.mediaType}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = "Data Size: ${source.data.length} chars",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     }
                                 }

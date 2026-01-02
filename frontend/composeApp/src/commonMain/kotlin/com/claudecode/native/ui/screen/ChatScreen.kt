@@ -48,6 +48,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import com.claudecode.native.data.websocket.ConnectionState
+import com.claudecode.native.ui.component.AttachedImagesPreview
 import com.claudecode.native.ui.component.MessageBubble
 import com.claudecode.native.ui.component.QueuedMessageBubble
 import com.claudecode.native.ui.component.ProcessingIndicator
@@ -55,9 +56,12 @@ import com.claudecode.native.ui.component.SlashCommand
 import com.claudecode.native.ui.component.SlashCommandMenu
 import com.claudecode.native.ui.component.StatusLine
 import com.claudecode.native.ui.component.toSlashCommand
+import com.claudecode.native.ui.viewmodel.AttachedImage
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.ContentBlock
 import com.claudecode.native.ui.viewmodel.QueuedMessageSource
+import com.claudecode.native.util.ImagePicker
+import com.claudecode.native.util.PickedImage
 import org.koin.compose.koinInject
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.animation.AnimatedVisibility
@@ -175,6 +179,10 @@ fun ChatScreenContent(
     val isDraftSession by viewModel.isDraftSession.collectAsState()
     val sessionCreatedEvent by viewModel.sessionCreatedEvent.collectAsState()
     val progressStatus by viewModel.progressStatus.collectAsState()
+    val attachedImages by viewModel.attachedImages.collectAsState()
+
+    // Image picker
+    val imagePicker = remember { ImagePicker() }
 
     // Notify when a new session is created from draft mode
     LaunchedEffect(sessionCreatedEvent) {
@@ -687,6 +695,20 @@ fun ChatScreenContent(
                 onInputChange = { inputText = it },
                 isStreaming = isStreaming,
                 isConnected = connectionState == ConnectionState.Connected || isDraftSession,
+                attachedImages = attachedImages,
+                onAttachImages = {
+                    coroutineScope.launch {
+                        val pickedImages = imagePicker.pickImages()
+                        pickedImages.forEach { picked ->
+                            viewModel.addAttachedImage(
+                                data = picked.data,
+                                mediaType = picked.mediaType,
+                                fileName = picked.fileName
+                            )
+                        }
+                    }
+                },
+                onRemoveImage = { imageId -> viewModel.removeAttachedImage(imageId) },
                 onSend = {
                     // Check if it's a slash command
                     if (inputText.startsWith("/")) {
@@ -831,7 +853,7 @@ private fun ConnectionStatusBar(
 }
 
 /**
- * Input bar for composing and sending messages.
+ * Input bar for composing and sending messages with image attachment support.
  */
 @Composable
 private fun ChatInputBar(
@@ -839,109 +861,142 @@ private fun ChatInputBar(
     onInputChange: (String) -> Unit,
     isStreaming: Boolean,
     isConnected: Boolean,
+    attachedImages: List<AttachedImage> = emptyList(),
+    onAttachImages: () -> Unit = {},
+    onRemoveImage: (String) -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
     canFocus: Boolean = true,
     modifier: Modifier = Modifier
 ) {
+    val hasContent = inputText.isNotBlank() || attachedImages.isNotEmpty()
+
     Surface(
         modifier = modifier,
         tonalElevation = 2.dp,
         shape = MaterialTheme.shapes.large
     ) {
-        Row(
-            modifier = Modifier.padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Column(
+            modifier = Modifier.padding(8.dp)
         ) {
-            OutlinedTextField(
-                value = inputText,
-                onValueChange = onInputChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .focusProperties { this.canFocus = canFocus }
-                    .onPreviewKeyEvent { keyEvent ->
-                        when {
-                            // ESC to stop streaming (Desktop)
-                            keyEvent.key == Key.Escape && keyEvent.type == KeyEventType.KeyDown && isStreaming -> {
-                                onStop()
-                                true // Consume the event
-                            }
-                            // Desktop: Enter to send (without Shift), Shift+Enter for newline
-                            keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown -> {
-                                if (!keyEvent.isShiftPressed && inputText.isNotBlank() && isConnected) {
-                                    onSend()
-                                    true // Consume the event
-                                } else {
-                                    // Shift+Enter or empty input: let TextField handle naturally
-                                    // (singleLine=false allows TextField to insert newline at cursor position)
-                                    false
-                                }
-                            }
-                            else -> false
-                        }
-                    },
-                placeholder = {
-                    Text(
-                        if (!isConnected) "Read-only (viewing history)"
-                        else if (isStreaming) "Type to queue message..."
-                        else "Type a message..."
-                    )
-                },
-                enabled = true,  // Always enabled - allow typing to queue messages during streaming
-                singleLine = false,
-                maxLines = 4,
-                // iOS: Use keyboard send action
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(
-                    onSend = {
-                        if (inputText.isNotBlank() && isConnected) {
-                            onSend()
-                        }
-                    }
+            // Attached images preview row
+            if (attachedImages.isNotEmpty()) {
+                AttachedImagesPreview(
+                    images = attachedImages,
+                    onRemove = onRemoveImage,
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
-            )
+            }
 
-            // Show both Stop button (when streaming) and Send button (always)
-            if (isStreaming) {
-                // Stop button during streaming
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Image attachment button
                 IconButton(
-                    onClick = onStop,
+                    onClick = onAttachImages,
+                    enabled = isConnected && !isStreaming
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = "Attach image",
+                        tint = if (isConnected && !isStreaming) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        }
+                    )
+                }
+
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = onInputChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusProperties { this.canFocus = canFocus }
+                        .onPreviewKeyEvent { keyEvent ->
+                            when {
+                                // ESC to stop streaming (Desktop)
+                                keyEvent.key == Key.Escape && keyEvent.type == KeyEventType.KeyDown && isStreaming -> {
+                                    onStop()
+                                    true // Consume the event
+                                }
+                                // Desktop: Enter to send (without Shift), Shift+Enter for newline
+                                keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown -> {
+                                    if (!keyEvent.isShiftPressed && hasContent && isConnected) {
+                                        onSend()
+                                        true // Consume the event
+                                    } else {
+                                        // Shift+Enter or empty input: let TextField handle naturally
+                                        // (singleLine=false allows TextField to insert newline at cursor position)
+                                        false
+                                    }
+                                }
+                                else -> false
+                            }
+                        },
+                    placeholder = {
+                        Text(
+                            if (!isConnected) "Read-only (viewing history)"
+                            else if (isStreaming) "Type to queue message..."
+                            else "Type a message..."
+                        )
+                    },
+                    enabled = true,  // Always enabled - allow typing to queue messages during streaming
+                    singleLine = false,
+                    maxLines = 4,
+                    // iOS: Use keyboard send action
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (hasContent && isConnected) {
+                                onSend()
+                            }
+                        }
+                    )
+                )
+
+                // Show both Stop button (when streaming) and Send button (always)
+                if (isStreaming) {
+                    // Stop button during streaming
+                    IconButton(
+                        onClick = onStop,
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Stop generation"
+                        )
+                    }
+                }
+
+                // Send button - always visible, queues message during streaming
+                IconButton(
+                    onClick = onSend,
+                    enabled = hasContent && isConnected,
                     colors = IconButtonDefaults.iconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        containerColor = if (isStreaming) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        contentColor = if (isStreaming) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onPrimary
+                        },
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 ) {
                     Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Stop generation"
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = if (isStreaming) "Queue message" else "Send message"
                     )
                 }
-            }
-
-            // Send button - always visible, queues message during streaming
-            IconButton(
-                onClick = onSend,
-                enabled = inputText.isNotBlank() && isConnected,
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = if (isStreaming) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-                    contentColor = if (isStreaming) {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onPrimary
-                    },
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = if (isStreaming) "Queue message" else "Send message"
-                )
             }
         }
     }

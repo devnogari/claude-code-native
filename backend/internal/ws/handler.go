@@ -2,8 +2,12 @@ package ws
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/devnogari/claude-code-native/backend/internal/claude"
@@ -333,7 +337,7 @@ func (h *Handler) writePump(client *Client) {
 func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPath string, claudeSessionID uuid.UUID, isFilesystemSession bool) {
 	switch msg.Type {
 	case MessageTypeChat:
-		h.handleChatMessage(client, msg.Content, projectPath, claudeSessionID, isFilesystemSession)
+		h.handleChatMessage(client, msg.Content, msg.Images, projectPath, claudeSessionID, isFilesystemSession)
 	case MessageTypeStop:
 		h.handleStopMessage(client, claudeSessionID)
 	case MessageTypePing:
@@ -347,8 +351,8 @@ func (h *Handler) handleMessage(client *Client, msg *IncomingMessage, projectPat
 }
 
 // handleChatMessage processes a chat message from the client
-func (h *Handler) handleChatMessage(client *Client, content, projectPath string, claudeSessionID uuid.UUID, isFilesystemSession bool) {
-	if content == "" {
+func (h *Handler) handleChatMessage(client *Client, content string, images []ImageContent, projectPath string, claudeSessionID uuid.UUID, isFilesystemSession bool) {
+	if content == "" && len(images) == 0 {
 		h.sendErrorToClient(client, "empty message content")
 		return
 	}
@@ -365,8 +369,29 @@ func (h *Handler) handleChatMessage(client *Client, content, projectPath string,
 		zap.String("conversationID", convID.String()),
 		zap.String("claudeSessionID", claudeSessionID.String()),
 		zap.Int("contentLength", len(content)),
+		zap.Int("imageCount", len(images)),
 		zap.String("projectPath", projectPath),
 		zap.Bool("isFilesystemSession", isFilesystemSession))
+
+	// Save images to temporary files for Claude CLI
+	var imagePaths []string
+	if len(images) > 0 {
+		var err error
+		imagePaths, err = h.saveImagesToTemp(images)
+		if err != nil {
+			h.logger.Error("failed to save images", zap.Error(err))
+			h.sendErrorToClient(client, "failed to process images")
+			return
+		}
+		// Clean up temp files after processing
+		defer func() {
+			for _, path := range imagePaths {
+				if err := os.Remove(path); err != nil {
+					h.logger.Warn("failed to remove temp image", zap.String("path", path), zap.Error(err))
+				}
+			}
+		}()
+	}
 
 	// For database-based sessions, save the user message
 	// For filesystem sessions, Claude CLI manages its own history
@@ -382,7 +407,7 @@ func (h *Handler) handleChatMessage(client *Client, content, projectPath string,
 			return
 		}
 
-		// Save the user message
+		// Save the user message (content only, images are not persisted in DB)
 		userMsg := &message.Message{
 			ConversationID: convID,
 			Role:           message.RoleUser,
@@ -421,10 +446,10 @@ func (h *Handler) handleChatMessage(client *Client, content, projectPath string,
 		return
 	}
 
-	// Start Claude with the prompt
+	// Start Claude with the prompt and images
 	// Uses --resume flag if session file exists, --session-id for new sessions
-	h.logger.Debug("starting claude with prompt", zap.Int("promptLen", len(content)))
-	if err := process.StartWithPrompt(content); err != nil {
+	h.logger.Debug("starting claude with prompt", zap.Int("promptLen", len(content)), zap.Int("imageCount", len(imagePaths)))
+	if err := process.StartWithPromptAndImages(content, imagePaths); err != nil {
 		h.logger.Error("failed to start claude process", zap.Error(err))
 		h.sendErrorToClient(client, "failed to start Claude CLI")
 		return
@@ -665,3 +690,107 @@ func (h *Handler) waitForAuthMessage(c *websocket.Conn) (uuid.UUID, error) {
 	h.logger.Debug("user authenticated via auth message", zap.String("userID", userID.String()))
 	return userID, nil
 }
+
+// saveImagesToTemp saves base64-encoded images to temporary files
+// Returns the file paths and any error encountered
+func (h *Handler) saveImagesToTemp(images []ImageContent) ([]string, error) {
+	var paths []string
+
+	for i, img := range images {
+		if img.Type != "base64" {
+			return nil, fmt.Errorf("unsupported image type: %s", img.Type)
+		}
+
+		// Decode base64 data
+		data, err := base64.StdEncoding.DecodeString(img.Data)
+		if err != nil {
+			// Clean up any files we've already created
+			for _, p := range paths {
+				os.Remove(p)
+			}
+			return nil, fmt.Errorf("failed to decode image %d: %w", i, err)
+		}
+
+		// Determine file extension from media type
+		ext := getExtensionFromMediaType(img.MediaType)
+
+		// Create temp file
+		tmpFile, err := os.CreateTemp("", fmt.Sprintf("claude-image-*%s", ext))
+		if err != nil {
+			for _, p := range paths {
+				os.Remove(p)
+			}
+			return nil, fmt.Errorf("failed to create temp file: %w", err)
+		}
+
+		// Write image data
+		if _, err := tmpFile.Write(data); err != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			for _, p := range paths {
+				os.Remove(p)
+			}
+			return nil, fmt.Errorf("failed to write image data: %w", err)
+		}
+
+		tmpFile.Close()
+		paths = append(paths, tmpFile.Name())
+
+		h.logger.Debug("saved image to temp file",
+			zap.Int("index", i),
+			zap.String("path", tmpFile.Name()),
+			zap.String("mediaType", img.MediaType),
+			zap.Int("size", len(data)))
+	}
+
+	return paths, nil
+}
+
+// getExtensionFromMediaType returns the file extension for a given media type
+func getExtensionFromMediaType(mediaType string) string {
+	// Handle common image types
+	switch strings.ToLower(mediaType) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/bmp":
+		return ".bmp"
+	case "image/svg+xml":
+		return ".svg"
+	default:
+		// Try to extract from media type
+		parts := strings.Split(mediaType, "/")
+		if len(parts) == 2 {
+			return "." + parts[1]
+		}
+		return ".img"
+	}
+}
+
+// getMediaTypeFromExtension returns the media type for a given file extension
+func getMediaTypeFromExtension(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".bmp":
+		return "image/bmp"
+	case ".svg":
+		return "image/svg+xml"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// unused but kept for potential future use
+var _ = filepath.Base

@@ -119,6 +119,13 @@ func (p *Process) Start() error {
 // StartWithPrompt launches Claude CLI with the given prompt
 // Uses --print for non-interactive mode and --continue for conversation context
 func (p *Process) StartWithPrompt(prompt string) error {
+	return p.StartWithPromptAndImages(prompt, nil)
+}
+
+// StartWithPromptAndImages launches Claude CLI with the given prompt and optional images
+// Uses --print for non-interactive mode and --continue for conversation context
+// Images are passed using the --images flag (comma-separated file paths)
+func (p *Process) StartWithPromptAndImages(prompt string, imagePaths []string) error {
 	p.mu.Lock()
 	if p.Status == ProcessStatusRunning {
 		p.mu.Unlock()
@@ -169,6 +176,14 @@ func (p *Process) StartWithPrompt(prompt string) error {
 			zap.String("conversationID", p.ConversationID.String()))
 	}
 
+	// Add image paths if provided
+	// Claude CLI accepts --images flag with comma-separated paths
+	if len(imagePaths) > 0 {
+		args = append(args, "--images", strings.Join(imagePaths, ","))
+		p.logger.Debug("adding images to claude command",
+			zap.Strings("imagePaths", imagePaths))
+	}
+
 	// Add the prompt as the final argument
 	args = append(args, prompt)
 
@@ -209,7 +224,8 @@ func (p *Process) StartWithPrompt(prompt string) error {
 	p.logger.Info("claude process started",
 		zap.String("conversationID", p.ConversationID.String()),
 		zap.Int("pid", cmd.Process.Pid),
-		zap.String("sessionID", p.ConversationID.String()))
+		zap.String("sessionID", p.ConversationID.String()),
+		zap.Int("imageCount", len(imagePaths)))
 
 	// Start goroutines for I/O handling with WaitGroup tracking
 	p.wg.Add(3)

@@ -14,9 +14,12 @@ import com.claudecode.native.data.websocket.HistoryWatchClient
 import com.claudecode.native.data.websocket.HistoryWatchEvent
 import com.claudecode.native.data.websocket.IncomingMessage
 import com.claudecode.native.data.websocket.MessageType
+import com.claudecode.native.data.websocket.ImageContentDto
 import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.ui.component.ProgressStatus
 import com.claudecode.native.util.toUserMessage
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.uuid.ExperimentalUuidApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -121,6 +124,45 @@ class ChatViewModel(
     private var pendingSessionCreatedEmit: SessionCreatedInfo? = null
     private val sessionCreatedMutex = Mutex()
 
+
+    private val _attachedImages = MutableStateFlow<List<AttachedImage>>(emptyList())
+    /** Images attached to the current message before sending. */
+    val attachedImages: StateFlow<List<AttachedImage>> = _attachedImages.asStateFlow()
+
+    /**
+     * Adds an image to the attachment list.
+     * Each image is assigned a unique ID for tracking.
+     *
+     * @param data Raw image bytes
+     * @param mediaType MIME type of the image (e.g., "image/png")
+     * @param fileName Optional filename for display
+     */
+    @OptIn(ExperimentalUuidApi::class)
+    fun addAttachedImage(data: ByteArray, mediaType: String, fileName: String? = null) {
+        val image = AttachedImage(
+            id = kotlin.uuid.Uuid.random().toString(),
+            data = data,
+            mediaType = mediaType,
+            fileName = fileName
+        )
+        _attachedImages.update { it + image }
+    }
+
+    /**
+     * Removes an image from the attachment list by ID.
+     *
+     * @param imageId The unique ID of the image to remove
+     */
+    fun removeAttachedImage(imageId: String) {
+        _attachedImages.update { images -> images.filter { it.id != imageId } }
+    }
+
+    /**
+     * Clears all attached images.
+     */
+    fun clearAttachedImages() {
+        _attachedImages.value = emptyList()
+    }
 
     private val _availableCommands = MutableStateFlow<List<Command>>(emptyList())
     /** Available slash commands (builtin + custom). */
@@ -1003,16 +1045,21 @@ class ChatViewModel(
      * Creates a user message locally and sends it via WebSocket.
      * If streaming is in progress, queues the message for later.
      * For draft sessions, creates the actual session on first message.
+     * Includes any attached images with the message.
      *
      * @param content The message text to send
      */
     fun sendMessage(content: String) {
-        if (content.isBlank()) return
+        val images = _attachedImages.value
+        if (content.isBlank() && images.isEmpty()) return
+
+        // Clear attached images immediately after capturing them
+        _attachedImages.value = emptyList()
 
         // For draft sessions, we need to create the session first
         if (_isDraftSession.value) {
             scope.launch {
-                createSessionAndSendMessage(content)
+                createSessionAndSendMessage(content, images)
             }
             return
         }
@@ -1024,8 +1071,13 @@ class ChatViewModel(
 
         // If streaming is in progress, queue the message and send immediately
         // Claude Code CLI will handle the queuing on its side
+        // Note: Images are not queued - only text messages can be queued
         // Use atomic update to prevent race conditions with concurrent queue operations
         if (_isStreaming.value) {
+            if (images.isNotEmpty()) {
+                _error.value = "Cannot attach images while streaming. Please wait for current response to complete."
+                return
+            }
             var wasQueueFull = false
             var addedMessage: QueuedMessage? = null
             _queuedMessages.update { queue ->
@@ -1068,7 +1120,7 @@ class ChatViewModel(
         }
 
         scope.launch {
-            sendMessageInternal(content)
+            sendMessageInternal(content, images)
         }
     }
 
@@ -1077,7 +1129,7 @@ class ChatViewModel(
      * This is called when user sends the first message in a draft session.
      */
     @OptIn(ExperimentalUuidApi::class)
-    private suspend fun createSessionAndSendMessage(content: String) {
+    private suspend fun createSessionAndSendMessage(content: String, images: List<AttachedImage> = emptyList()) {
         val encodedPath = currentEncodedPath ?: run {
             _error.value = "No project path available"
             return
@@ -1140,8 +1192,8 @@ class ChatViewModel(
             println("ChatViewModel: Connecting history watch for new session: $encodedPath / $newSessionId")
             historyWatchClient.connect(encodedPath, newSessionId, token)
 
-            // Now send the message
-            sendMessageInternal(content)
+            // Now send the message with images
+            sendMessageInternal(content, images)
 
             // Defer session created event until first server response (STREAM message)
             // HistoryWatch serves as fallback for edge cases where STREAM may be missed
@@ -1170,14 +1222,26 @@ class ChatViewModel(
      * Internal implementation to send a message.
      * Called directly or after processing from queue.
      */
-    private suspend fun sendMessageInternal(content: String) {
+    @OptIn(ExperimentalEncodingApi::class)
+    private suspend fun sendMessageInternal(content: String, images: List<AttachedImage> = emptyList()) {
         try {
+            // Build content blocks (text + images)
+            val blocks = mutableListOf<ContentBlock>()
+            if (content.isNotBlank()) {
+                blocks.add(ContentBlock.Text(content))
+            }
+            // Add image blocks for display
+            images.forEach { img ->
+                val base64Data = Base64.encode(img.data)
+                blocks.add(ContentBlock.Image(ImageSource.Base64(base64Data, img.mediaType)))
+            }
+
             // Add user message to the list (marked as pending until confirmed)
             val messageId = generateMessageId()
             val userMessage = ChatMessage(
                 id = messageId,
                 role = MessageRole.USER,
-                blocks = listOf(ContentBlock.Text(content)),
+                blocks = blocks,
                 isStreaming = false,
                 isPending = true  // Mark as pending until confirmed by history watch
             )
@@ -1186,7 +1250,7 @@ class ChatViewModel(
             // Use normalized content hash to handle whitespace differences in serialization
             // Lock ordering: mutex (#2) → mapsMutex (#3) to prevent deadlocks
             val normalizedHash = normalizeForComparison(content).hashCode()
-            println("ChatViewModel: Added pending user message (hash=$normalizedHash): ${content.take(50)}...")
+            println("ChatViewModel: Added pending user message (hash=$normalizedHash, images=${images.size}): ${content.take(50)}...")
 
             mutex.withLock {
                 mapsMutex.withLock {
@@ -1199,8 +1263,19 @@ class ChatViewModel(
             // Trigger scroll to bottom for the new user message (atomic update)
             _scrollToBottomSignal.update { it + 1 }
 
-            // Send via WebSocket
-            webSocketClient.sendChat(content)
+            // Send via WebSocket (with images if present)
+            if (images.isEmpty()) {
+                webSocketClient.sendChat(content)
+            } else {
+                val imageDtos = images.map { img ->
+                    ImageContentDto(
+                        type = "base64",
+                        mediaType = img.mediaType,
+                        data = Base64.encode(img.data)
+                    )
+                }
+                webSocketClient.sendChatWithImages(content, imageDtos)
+            }
 
             // Prepare for streaming response (use streamingMutex for consistency with other handlers)
             streamingMutex.withLock {
