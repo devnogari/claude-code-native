@@ -392,8 +392,8 @@ fun ProjectListScreenContent(
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(
-                                start = 16.dp,
-                                end = 16.dp,
+                                start = 8.dp,
+                                end = 8.dp,
                                 top = 8.dp,
                                 bottom = 88.dp // FAB space
                             ),
@@ -541,17 +541,17 @@ private fun ProjectItem(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onToggleExpand() }
-                    .padding(16.dp),
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     if (isExpanded) Icons.Default.FolderOpen else Icons.Default.Folder,
                     contentDescription = null,
-                    modifier = Modifier.size(40.dp),
+                    modifier = Modifier.size(32.dp),
                     tint = MaterialTheme.colorScheme.primary
                 )
 
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -586,19 +586,27 @@ private fun ProjectItem(
                 }
 
                 // Favorite toggle
-                IconButton(onClick = onToggleFavorite) {
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.size(36.dp)
+                ) {
                     Icon(
                         if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                         contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                        modifier = Modifier.size(20.dp),
                         tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
                 // Delete project button
-                IconButton(onClick = onDeleteProject) {
+                IconButton(
+                    onClick = onDeleteProject,
+                    modifier = Modifier.size(36.dp)
+                ) {
                     Icon(
                         Icons.Default.Delete,
                         contentDescription = "Delete project",
+                        modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
                     )
                 }
@@ -607,6 +615,7 @@ private fun ProjectItem(
                 Icon(
                     if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    modifier = Modifier.size(20.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

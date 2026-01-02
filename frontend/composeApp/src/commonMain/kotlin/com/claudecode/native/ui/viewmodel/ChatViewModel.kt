@@ -997,6 +997,13 @@ class ChatViewModel(
                         return@launch
                     }
 
+                    // Skip message sync for draft sessions or sessions with no messages yet
+                    // (new conversations don't need to reload messages)
+                    if (_isDraftSession.value || _messages.value.isEmpty()) {
+                        println("ChatViewModel: Skipping message sync - draft session or no messages yet")
+                        return@launch
+                    }
+
                     // Reload messages from filesystem
                     println("ChatViewModel: Syncing messages on foreground for $encodedPath / $sessionId")
                     loadMessagesFromFilesystem(encodedPath, sessionId, convId, "SYNC")
@@ -2233,13 +2240,15 @@ class ChatViewModel(
         // Get or create progress status flow for this conversation
         val progressFlow = _progressStatusMap.getOrPut(convId) { MutableStateFlow(ProgressStatus()) }
 
-        // Initialize progress status
+        // Initialize progress status while preserving existing todos
+        val existingTodos = progressFlow.value.todos
         progressFlow.value = ProgressStatus(
             statusText = statusText,
             elapsedSeconds = 0,
             tokenCount = null,
             thinkingSeconds = null,
-            isActive = true
+            isActive = true,
+            todos = existingTodos  // Preserve existing todos
         )
 
         // Cancel existing job for this conversation if any
@@ -2277,7 +2286,11 @@ class ChatViewModel(
 
         val progressFlow = _progressStatusMap[convId]
         println("ChatViewModel: stopProgressTracking() - progressFlow exists: ${progressFlow != null}, setting isActive=false")
-        progressFlow?.value = ProgressStatus(isActive = false)
+        // Preserve existing todos when stopping progress tracking
+        progressFlow?.let { flow ->
+            val existingTodos = flow.value.todos
+            flow.value = ProgressStatus(isActive = false, todos = existingTodos)
+        }
     }
 
 }
