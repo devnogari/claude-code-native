@@ -46,10 +46,8 @@ class MessageManager {
 
     /**
      * Current offset for pagination (number of messages already loaded).
-     * This is a simple counter, not protected by mutex since it's
-     * typically accessed synchronously during pagination logic.
+     * Access is synchronized via mutex in pagination operations.
      */
-    @Volatile
     private var currentOffset: Int = 0
 
     // ===== Message List Operations =====
