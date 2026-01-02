@@ -1074,13 +1074,9 @@ class ChatViewModel(
 
         // If streaming is in progress, queue the message and send immediately
         // Claude Code CLI will handle the queuing on its side
-        // Note: Images are not queued - only text messages can be queued
+        // Both text and image messages can be queued
         // Use atomic update to prevent race conditions with concurrent queue operations
         if (_isStreaming.value) {
-            if (images.isNotEmpty()) {
-                _error.value = "Cannot attach images while streaming. Please wait for current response to complete."
-                return
-            }
             var wasQueueFull = false
             var addedMessage: QueuedMessage? = null
             _queuedMessages.update { queue ->
@@ -1092,16 +1088,22 @@ class ChatViewModel(
                         id = generateMessageId(),
                         content = content,
                         queuedAt = Clock.System.now().toEpochMilliseconds(),
-                        source = QueuedMessageSource.LOCAL
+                        source = QueuedMessageSource.LOCAL,
+                        images = images
                     )
                     addedMessage = queuedMessage
-                    println("ChatViewModel: Queued message while streaming (id=${queuedMessage.id}): ${content.take(50)}...")
+                    println("ChatViewModel: Queued message while streaming (id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")
                     queue + queuedMessage
                 }
             }
             if (wasQueueFull) {
                 _error.value = "Message queue is full ($maxQueuedMessages messages). Please wait for current response to complete."
             } else {
+                // Clear attached images after queuing
+                if (images.isNotEmpty()) {
+                    clearAttachedImages()
+                }
+
                 // Trigger scroll to bottom when message is queued
                 _scrollToBottomSignal.update { it + 1 }
 
@@ -1111,7 +1113,18 @@ class ChatViewModel(
                     scope.launch {
                         try {
                             println("ChatViewModel: Sending queued message to CLI (id=${msg.id})")
-                            webSocketClient.sendChat(msg.content)
+                            if (msg.images.isEmpty()) {
+                                webSocketClient.sendChat(msg.content)
+                            } else {
+                                val imageDtos = msg.images.map { img ->
+                                    ImageContentDto(
+                                        type = "base64",
+                                        mediaType = img.mediaType,
+                                        data = Base64.encode(img.data)
+                                    )
+                                }
+                                webSocketClient.sendChatWithImages(msg.content, imageDtos)
+                            }
                         } catch (e: Exception) {
                             println("ChatViewModel: Failed to send queued message: ${e.message}")
                             // Message stays in queue for display - user can cancel and resend if needed
