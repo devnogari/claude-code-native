@@ -59,6 +59,7 @@ import com.claudecode.native.ui.component.toSlashCommand
 import com.claudecode.native.ui.viewmodel.AttachedImage
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.ContentBlock
+import com.claudecode.native.ui.viewmodel.ImageSource
 import com.claudecode.native.ui.viewmodel.QueuedMessageSource
 import com.claudecode.native.util.ImagePicker
 import com.claudecode.native.util.PickedImage
@@ -594,8 +595,16 @@ fun ChatScreenContent(
                             // Position in queue (1-based, from original order)
                             // reversedQueue[0] is the last item in queue
                             val queuePosition = totalQueueSize - index
+                            // Convert AttachedImages to ImageSource for display
+                            val imageSources = queuedMsg.images.map { img ->
+                                ImageSource.Base64(
+                                    data = kotlin.io.encoding.Base64.encode(img.data),
+                                    mediaType = img.mediaType
+                                )
+                            }
                             QueuedMessageBubble(
                                 content = queuedMsg.content,
+                                images = imageSources,
                                 position = queuePosition,
                                 isFromCli = queuedMsg.source == QueuedMessageSource.CLI,
                                 onCancel = if (queuedMsg.source == QueuedMessageSource.LOCAL) {

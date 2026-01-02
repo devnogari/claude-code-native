@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
@@ -833,6 +834,7 @@ private fun ToolInspectDialog(
 @Composable
 fun QueuedMessageBubble(
     content: String,
+    images: List<ImageSource> = emptyList(),
     position: Int? = null,
     isFromCli: Boolean = false,
     onCancel: (() -> Unit)? = null,
@@ -853,25 +855,45 @@ fun QueuedMessageBubble(
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.End
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.End
         ) {
-            Box(
+            Column(
                 modifier = Modifier
                     .weight(1f, fill = false)
-                    .widthIn(max = 500.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
-                    .padding(12.dp)
+                    .widthIn(max = 500.dp),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = content,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                // Text content bubble
+                if (content.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = content,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+
+                // Image thumbnails
+                images.forEach { imageSource ->
+                    ImageBlock(
+                        source = imageSource,
+                        modifier = Modifier
+                            .widthIn(max = 300.dp)
+                            .alpha(0.7f)  // Slightly dimmed to indicate pending state
+                    )
+                }
             }
 
             // Menu button with cancel option
