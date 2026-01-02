@@ -383,15 +383,21 @@ func (h *Handler) handleChatMessage(client *Client, content string, images []Ima
 			h.sendErrorToClient(client, "failed to process images")
 			return
 		}
-		// Clean up temp files after processing
-		defer func() {
+	}
+
+	// Track whether streamProcessOutput was started - if not, we must clean up temp files
+	// Cleanup is normally done in streamProcessOutput after Claude CLI finishes reading them
+	var streamStarted bool
+	defer func() {
+		if !streamStarted && len(imagePaths) > 0 {
+			h.logger.Debug("cleaning up temp images due to early return", zap.Int("count", len(imagePaths)))
 			for _, path := range imagePaths {
 				if err := os.Remove(path); err != nil {
 					h.logger.Warn("failed to remove temp image", zap.String("path", path), zap.Error(err))
 				}
 			}
-		}()
-	}
+		}
+	}()
 
 	// For database-based sessions, save the user message
 	// For filesystem sessions, Claude CLI manages its own history
@@ -458,7 +464,9 @@ func (h *Handler) handleChatMessage(client *Client, content string, images []Ima
 		zap.String("claudeSessionID", claudeSessionID.String()))
 
 	// Stream process output to client
-	go h.streamProcessOutput(client, process, isFilesystemSession)
+	// Pass imagePaths for cleanup after Claude CLI finishes reading them
+	streamStarted = true
+	go h.streamProcessOutput(client, process, isFilesystemSession, imagePaths)
 }
 
 // handleStopMessage stops the current Claude process
@@ -483,9 +491,21 @@ func (h *Handler) handlePingMessage(client *Client) {
 
 // streamProcessOutput streams Claude CLI output to the WebSocket client
 // It monitors the client.Done channel to detect client disconnection and avoid race conditions
-func (h *Handler) streamProcessOutput(client *Client, process *claude.Process, isFilesystemSession bool) {
+// imagePaths are cleaned up after the process completes (cannot be done in handleChatMessage due to async execution)
+func (h *Handler) streamProcessOutput(client *Client, process *claude.Process, isFilesystemSession bool, imagePaths []string) {
 	convID := client.ConversationID
 	var assistantContent string
+
+	// Clean up temp image files after Claude CLI finishes (regardless of success/failure)
+	defer func() {
+		for _, path := range imagePaths {
+			if err := os.Remove(path); err != nil {
+				h.logger.Warn("failed to remove temp image", zap.String("path", path), zap.Error(err))
+			} else {
+				h.logger.Debug("cleaned up temp image", zap.String("path", path))
+			}
+		}
+	}()
 
 	// Use labeled loop for clean exit without goto
 streamLoop:
