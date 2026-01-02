@@ -1685,13 +1685,37 @@ class ChatViewModel(
                                 println("ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")
                             }
                             "dequeue", "clear" -> {
-                                // Remove from queued messages (CLI processes in order)
+                                // Remove from queued messages and add to messages as pending user message
+                                // This ensures the message stays visible in UI while waiting for history confirmation
+                                val dequeuedMessage = _queuedMessages.value.firstOrNull()
                                 _queuedMessages.update { queue ->
                                     if (queue.isNotEmpty()) {
                                         println("ChatViewModel: Dequeued message from CLI")
                                         queue.drop(1)
                                     } else {
                                         queue
+                                    }
+                                }
+
+                                // Add dequeued message to messages list as pending user message
+                                if (dequeuedMessage != null) {
+                                    val messageId = "pending_${generateMessageId()}"
+                                    val userMessage = ChatMessage(
+                                        id = messageId,
+                                        role = MessageRole.USER,
+                                        blocks = listOf(ContentBlock.Text(dequeuedMessage.content)),
+                                        isStreaming = false,
+                                        isPending = true
+                                    )
+
+                                    // Track pending message for duplicate prevention
+                                    val normalizedHash = normalizeForComparison(dequeuedMessage.content).hashCode()
+                                    mutex.withLock {
+                                        mapsMutex.withLock {
+                                            pendingUserMessages[normalizedHash] = messageId
+                                        }
+                                        _messages.value = _messages.value + userMessage
+                                        println("ChatViewModel: Added dequeued message as pending user message (id=$messageId)")
                                     }
                                 }
                             }
@@ -1865,6 +1889,22 @@ class ChatViewModel(
                             val pendingMsgId = if (newMsg.role == MessageRole.USER) {
                                 mapsMutex.withLock { pendingUserMessages.remove(normalizedContentHash) }
                             } else null
+
+                            // Also remove matching queued messages when user message is confirmed
+                            if (newMsg.role == MessageRole.USER) {
+                                val normalizedContent = normalizeForComparison(newMsg.content)
+                                _queuedMessages.update { queue ->
+                                    val matchingIndex = queue.indexOfFirst {
+                                        normalizeForComparison(it.content) == normalizedContent
+                                    }
+                                    if (matchingIndex >= 0) {
+                                        println("ChatViewModel: Removed confirmed queued message from queue")
+                                        queue.filterIndexed { index, _ -> index != matchingIndex }
+                                    } else {
+                                        queue
+                                    }
+                                }
+                            }
 
                             if (pendingMsgId != null) {
                                 // This user message was confirmed - update isPending to false (O(1) lookup)
