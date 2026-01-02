@@ -272,6 +272,11 @@ func (h *HistoryHandler) Refresh(c *fiber.Ctx) error {
 // DeleteProject handles DELETE /api/v1/claude-history/projects/:encodedPath
 // Removes a project from the cache. Does NOT delete files on disk.
 func (h *HistoryHandler) DeleteProject(c *fiber.Ctx) error {
+	userID, err := getUserIDFromContext(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{Error: "unauthorized"})
+	}
+
 	encodedPath := c.Params("encodedPath")
 	if encodedPath == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
@@ -299,7 +304,8 @@ func (h *HistoryHandler) DeleteProject(c *fiber.Ctx) error {
 	h.cache.DeleteProject(encodedPath)
 
 	h.logger.Info("project deleted from cache",
-		zap.String("encodedPath", encodedPath))
+		zap.String("encodedPath", encodedPath),
+		zap.String("userID", userID.String()))
 
 	return c.SendStatus(fiber.StatusNoContent)
 }
