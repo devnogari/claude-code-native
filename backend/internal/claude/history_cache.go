@@ -34,6 +34,10 @@ type HistoryCache struct {
 	projects map[string]*ClaudeProject // keyed by encoded path
 	ready    bool
 
+	// Track excluded projects (deleted from UI)
+	excludedMu sync.RWMutex
+	excluded   map[string]bool // keyed by encoded path
+
 	// Session change subscribers
 	subscribersMu sync.RWMutex
 	subscribers   map[string][]SessionChangeCallback // keyed by "encodedPath/sessionID"
@@ -58,6 +62,7 @@ func NewHistoryCache(logger *zap.Logger) (*HistoryCache, error) {
 		logger:          logger,
 		watcher:         watcher,
 		projects:        make(map[string]*ClaudeProject),
+		excluded:        make(map[string]bool),
 		subscribers:     make(map[string][]SessionChangeCallback),
 		lastMessageUUID: make(map[string]string),
 	}
@@ -150,11 +155,25 @@ func (c *HistoryCache) loadAll() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Get excluded projects while holding the lock
+	c.excludedMu.RLock()
+	excludedProjects := make(map[string]bool, len(c.excluded))
+	for k, v := range c.excluded {
+		excludedProjects[k] = v
+	}
+	c.excludedMu.RUnlock()
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		encodedPath := entry.Name()
+
+		// Skip excluded projects
+		if excludedProjects[encodedPath] {
+			continue
+		}
+
 		if project, err := c.loadProject(encodedPath); err == nil {
 			c.projects[encodedPath] = project
 			// Debug: log projects with inherited sessions
@@ -537,13 +556,21 @@ func (c *HistoryCache) Refresh() {
 	}
 }
 
-// DeleteProject removes a project from the cache
-// This does NOT delete files on disk - only removes from in-memory cache
+// DeleteProject removes a project from the cache and adds it to the excluded list
+// This does NOT delete files on disk - only hides from the project list
 func (c *HistoryCache) DeleteProject(encodedPath string) {
+	// Add to excluded list first
+	c.excludedMu.Lock()
+	c.excluded[encodedPath] = true
+	c.excludedMu.Unlock()
+
+	// Remove from projects cache
 	c.mu.Lock()
 	delete(c.projects, encodedPath)
 	c.mu.Unlock()
-	c.logger.Info("deleted project from cache", zap.String("project", encodedPath))
+
+	c.logger.Info("deleted project from cache and added to excluded list",
+		zap.String("project", encodedPath))
 }
 
 // GetSessionMessagesPaginated returns messages with pagination (most recent first)
