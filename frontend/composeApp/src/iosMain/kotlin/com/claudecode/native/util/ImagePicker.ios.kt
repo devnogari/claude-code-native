@@ -71,10 +71,13 @@ actual class ImagePicker actual constructor() {
                                     val mediaType = detectMediaType(data)
                                     val fileName = itemProvider.suggestedName ?: "image"
 
+                                    // Resize image to reduce file size
+                                    val resized = ImageResizer.resize(bytes, mediaType)
+
                                     pickedImages.add(
                                         PickedImage(
-                                            data = bytes,
-                                            mediaType = mediaType,
+                                            data = resized.data,
+                                            mediaType = resized.mediaType,
                                             fileName = fileName
                                         )
                                     )
