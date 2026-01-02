@@ -17,6 +17,7 @@ type Project struct {
 	Path         string     `bun:"path,notnull"                      json:"path"`
 	ClaudeID     *string    `bun:"claude_id"                         json:"claude_id,omitempty"`
 	LastAccessed *time.Time `bun:"last_accessed"                     json:"last_accessed,omitempty"`
+	IsCompleted  bool       `bun:"is_completed,default:false"        json:"is_completed"`
 	CreatedAt    time.Time  `bun:"created_at,default:now()"          json:"created_at"`
 	UpdatedAt    time.Time  `bun:"updated_at,default:now()"          json:"updated_at"`
 }

@@ -14,7 +14,8 @@ data class ClaudeProject(
     val path: String,
     @SerialName("encoded_path") val encodedPath: String,
     val sessions: List<ClaudeSession> = emptyList(),
-    @SerialName("last_accessed") val lastAccessed: Instant? = null
+    @SerialName("last_accessed") val lastAccessed: Instant? = null,
+    @SerialName("is_completed") val isCompleted: Boolean = false
 )
 
 /**

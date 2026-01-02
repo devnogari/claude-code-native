@@ -12,6 +12,7 @@ data class Project(
     val path: String,
     @SerialName("claude_id") val claudeId: String? = null,
     @SerialName("last_accessed") val lastAccessed: Instant? = null,
+    @SerialName("is_completed") val isCompleted: Boolean = false,
     @SerialName("created_at") val createdAt: Instant,
     @SerialName("updated_at") val updatedAt: Instant
 )

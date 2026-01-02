@@ -48,6 +48,7 @@ type ProjectResponse struct {
 	Path         string  `json:"path"`
 	ClaudeID     *string `json:"claude_id,omitempty"`
 	LastAccessed *string `json:"last_accessed,omitempty"`
+	IsCompleted  bool    `json:"is_completed"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 }
@@ -61,11 +62,12 @@ type ErrorResponse struct {
 // ToResponse converts a Project model to a ProjectResponse
 func ToResponse(p *Project) ProjectResponse {
 	resp := ProjectResponse{
-		ID:        p.ID.String(),
-		Name:      p.Name,
-		Path:      p.Path,
-		CreatedAt: p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt: p.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:          p.ID.String(),
+		Name:        p.Name,
+		Path:        p.Path,
+		IsCompleted: p.IsCompleted,
+		CreatedAt:   p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:   p.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	if p.ClaudeID != nil {
