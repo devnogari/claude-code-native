@@ -9,6 +9,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -99,6 +101,12 @@ fun ProjectListScreenContent(
     var deleteSessionTarget by remember { mutableStateOf<Triple<String, String, String?>?>(null) } // sessionId, projectPath, sourceEncodedPath
     var deleteProjectTarget by remember { mutableStateOf<Pair<String, String>?>(null) } // encodedPath, projectName
     var deleteResultMessage by remember { mutableStateOf<String?>(null) }
+    var showBulkDeleteDialog by remember { mutableStateOf(false) }
+
+    // Selection mode states from ViewModel
+    val selectionModeProjectId = uiState.selectionModeProjectId
+    val selectedSessions = uiState.selectedSessions
+    val isBulkDeleting = uiState.isBulkDeleting
 
     // Refresh projects when refreshTrigger changes (e.g., when a new session is created)
     // When pendingSessionRefresh is provided, use polling-based refresh to wait for session to appear
@@ -200,6 +208,42 @@ fun ProjectListScreenContent(
             },
             dismissButton = {
                 TextButton(onClick = { deleteProjectTarget = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Bulk delete confirmation dialog
+    if (showBulkDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showBulkDeleteDialog = false },
+            title = { Text("Delete ${selectedSessions.size} Sessions") },
+            text = {
+                Text("Delete ${selectedSessions.size} selected session(s)? This will remove the Claude CLI session files.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showBulkDeleteDialog = false
+                        viewModel.deleteSelectedSessions(
+                            onSuccess = { count ->
+                                deleteResultMessage = "$count session(s) deleted"
+                            },
+                            onError = { error ->
+                                deleteResultMessage = error
+                            }
+                        )
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBulkDeleteDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -363,7 +407,9 @@ fun ProjectListScreenContent(
                                     project = project,
                                     isFavorite = project.path in uiState.favorites,
                                     isExpanded = project.id in uiState.expandedProjects,
-                                    isLoading = uiState.isLoading,
+                                    isLoading = uiState.isLoading || isBulkDeleting,
+                                    isInSelectionMode = selectionModeProjectId == project.id,
+                                    selectedSessions = if (selectionModeProjectId == project.id) selectedSessions else emptySet(),
                                     onToggleExpand = { viewModel.toggleProjectExpanded(project.id) },
                                     onToggleFavorite = { viewModel.toggleFavorite(project.path) },
                                     onDeleteProject = {
@@ -384,7 +430,12 @@ fun ProjectListScreenContent(
                                         viewModel.startNewSession(project.encodedPath) { sessionId, encodedPath ->
                                             onConversationSelected("$sessionId?project=$encodedPath")
                                         }
-                                    }
+                                    },
+                                    onEnterSelectionMode = { viewModel.enterSelectionMode(project.id) },
+                                    onExitSelectionMode = { viewModel.exitSelectionMode() },
+                                    onToggleSessionSelection = { sessionId -> viewModel.toggleSessionSelection(sessionId) },
+                                    onSelectAll = { selectAll -> viewModel.selectAllSessions(selectAll) },
+                                    onDeleteSelected = { showBulkDeleteDialog = true }
                                 )
                             }
                         }
@@ -455,15 +506,24 @@ private fun ProjectItem(
     isFavorite: Boolean,
     isExpanded: Boolean,
     isLoading: Boolean,
+    isInSelectionMode: Boolean = false,
+    selectedSessions: Set<String> = emptySet(),
     onToggleExpand: () -> Unit,
     onToggleFavorite: () -> Unit,
     onDeleteProject: () -> Unit,
     onSessionClick: (ClaudeSession) -> Unit,
     onToggleSessionFavorite: (ClaudeSession) -> Unit,
     onDeleteSession: (ClaudeSession) -> Unit,
-    onNewSession: () -> Unit
+    onNewSession: () -> Unit,
+    onEnterSelectionMode: () -> Unit = {},
+    onExitSelectionMode: () -> Unit = {},
+    onToggleSessionSelection: (String) -> Unit = {},
+    onSelectAll: (Boolean) -> Unit = {},
+    onDeleteSelected: () -> Unit = {}
 ) {
     val sessions = project.sessions
+    val allSelected = sessions.isNotEmpty() && sessions.all { it.id in selectedSessions }
+    val someSelected = selectedSessions.isNotEmpty()
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -555,31 +615,108 @@ private fun ProjectItem(
             if (isExpanded) {
                 HorizontalDivider()
 
-                // New Session button
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = !isLoading, onClick = onNewSession),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                // Selection mode toolbar or New Session button
+                if (isInSelectionMode) {
+                    // Selection mode toolbar
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.secondaryContainer
                     ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Select all checkbox
+                                IconButton(
+                                    onClick = { onSelectAll(!allSelected) },
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Icon(
+                                        if (allSelected) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                                        contentDescription = if (allSelected) "Deselect all" else "Select all",
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                                Text(
+                                    text = if (selectedSessions.isEmpty()) "Select sessions"
+                                           else "${selectedSessions.size} selected",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
 
-                        Spacer(modifier = Modifier.width(12.dp))
+                            Row {
+                                // Delete selected button
+                                TextButton(
+                                    onClick = onDeleteSelected,
+                                    enabled = someSelected && !isLoading,
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Delete")
+                                }
 
-                        Text(
-                            text = "New Session",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                                // Cancel selection mode
+                                TextButton(
+                                    onClick = onExitSelectionMode
+                                ) {
+                                    Text("Cancel")
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Normal mode: New Session button + Select button
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // New Session button
+                            TextButton(
+                                onClick = onNewSession,
+                                enabled = !isLoading
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("New Session")
+                            }
+
+                            // Select button (only show if there are sessions)
+                            if (sessions.isNotEmpty()) {
+                                TextButton(
+                                    onClick = onEnterSelectionMode,
+                                    enabled = !isLoading
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.CheckBoxOutlineBlank,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Select")
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -591,7 +728,15 @@ private fun ProjectItem(
                     SessionItem(
                         session = session,
                         isLoading = isLoading,
-                        onClick = { onSessionClick(session) },
+                        isInSelectionMode = isInSelectionMode,
+                        isSelected = session.id in selectedSessions,
+                        onClick = {
+                            if (isInSelectionMode) {
+                                onToggleSessionSelection(session.id)
+                            } else {
+                                onSessionClick(session)
+                            }
+                        },
                         onToggleFavorite = { onToggleSessionFavorite(session) },
                         onDeleteSession = { onDeleteSession(session) }
                     )
@@ -608,6 +753,8 @@ private fun ProjectItem(
 private fun SessionItem(
     session: ClaudeSession,
     isLoading: Boolean,
+    isInSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onDeleteSession: () -> Unit
@@ -616,18 +763,32 @@ private fun SessionItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = !isLoading, onClick = onClick),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        color = if (isSelected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        }
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                Icons.AutoMirrored.Filled.Chat,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // Show checkbox in selection mode, chat icon otherwise
+            if (isInSelectionMode) {
+                Icon(
+                    if (isSelected) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                    contentDescription = if (isSelected) "Deselect" else "Select",
+                    modifier = Modifier.size(24.dp),
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Icon(
+                    Icons.AutoMirrored.Filled.Chat,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -656,37 +817,40 @@ private fun SessionItem(
                 }
             }
 
-            // Favorite button
-            IconButton(
-                onClick = onToggleFavorite,
-                modifier = Modifier.size(32.dp)
-            ) {
+            // Hide action buttons in selection mode
+            if (!isInSelectionMode) {
+                // Favorite button
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = if (session.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                        contentDescription = if (session.isFavorite) "Remove from favorites" else "Add to favorites",
+                        tint = if (session.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // Delete session button
+                IconButton(
+                    onClick = onDeleteSession,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete session",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                    )
+                }
+
                 Icon(
-                    imageVector = if (session.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = if (session.isFavorite) "Remove from favorites" else "Add to favorites",
-                    tint = if (session.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp)
+                    Icons.Default.ChevronRight,
+                    contentDescription = "Open session",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
-            // Delete session button
-            IconButton(
-                onClick = onDeleteSession,
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Delete session",
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
-                )
-            }
-
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = "Open session",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
