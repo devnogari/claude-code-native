@@ -452,4 +452,204 @@ class ChatViewModelTest {
 
         assertEquals(pendingHash, historyHash, "Hashes should match after normalization")
     }
+
+    // =====================================
+    // QueuedMessage Tests
+    // =====================================
+
+    @Test
+    fun `QueuedMessage should store all fields correctly`() {
+        val queuedMessage = QueuedMessage(
+            id = "queue_123",
+            content = "Hello World",
+            queuedAt = 1234567890L,
+            source = QueuedMessageSource.LOCAL
+        )
+
+        assertEquals("queue_123", queuedMessage.id)
+        assertEquals("Hello World", queuedMessage.content)
+        assertEquals(1234567890L, queuedMessage.queuedAt)
+        assertEquals(QueuedMessageSource.LOCAL, queuedMessage.source)
+        assertTrue(queuedMessage.images.isEmpty())
+    }
+
+    @Test
+    fun `QueuedMessage with CLI source should be distinguishable`() {
+        val localMessage = QueuedMessage(
+            id = "local_1",
+            content = "Local message",
+            queuedAt = 1000L,
+            source = QueuedMessageSource.LOCAL
+        )
+
+        val cliMessage = QueuedMessage(
+            id = "cli_1",
+            content = "CLI message",
+            queuedAt = 2000L,
+            source = QueuedMessageSource.CLI
+        )
+
+        assertEquals(QueuedMessageSource.LOCAL, localMessage.source)
+        assertEquals(QueuedMessageSource.CLI, cliMessage.source)
+    }
+
+    @Test
+    fun `QueuedMessage with images should store images`() {
+        val image = AttachedImage(
+            id = "img_1",
+            data = ByteArray(10),
+            mediaType = "image/png"
+        )
+
+        val queuedMessage = QueuedMessage(
+            id = "queue_with_image",
+            content = "Message with image",
+            queuedAt = 1000L,
+            images = listOf(image)
+        )
+
+        assertEquals(1, queuedMessage.images.size)
+        assertEquals("img_1", queuedMessage.images[0].id)
+    }
+
+    @Test
+    fun `QueuedMessageSource should have LOCAL and CLI values`() {
+        assertEquals(QueuedMessageSource.LOCAL, QueuedMessageSource.valueOf("LOCAL"))
+        assertEquals(QueuedMessageSource.CLI, QueuedMessageSource.valueOf("CLI"))
+    }
+
+    // =====================================
+    // Conversation-scoped Queue Logic Tests
+    // =====================================
+
+    @Test
+    fun `filtering queue by conversationId should return only matching messages`() {
+        // Simulating Map<ConversationId, List<QueuedMessage>> behavior
+        val queueMap = mapOf(
+            "conv_A" to listOf(
+                QueuedMessage("a1", "Message A1", 1000L),
+                QueuedMessage("a2", "Message A2", 2000L)
+            ),
+            "conv_B" to listOf(
+                QueuedMessage("b1", "Message B1", 3000L)
+            )
+        )
+
+        val currentConversationId = "conv_A"
+        val currentQueue = queueMap[currentConversationId] ?: emptyList()
+
+        assertEquals(2, currentQueue.size)
+        assertEquals("a1", currentQueue[0].id)
+        assertEquals("a2", currentQueue[1].id)
+    }
+
+    @Test
+    fun `switching conversation should show different queue`() {
+        val queueMap = mutableMapOf(
+            "conv_A" to listOf(QueuedMessage("a1", "A message", 1000L)),
+            "conv_B" to listOf(QueuedMessage("b1", "B message", 2000L))
+        )
+
+        // Initially on conv_A
+        var currentConversationId = "conv_A"
+        var visibleQueue = queueMap[currentConversationId] ?: emptyList()
+        assertEquals(1, visibleQueue.size)
+        assertEquals("a1", visibleQueue[0].id)
+
+        // Switch to conv_B
+        currentConversationId = "conv_B"
+        visibleQueue = queueMap[currentConversationId] ?: emptyList()
+        assertEquals(1, visibleQueue.size)
+        assertEquals("b1", visibleQueue[0].id)
+
+        // conv_A queue should still exist
+        val convAQueue = queueMap["conv_A"] ?: emptyList()
+        assertEquals(1, convAQueue.size)
+        assertEquals("a1", convAQueue[0].id)
+    }
+
+    @Test
+    fun `adding to queue should only affect current conversation`() {
+        val queueMap = mutableMapOf<String, List<QueuedMessage>>(
+            "conv_A" to listOf(QueuedMessage("a1", "A message", 1000L)),
+            "conv_B" to emptyList()
+        )
+
+        val currentConversationId = "conv_A"
+        val newMessage = QueuedMessage("a2", "New A message", 2000L)
+
+        // Add to current conversation only
+        queueMap[currentConversationId] = (queueMap[currentConversationId] ?: emptyList()) + newMessage
+
+        // conv_A should have 2 messages
+        assertEquals(2, queueMap["conv_A"]?.size)
+
+        // conv_B should still be empty
+        assertEquals(0, queueMap["conv_B"]?.size)
+    }
+
+    @Test
+    fun `removing from queue should only affect current conversation`() {
+        val queueMap = mutableMapOf(
+            "conv_A" to listOf(
+                QueuedMessage("a1", "A message 1", 1000L),
+                QueuedMessage("a2", "A message 2", 2000L)
+            ),
+            "conv_B" to listOf(QueuedMessage("b1", "B message", 3000L))
+        )
+
+        val currentConversationId = "conv_A"
+        val messageIdToRemove = "a1"
+
+        // Remove from current conversation only
+        queueMap[currentConversationId] = queueMap[currentConversationId]?.filter { it.id != messageIdToRemove } ?: emptyList()
+
+        // conv_A should have 1 message left
+        assertEquals(1, queueMap["conv_A"]?.size)
+        assertEquals("a2", queueMap["conv_A"]?.get(0)?.id)
+
+        // conv_B should be unaffected
+        assertEquals(1, queueMap["conv_B"]?.size)
+        assertEquals("b1", queueMap["conv_B"]?.get(0)?.id)
+    }
+
+    @Test
+    fun `clearing local messages should only affect current conversation`() {
+        val queueMap = mutableMapOf(
+            "conv_A" to listOf(
+                QueuedMessage("a1", "Local A", 1000L, QueuedMessageSource.LOCAL),
+                QueuedMessage("a2", "CLI A", 2000L, QueuedMessageSource.CLI)
+            ),
+            "conv_B" to listOf(
+                QueuedMessage("b1", "Local B", 3000L, QueuedMessageSource.LOCAL)
+            )
+        )
+
+        val currentConversationId = "conv_A"
+
+        // Clear only local messages from current conversation
+        queueMap[currentConversationId] = queueMap[currentConversationId]?.filter {
+            it.source == QueuedMessageSource.CLI
+        } ?: emptyList()
+
+        // conv_A should only have CLI message
+        assertEquals(1, queueMap["conv_A"]?.size)
+        assertEquals(QueuedMessageSource.CLI, queueMap["conv_A"]?.get(0)?.source)
+
+        // conv_B should be unaffected
+        assertEquals(1, queueMap["conv_B"]?.size)
+        assertEquals(QueuedMessageSource.LOCAL, queueMap["conv_B"]?.get(0)?.source)
+    }
+
+    @Test
+    fun `new conversation should have empty queue`() {
+        val queueMap = mutableMapOf(
+            "conv_A" to listOf(QueuedMessage("a1", "A message", 1000L))
+        )
+
+        val newConversationId = "conv_new"
+        val newConvQueue = queueMap[newConversationId] ?: emptyList()
+
+        assertTrue(newConvQueue.isEmpty())
+    }
 }
