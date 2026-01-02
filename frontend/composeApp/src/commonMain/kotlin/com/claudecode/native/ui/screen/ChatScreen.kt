@@ -488,6 +488,7 @@ fun ChatScreenContent(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .imePadding()
         ) {
             Column(
                 modifier = Modifier.fillMaxSize()
