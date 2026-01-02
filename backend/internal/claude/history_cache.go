@@ -537,6 +537,15 @@ func (c *HistoryCache) Refresh() {
 	}
 }
 
+// DeleteProject removes a project from the cache
+// This does NOT delete files on disk - only removes from in-memory cache
+func (c *HistoryCache) DeleteProject(encodedPath string) {
+	c.mu.Lock()
+	delete(c.projects, encodedPath)
+	c.mu.Unlock()
+	c.logger.Info("deleted project from cache", zap.String("project", encodedPath))
+}
+
 // GetSessionMessagesPaginated returns messages with pagination (most recent first)
 func (c *HistoryCache) GetSessionMessagesPaginated(encodedPath, sessionID string, limit, offset int) (*PaginatedMessages, error) {
 	sessionFile := filepath.Join(c.basePath, encodedPath, sessionID+".jsonl")

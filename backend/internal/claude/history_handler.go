@@ -269,6 +269,41 @@ func (h *HistoryHandler) Refresh(c *fiber.Ctx) error {
 	})
 }
 
+// DeleteProject handles DELETE /api/v1/claude-history/projects/:encodedPath
+// Removes a project from the cache. Does NOT delete files on disk.
+func (h *HistoryHandler) DeleteProject(c *fiber.Ctx) error {
+	encodedPath := c.Params("encodedPath")
+	if encodedPath == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "encoded path is required",
+		})
+	}
+
+	// Validate encodedPath to prevent path traversal attacks
+	if !validateEncodedPath(encodedPath) {
+		h.logger.Warn("invalid encoded path rejected",
+			zap.String("encodedPath", encodedPath))
+		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+			Error: "invalid encoded path format",
+		})
+	}
+
+	// Check if project exists in cache
+	if _, ok := h.cache.GetProject(encodedPath); !ok {
+		return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
+			Error: "project not found",
+		})
+	}
+
+	// Remove project from cache
+	h.cache.DeleteProject(encodedPath)
+
+	h.logger.Info("project deleted from cache",
+		zap.String("encodedPath", encodedPath))
+
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
 // ToggleSessionFavoriteRequest represents the request body for toggling favorite
 type ToggleSessionFavoriteRequest struct {
 	ProjectPath string `json:"project_path"`

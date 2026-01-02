@@ -803,20 +803,14 @@ class ChatViewModel(
     private fun isCompactionMessage(text: String) = MessageParser.isCompactionMessage(text)
 
     /**
-     * Syncs messages when app returns to foreground.
-     * Reloads messages from filesystem to catch any changes made while app was in background.
+     * Syncs messages and state when app returns to foreground.
+     * Reloads messages from filesystem and syncs state via REST to catch any changes
+     * made while app was in background (e.g., streaming started/stopped, todos updated).
      */
     fun syncOnForeground() {
         val convId = currentConversationId ?: return
         val encodedPath = currentEncodedPath
         val sessionId = currentClaudeSession
-
-        // Skip sync if streaming is active to prevent losing streaming content
-        // The streaming will handle its own synchronization with the filesystem
-        if (_isStreaming.value) {
-            println("ChatViewModel: Skipping foreground sync - streaming is active")
-            return
-        }
 
         // Skip sync if a connect is already in progress to prevent duplicate API calls
         if (currentConnectJob?.isActive == true) {
@@ -826,7 +820,49 @@ class ChatViewModel(
 
         scope.launch {
             try {
+                // Always sync state first via REST to detect streaming status changes
+                // This is important because streaming might have started/stopped while in background
                 if (encodedPath != null && sessionId != null) {
+                    println("ChatViewModel: Syncing state on foreground for $encodedPath / $sessionId")
+                    try {
+                        val stateResponse = claudeHistoryApi.getSessionState(encodedPath, sessionId)
+
+                        // Update streaming state
+                        streamingMutex.withLock {
+                            if (_isStreaming.value != stateResponse.isStreaming) {
+                                println("ChatViewModel: Foreground sync - updating streaming state: ${stateResponse.isStreaming}")
+                                _isStreaming.value = stateResponse.isStreaming
+
+                                if (stateResponse.isStreaming) {
+                                    if (!streamingStartTimes.containsKey(convId)) {
+                                        startProgressTracking("Processing")
+                                    }
+                                } else {
+                                    stopProgressTracking()
+                                }
+                            }
+                        }
+
+                        // Update todos
+                        val progressFlow = _progressStatusMap[convId]
+                        if (progressFlow != null && stateResponse.todos.isNotEmpty()) {
+                            val currentStatus = progressFlow.value
+                            if (currentStatus.todos != stateResponse.todos) {
+                                println("ChatViewModel: Foreground sync - updating todos: ${stateResponse.todos.size} items")
+                                progressFlow.value = currentStatus.copy(todos = stateResponse.todos)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        println("ChatViewModel: Failed to sync state on foreground: ${e.message}")
+                        // Continue with message sync even if state sync fails
+                    }
+
+                    // Skip message sync if streaming is now active
+                    if (_isStreaming.value) {
+                        println("ChatViewModel: Skipping message sync - streaming is active")
+                        return@launch
+                    }
+
                     // Reload messages from filesystem
                     println("ChatViewModel: Syncing messages on foreground for $encodedPath / $sessionId")
                     loadMessagesFromFilesystem(encodedPath, sessionId, convId, "SYNC")

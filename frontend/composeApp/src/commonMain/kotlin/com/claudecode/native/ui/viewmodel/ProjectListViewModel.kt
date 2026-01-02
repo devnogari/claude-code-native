@@ -252,6 +252,30 @@ class ProjectListViewModel(
     }
 
     /**
+     * Deletes a project from the cache.
+     *
+     * @param encodedPath The encoded project path to delete
+     * @param onSuccess Callback when deletion succeeds
+     * @param onError Callback when deletion fails
+     */
+    fun deleteProject(
+        encodedPath: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        scope.launch {
+            try {
+                claudeHistoryApi.deleteProject(encodedPath)
+                onSuccess()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onError(e.toUserMessage())
+            }
+        }
+    }
+
+    /**
      * Deletes a session's files.
      *
      * @param conversationId The session ID to delete (aliased as conversationId for compatibility)
