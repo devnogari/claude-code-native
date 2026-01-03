@@ -21,6 +21,8 @@ const (
 	MessageTypePing = "ping"
 	// MessageTypePong is sent by server in response to ping
 	MessageTypePong = "pong"
+	// MessageTypeStderr is sent by server with stderr output from Claude CLI
+	MessageTypeStderr = "stderr"
 	// MessageTypeQueueAdd is sent by server when a message is added to the queue
 	MessageTypeQueueAdd = "queue_add"
 	// MessageTypeQueueRemove is sent by server when a message is removed from the queue
@@ -121,6 +123,15 @@ func createOutgoingComplete(convID interface{ String() string }) *OutgoingMessag
 	return &OutgoingMessage{
 		Type:           MessageTypeComplete,
 		ConversationID: convID.String(),
+	}
+}
+
+// createOutgoingStderr creates a stderr message
+func createOutgoingStderr(convID interface{ String() string }, content string) *OutgoingMessage {
+	return &OutgoingMessage{
+		Type:           MessageTypeStderr,
+		ConversationID: convID.String(),
+		Content:        content,
 	}
 }
 
