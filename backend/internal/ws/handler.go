@@ -39,6 +39,9 @@ const (
 
 	// maxContentLength is the maximum content length for chat messages
 	maxContentLength = 100 * 1024 // 100KB
+
+	// dbOperationTimeout is the timeout for database operations
+	dbOperationTimeout = 5 * time.Second
 )
 
 // ConversationRepository defines the interface for conversation data access
@@ -956,4 +959,282 @@ func (h *Handler) BroadcastQueueSync(convID uuid.UUID, messages []queue.QueuedMe
 		return
 	}
 	h.hub.BroadcastToConversation(convID, data)
+}
+
+// HandleUserWebSocket handles the unified user WebSocket connection
+// This is the new endpoint: /api/v1/ws/user
+func (h *Handler) HandleUserWebSocket(c *websocket.Conn) {
+	// Get user ID from context (set by auth middleware)
+	userIDStr := c.Locals("userID")
+	if userIDStr == nil {
+		h.logger.Error("No user ID in context for user WebSocket")
+		c.Close()
+		return
+	}
+
+	userID, err := uuid.FromString(userIDStr.(string))
+	if err != nil {
+		h.logger.Error("Invalid user ID", zap.Error(err))
+		c.Close()
+		return
+	}
+
+	// Create client without conversation ID (will be set on subscribe)
+	client := &Client{
+		ID:     uuid.Must(uuid.NewV7()),
+		UserID: userID,
+		Conn:   c,
+		Send:   make(chan []byte, 256),
+		Done:   make(chan struct{}),
+	}
+
+	// Register client with hub
+	h.hub.Register(client)
+
+	// Start read/write pumps
+	go h.writePump(client)
+	h.readUserPump(client)
+}
+
+// readUserPump reads messages from the unified user WebSocket
+func (h *Handler) readUserPump(client *Client) {
+	defer func() {
+		h.hub.Unregister(client)
+		client.Conn.Close()
+	}()
+
+	client.Conn.SetReadLimit(maxMessageSize)
+	client.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	client.Conn.SetPongHandler(func(string) error {
+		client.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
+	for {
+		_, message, err := client.Conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				h.logger.Error("WebSocket read error", zap.Error(err))
+			}
+			break
+		}
+
+		var msg IncomingMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			h.logger.Error("Failed to parse message", zap.Error(err))
+			h.sendErrorToClient(client, "Invalid message format")
+			continue
+		}
+
+		h.handleUserMessage(client, &msg)
+	}
+}
+
+// handleUserMessage routes messages for the unified user WebSocket
+func (h *Handler) handleUserMessage(client *Client, msg *IncomingMessage) {
+	switch msg.Type {
+	case MessageTypeAuth:
+		// Auth is handled by middleware, but we need to acknowledge the message
+		// to avoid "Unknown message type" error
+		h.sendStatusToClient(client, "authenticated")
+	case MessageTypeSubscribe:
+		h.handleSubscribeMessage(client, msg)
+	case MessageTypeUnsubscribe:
+		h.handleUnsubscribeMessage(client)
+	case MessageTypeChat:
+		h.handleUserChatMessage(client, msg)
+	case MessageTypeStop:
+		h.handleUserStopMessage(client)
+	case MessageTypePing:
+		h.handlePingMessage(client)
+	default:
+		h.sendErrorToClient(client, "Unknown message type: "+msg.Type)
+	}
+}
+
+// handleSubscribeMessage handles subscribe requests
+func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
+	// Read subscribe fields directly from msg (frontend sends fields at top level)
+	convID, err := uuid.FromString(msg.ConversationID)
+	if err != nil || msg.ConversationID == "" {
+		h.sendErrorToClient(client, "Invalid or missing conversation ID")
+		return
+	}
+
+	// Validate user has access to this conversation
+	// Use timeout context to prevent indefinite DB waits
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	conv, err := h.convRepo.FindByID(ctx, convID)
+	if err != nil {
+		h.sendErrorToClient(client, "Conversation not found")
+		return
+	}
+
+	// Get project to check user ownership
+	proj, err := h.projRepo.FindByID(ctx, conv.ProjectID)
+	if err != nil {
+		h.sendErrorToClient(client, "Project not found")
+		return
+	}
+
+	if proj.UserID != client.UserID {
+		h.sendErrorToClient(client, "Access denied to conversation")
+		return
+	}
+
+	// Cache project path and Claude session ID to avoid DB lookups on each message
+	client.ProjectPath = proj.Path
+	client.ClaudeSessionID = h.getClaudeSessionID(conv, convID)
+
+	// Subscribe to conversation
+	resp := make(chan error, 1)
+	h.hub.Subscribe(&SubscribeRequest{
+		Client:         client,
+		ConversationID: convID,
+		SessionID:      msg.SessionID,
+		EncodedPath:    msg.EncodedPath,
+		Response:       resp,
+	})
+	<-resp
+
+	// Send subscribed confirmation
+	h.sendSubscribedToClient(client, convID)
+
+	// Send session state
+	h.sendSessionStateToClient(client, convID, msg.SessionID, msg.EncodedPath)
+
+	// Send queue sync
+	h.sendQueueSyncToClient(client)
+
+	h.logger.Info("Client subscribed to conversation",
+		zap.String("clientID", client.ID.String()),
+		zap.String("conversationID", convID.String()))
+}
+
+// sendSubscribedToClient sends subscription confirmation
+func (h *Handler) sendSubscribedToClient(client *Client, convID uuid.UUID) {
+	payload := SubscribedPayload{
+		ConversationID: convID.String(),
+	}
+
+	msg := OutgoingMessage{
+		Type:    MessageTypeSubscribed,
+		Payload: payload,
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("Failed to marshal subscribed message", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	default:
+		h.logger.Warn("Failed to send subscribed message - buffer full")
+	}
+}
+
+// sendSessionStateToClient sends full session state
+func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, sessionID, encodedPath string) {
+	// Get queue from service
+	queueMsgs, err := h.queueService.GetQueue(context.Background(), convID)
+	if err != nil {
+		h.logger.Error("Failed to get queue for session state",
+			zap.String("conversationID", convID.String()),
+			zap.Error(err))
+		// Continue with empty queue rather than failing
+	}
+
+	// Determine session state and todos
+	var sessionState SessionStateType = SessionStateIdle
+	var isStreaming bool = false
+	// TODO: Fetch todos from Claude session state when available.
+	// Currently empty as Claude CLI doesn't expose todos via API.
+	var todos []TodoItem
+
+	// Check if there's an active Claude process
+	if h.claudeMgr != nil {
+		process := h.claudeMgr.GetProcess(convID)
+		if process != nil && process.GetStatus() == claude.ProcessStatusRunning {
+			sessionState = SessionStateStreaming
+			isStreaming = true
+		}
+	}
+
+	// Convert queue to interface slice (pre-allocate to avoid repeated reallocation)
+	queueInterface := make([]interface{}, len(queueMsgs))
+	for i, q := range queueMsgs {
+		queueInterface[i] = q
+	}
+
+	payload := SessionStatePayload{
+		ConversationID: convID.String(),
+		SessionState:   sessionState,
+		IsStreaming:    isStreaming,
+		Todos:          todos,
+		Queue:          queueInterface,
+	}
+
+	msg := OutgoingMessage{
+		Type:    MessageTypeSessionState,
+		Payload: payload,
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("Failed to marshal session state message", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	default:
+		h.logger.Warn("Failed to send session state - buffer full")
+	}
+}
+
+// handleUnsubscribeMessage handles unsubscribe requests
+func (h *Handler) handleUnsubscribeMessage(client *Client) {
+	h.hub.UnsubscribeClient(client)
+	h.logger.Info("Client unsubscribed", zap.String("clientID", client.ID.String()))
+}
+
+// getClaudeSessionID determines the Claude session ID to use for a conversation
+// If the conversation has a synced ClaudeSession, it uses that; otherwise, falls back to defaultID
+func (h *Handler) getClaudeSessionID(conv *conversation.Conversation, defaultID uuid.UUID) uuid.UUID {
+	if conv.ClaudeSession != nil && *conv.ClaudeSession != "" {
+		if parsedID, err := uuid.FromString(*conv.ClaudeSession); err == nil {
+			return parsedID
+		}
+	}
+	return defaultID
+}
+
+// handleUserChatMessage handles chat messages in user WebSocket
+func (h *Handler) handleUserChatMessage(client *Client, msg *IncomingMessage) {
+	if client.ConversationID == uuid.Nil {
+		h.sendErrorToClient(client, "Not subscribed to any conversation")
+		return
+	}
+
+	// Use cached values from subscription (no DB lookup needed)
+	if client.ProjectPath == "" {
+		h.sendErrorToClient(client, "Subscription state invalid - please resubscribe")
+		return
+	}
+
+	// Delegate to existing chat handler logic
+	h.handleChatMessage(client, msg.Content, msg.Images, client.ProjectPath, client.ClaudeSessionID, false)
+}
+
+// handleUserStopMessage handles stop messages in user WebSocket
+func (h *Handler) handleUserStopMessage(client *Client) {
+	if client.ConversationID == uuid.Nil {
+		h.sendErrorToClient(client, "Not subscribed to any conversation")
+		return
+	}
+
+	// Use cached ClaudeSessionID from subscription (no DB lookup needed)
+	h.handleStopMessage(client, client.ClaudeSessionID)
 }
