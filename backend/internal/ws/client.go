@@ -24,6 +24,12 @@ type Client struct {
 
 	// Done is closed when the client is unregistered, signaling goroutines to stop
 	Done chan struct{}
+
+	// Cached info from subscription (unified WebSocket only)
+	// ProjectPath is the path to the project directory
+	ProjectPath string
+	// ClaudeSessionID is the Claude session ID to use for this conversation
+	ClaudeSessionID uuid.UUID
 }
 
 // NewClient creates a new WebSocket client

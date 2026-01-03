@@ -98,6 +98,14 @@ object MessageType {
     const val QUEUE_REMOVE = "queue_remove"
     /** Full queue sync */
     const val QUEUE_SYNC = "queue_sync"
+    /** Subscribe to a conversation (unified WebSocket) */
+    const val SUBSCRIBE = "subscribe"
+    /** Unsubscribe from a conversation (unified WebSocket) */
+    const val UNSUBSCRIBE = "unsubscribe"
+    /** Subscription confirmed (unified WebSocket) */
+    const val SUBSCRIBED = "subscribed"
+    /** Session state synchronization (unified WebSocket) */
+    const val SESSION_STATE = "session_state"
 }
 
 /**
@@ -150,4 +158,63 @@ data class QueueImagePayload(
     @SerialName("file_name") val fileName: String? = null,
     val width: Int? = null,
     val height: Int? = null
+)
+
+/**
+ * Outgoing subscribe message for unified WebSocket.
+ * Type-safe wrapper for subscribe requests.
+ */
+@Serializable
+data class SubscribeMessage(
+    val type: String = MessageType.SUBSCRIBE,
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("session_id") val sessionId: String? = null,
+    @SerialName("encoded_path") val encodedPath: String? = null
+)
+
+/**
+ * Outgoing unsubscribe message for unified WebSocket.
+ * Type-safe wrapper for unsubscribe requests.
+ */
+@Serializable
+data class UnsubscribeMessage(
+    val type: String = MessageType.UNSUBSCRIBE,
+    @SerialName("conversation_id") val conversationId: String
+)
+
+/**
+ * Payload for subscribe WebSocket message (unified WebSocket).
+ * Used to subscribe to a conversation without reconnecting.
+ * @deprecated Use SubscribeMessage instead for type safety
+ */
+@Serializable
+data class SubscribePayload(
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("session_id") val sessionId: String? = null,
+    @SerialName("encoded_path") val encodedPath: String? = null
+)
+
+/**
+ * Payload for session_state WebSocket message (unified WebSocket).
+ * Contains the current state of a conversation session.
+ */
+@Serializable
+data class SessionStatePayload(
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("session_state") val sessionState: String,
+    @SerialName("is_streaming") val isStreaming: Boolean,
+    val todos: List<TodoItemPayload> = emptyList(),
+    val queue: List<QueueMessagePayload> = emptyList()
+)
+
+/**
+ * Represents a todo item in session state.
+ */
+@Serializable
+data class TodoItemPayload(
+    val content: String,
+    val status: String,
+    @SerialName("active_form") val activeForm: String? = null,
+    val priority: String? = null,
+    val id: String? = null
 )
