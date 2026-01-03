@@ -208,18 +208,16 @@ fun ChatScreenContent(
 
     val messages by viewModel.messages.collectAsState()
     val isStreaming by viewModel.isStreaming.collectAsState()
-    // Re-collect queuedMessages when conversation changes (queuedMessages is a computed property
-    // that returns different StateFlow based on currentConversationId)
-    val queuedMessages by remember(conversationId) { viewModel.queuedMessages }.collectAsState()
+    // queuedMessages reactively switches based on _currentConversationIdFlow via combine
+    val queuedMessages by viewModel.queuedMessages.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
     val conversationTitle by viewModel.conversationTitle.collectAsState()
     val scrollToBottomSignal by viewModel.scrollToBottomSignal.collectAsState()
     val isDraftSession by viewModel.isDraftSession.collectAsState()
     val sessionCreatedEvent by viewModel.sessionCreatedEvent.collectAsState()
-    // Re-collect progressStatus when conversation changes (progressStatus is a computed property
-    // that returns different StateFlow based on currentConversationId)
-    val progressStatus by remember(conversationId) { viewModel.progressStatus }.collectAsState()
+    // progressStatus reactively switches based on _currentConversationIdFlow via flatMapLatest
+    val progressStatus by viewModel.progressStatus.collectAsState()
     val attachedImages by viewModel.attachedImages.collectAsState()
     val hasMoreMessages by viewModel.hasMoreMessages.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
