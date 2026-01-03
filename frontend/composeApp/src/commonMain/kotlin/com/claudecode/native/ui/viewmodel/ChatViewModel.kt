@@ -1512,6 +1512,7 @@ class ChatViewModel(
                             if (streamingStartTimes.containsKey(convId)) {
                                 DebugLogger.d(TAG, "ChatViewModel: Foreground sync - stopping progress (server confirmed idle)")
                                 stopProgressTracking()
+                                clearSentQueueMessages()
                             }
                         }
 
@@ -1596,6 +1597,7 @@ class ChatViewModel(
                     if (streamingStartTimes.containsKey(convId)) {
                         DebugLogger.d(TAG, "ChatViewModel: REST sync - stopping progress (server confirmed idle)")
                         stopProgressTracking()
+                        clearSentQueueMessages()
                     }
                 }
 
@@ -1924,6 +1926,7 @@ class ChatViewModel(
                 _isStreaming.value = false
             }
             stopProgressTracking()
+            clearSentQueueMessages()
         }
     }
 
@@ -2663,6 +2666,8 @@ class ChatViewModel(
                     }
                     // Stop progress tracking when session becomes idle
                     stopProgressTracking()
+                    // Clear queued messages that were sent to CLI (fallback for missed dequeue events)
+                    clearSentQueueMessages()
                 }
             }
 
@@ -2729,8 +2734,39 @@ class ChatViewModel(
         // Trigger scroll to bottom signal for UI (atomic update)
         _scrollToBottomSignal.update { it + 1 }
 
-        // Log queue status (messages are already sent to CLI, cleared via dequeue events)
-        logQueueStatusOnStreamingComplete()
+        // Clear queued messages that were sent to CLI (LOCAL/SERVER sources)
+        // CLI should have processed them by now; if no dequeue event came, it's because
+        // CLI finished processing all queued messages. This is a fallback to prevent
+        // stuck queue state when dequeue events are missed.
+        clearSentQueueMessages()
+    }
+
+    /**
+     * Clears queued messages that were sent to CLI (LOCAL/SERVER sources).
+     * Called when streaming completes as a fallback when CLI's dequeue events are missed.
+     * CLI-sourced messages are NOT cleared as they're managed by CLI terminal.
+     *
+     * Uses atomic update pattern to ensure thread safety when multiple completion
+     * paths (WebSocket COMPLETE, HistoryWatch IDLE, REST sync) trigger simultaneously.
+     */
+    private fun clearSentQueueMessages() {
+        val convId = _currentConversationIdFlow.value ?: return
+
+        // Perform filtering inside update lambda for thread safety
+        _queuedMessagesMap.update { map ->
+            val queue = map[convId] ?: return@update map
+
+            // Keep only CLI messages, clear LOCAL and SERVER (which were sent to CLI)
+            val cliMessages = queue.filter { it.source == QueuedMessageSource.CLI }
+            val clearedCount = queue.size - cliMessages.size
+
+            if (clearedCount > 0) {
+                DebugLogger.d(TAG, "ChatViewModel: Cleared $clearedCount sent queue messages for conv=${convId.take(30)} (CLI messages kept: ${cliMessages.size})")
+                map + (convId to cliMessages)
+            } else {
+                map // Nothing to clear
+            }
+        }
     }
 
     @OptIn(ExperimentalUuidApi::class)
