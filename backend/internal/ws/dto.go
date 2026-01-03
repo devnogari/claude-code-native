@@ -51,12 +51,19 @@ type ImageContent struct {
 
 // IncomingMessage represents a message received from the WebSocket client
 type IncomingMessage struct {
-	// Type is the message type (chat, stop, ping)
+	// Type is the message type (chat, stop, ping, subscribe, unsubscribe, auth)
 	Type string `json:"type"`
 	// Content is the message content (optional, used for chat messages)
 	Content string `json:"content,omitempty"`
 	// Images is a list of image attachments (optional, used for chat messages with images)
 	Images []ImageContent `json:"images,omitempty"`
+	// Subscribe fields (for subscribe message type)
+	// ConversationID is the conversation to subscribe to
+	ConversationID string `json:"conversation_id,omitempty"`
+	// SessionID is the Claude session ID (for filesystem sessions)
+	SessionID string `json:"session_id,omitempty"`
+	// EncodedPath is the encoded project path (for filesystem sessions)
+	EncodedPath string `json:"encoded_path,omitempty"`
 }
 
 // OutgoingMessage represents a message sent to the WebSocket client

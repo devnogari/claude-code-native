@@ -242,3 +242,20 @@ func (h *Hub) GetClientsForConversation(convID uuid.UUID) []*Client {
 
 	return result
 }
+
+// UnsubscribeClient removes a client from their current subscription
+func (h *Hub) UnsubscribeClient(client *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if oldConvID, exists := h.subscriptions[client.ID]; exists {
+		if clients, ok := h.conversations[oldConvID]; ok {
+			delete(clients, client.ID)
+			if len(clients) == 0 {
+				delete(h.conversations, oldConvID)
+			}
+		}
+		delete(h.subscriptions, client.ID)
+	}
+	client.ConversationID = uuid.Nil
+}

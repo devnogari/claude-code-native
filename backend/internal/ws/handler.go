@@ -1030,6 +1030,10 @@ func (h *Handler) readUserPump(client *Client) {
 // handleUserMessage routes messages for the unified user WebSocket
 func (h *Handler) handleUserMessage(client *Client, msg *IncomingMessage) {
 	switch msg.Type {
+	case MessageTypeAuth:
+		// Auth is handled by middleware, but we need to acknowledge the message
+		// to avoid "Unknown message type" error
+		h.sendStatusToClient(client, "authenticated")
 	case MessageTypeSubscribe:
 		h.handleSubscribeMessage(client, msg)
 	case MessageTypeUnsubscribe:
@@ -1047,16 +1051,10 @@ func (h *Handler) handleUserMessage(client *Client, msg *IncomingMessage) {
 
 // handleSubscribeMessage handles subscribe requests
 func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
-	// Parse subscribe payload from content
-	var payload SubscribePayload
-	if err := json.Unmarshal([]byte(msg.Content), &payload); err != nil {
-		h.sendErrorToClient(client, "Invalid subscribe payload")
-		return
-	}
-
-	convID, err := uuid.FromString(payload.ConversationID)
-	if err != nil {
-		h.sendErrorToClient(client, "Invalid conversation ID")
+	// Read subscribe fields directly from msg (frontend sends fields at top level)
+	convID, err := uuid.FromString(msg.ConversationID)
+	if err != nil || msg.ConversationID == "" {
+		h.sendErrorToClient(client, "Invalid or missing conversation ID")
 		return
 	}
 
@@ -1085,8 +1083,8 @@ func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
 	h.hub.Subscribe(&SubscribeRequest{
 		Client:         client,
 		ConversationID: convID,
-		SessionID:      payload.SessionID,
-		EncodedPath:    payload.EncodedPath,
+		SessionID:      msg.SessionID,
+		EncodedPath:    msg.EncodedPath,
 		Response:       resp,
 	})
 	<-resp
@@ -1095,7 +1093,7 @@ func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
 	h.sendSubscribedToClient(client, convID)
 
 	// Send session state
-	h.sendSessionStateToClient(client, convID, payload.SessionID, payload.EncodedPath)
+	h.sendSessionStateToClient(client, convID, msg.SessionID, msg.EncodedPath)
 
 	// Send queue sync
 	h.sendQueueSyncToClient(client)
@@ -1174,19 +1172,7 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 
 // handleUnsubscribeMessage handles unsubscribe requests
 func (h *Handler) handleUnsubscribeMessage(client *Client) {
-	h.hub.mu.Lock()
-	if oldConvID, exists := h.hub.subscriptions[client.ID]; exists {
-		if clients, ok := h.hub.conversations[oldConvID]; ok {
-			delete(clients, client.ID)
-			if len(clients) == 0 {
-				delete(h.hub.conversations, oldConvID)
-			}
-		}
-		delete(h.hub.subscriptions, client.ID)
-	}
-	client.ConversationID = uuid.Nil
-	h.hub.mu.Unlock()
-
+	h.hub.UnsubscribeClient(client)
 	h.logger.Info("Client unsubscribed", zap.String("clientID", client.ID.String()))
 }
 
