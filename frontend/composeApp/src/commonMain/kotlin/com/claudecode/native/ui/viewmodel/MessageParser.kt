@@ -363,8 +363,9 @@ object MessageParser {
      * Removes thinking tags from content.
      */
     fun cleanThinkingTags(text: String): String {
+        // Use [\s\S] instead of . with DOT_MATCHES_ALL for cross-platform compatibility
         return text
-            .replace(Regex("<thinking>.*?</thinking>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<thinking>[\\s\\S]*?</thinking>"), "")
             .replace("</thinking>", "")
             .replace("<thinking>", "")
             .trim()

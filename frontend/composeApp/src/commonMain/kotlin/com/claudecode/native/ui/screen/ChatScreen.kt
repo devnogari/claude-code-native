@@ -54,9 +54,15 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.ui.component.AttachedImagesPreview
+import com.claudecode.native.ui.component.ChatInputBar
+import com.claudecode.native.ui.component.ChatMessageList
+import com.claudecode.native.ui.component.ConnectionStatusBar
+import com.claudecode.native.ui.component.DeleteSessionDialog
+import com.claudecode.native.ui.component.ErrorBar
 import com.claudecode.native.ui.component.MessageBubble
-import com.claudecode.native.ui.component.QueuedMessageBubble
 import com.claudecode.native.ui.component.ProcessingIndicator
+import com.claudecode.native.ui.component.QueuedMessageBubble
+import com.claudecode.native.ui.component.ResultMessageBar
 import com.claudecode.native.ui.component.SlashCommand
 import com.claudecode.native.ui.component.SlashCommandMenu
 import com.claudecode.native.ui.component.StatusLine
@@ -369,36 +375,20 @@ fun ChatScreenContent(
 
     // Delete confirmation dialog
     if (showDeleteDialog) {
-        AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Delete Session") },
-            text = { Text("This will delete the Claude CLI session files and clear chat history. Start fresh?") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDeleteDialog = false
-                        viewModel.deleteSession(
-                            onSuccess = {
-                                // Navigate back to project list after deletion
-                                onBack()
-                            },
-                            onError = { errorMsg ->
-                                deleteMessage = errorMsg
-                            }
-                        )
+        DeleteSessionDialog(
+            onConfirm = {
+                showDeleteDialog = false
+                viewModel.deleteSession(
+                    onSuccess = {
+                        // Navigate back to project list after deletion
+                        onBack()
                     },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("Delete")
-                }
+                    onError = { errorMsg ->
+                        deleteMessage = errorMsg
+                    }
+                )
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
-                    Text("Cancel")
-                }
-            }
+            onDismiss = { showDeleteDialog = false }
         )
     }
 
@@ -545,55 +535,18 @@ fun ChatScreenContent(
 
             // Delete result message
             if (deleteMessage != null) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = if (deleteMessage?.contains("success") == true)
-                        MaterialTheme.colorScheme.primaryContainer
-                    else
-                        MaterialTheme.colorScheme.errorContainer,
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(
-                        text = deleteMessage ?: "",
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        color = if (deleteMessage?.contains("success") == true)
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        else
-                            MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
+                ResultMessageBar(
+                    message = deleteMessage ?: "",
+                    isSuccess = deleteMessage?.contains("success") == true
+                )
             }
 
             // Error snackbar
             if (error != null) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = error ?: "",
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { viewModel.clearError() }) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Dismiss",
-                                tint = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                    }
-                }
+                ErrorBar(
+                    error = error ?: "",
+                    onDismiss = { viewModel.clearError() }
+                )
             }
 
             // Messages list - filter out empty messages
@@ -889,278 +842,6 @@ fun ChatScreenContent(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Connection status bar shown when not connected.
- */
-@Composable
-private fun ConnectionStatusBar(
-    connectionState: ConnectionState,
-    modifier: Modifier = Modifier,
-    onRetry: () -> Unit = {}
-) {
-    when (connectionState) {
-        is ConnectionState.Connecting -> {
-            Surface(
-                modifier = modifier,
-                color = MaterialTheme.colorScheme.primaryContainer
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp
-                    )
-                    Text(
-                        text = "Connecting...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-        }
-
-        is ConnectionState.Reconnecting -> {
-            Surface(
-                modifier = modifier,
-                color = MaterialTheme.colorScheme.tertiaryContainer
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                    Text(
-                        text = "Reconnecting... (attempt ${connectionState.attempt})",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                }
-            }
-        }
-
-        is ConnectionState.Error -> {
-            Surface(
-                modifier = modifier,
-                color = MaterialTheme.colorScheme.errorContainer
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Connection error: ${connectionState.message}",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    TextButton(
-                        onClick = onRetry,
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    ) {
-                        Text("Retry")
-                    }
-                }
-            }
-        }
-
-        is ConnectionState.Disconnected -> {
-            Surface(
-                modifier = modifier,
-                color = MaterialTheme.colorScheme.surfaceVariant
-            ) {
-                Text(
-                    text = "Disconnected",
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        is ConnectionState.Connected -> {
-            // No status bar when connected
-        }
-    }
-}
-
-/**
- * Input bar for composing and sending messages with image attachment support.
- */
-@Composable
-private fun ChatInputBar(
-    inputTextValue: TextFieldValue,
-    onInputChange: (TextFieldValue) -> Unit,
-    isStreaming: Boolean,
-    isConnected: Boolean,
-    attachedImages: List<AttachedImage> = emptyList(),
-    onAttachImages: () -> Unit = {},
-    onRemoveImage: (String) -> Unit = {},
-    onSend: () -> Unit,
-    onStop: () -> Unit,
-    canFocus: Boolean = true,
-    modifier: Modifier = Modifier
-) {
-    val hasContent = inputTextValue.text.isNotBlank() || attachedImages.isNotEmpty()
-
-    Surface(
-        modifier = modifier,
-        tonalElevation = 2.dp,
-        shape = MaterialTheme.shapes.large
-    ) {
-        Column(
-            modifier = Modifier.padding(8.dp)
-        ) {
-            // Attached images preview row
-            if (attachedImages.isNotEmpty()) {
-                AttachedImagesPreview(
-                    images = attachedImages,
-                    onRemove = onRemoveImage,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Image attachment button (enabled even during streaming for queued messages)
-                IconButton(
-                    onClick = onAttachImages,
-                    enabled = isConnected
-                ) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = "Attach image",
-                        tint = if (isConnected) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        }
-                    )
-                }
-
-                OutlinedTextField(
-                    value = inputTextValue,
-                    onValueChange = onInputChange,
-                    modifier = Modifier
-                        .weight(1f)
-                        .focusProperties { this.canFocus = canFocus }
-                        .onPreviewKeyEvent { keyEvent ->
-                            when {
-                                // ESC to stop streaming (Desktop)
-                                keyEvent.key == Key.Escape && keyEvent.type == KeyEventType.KeyDown && isStreaming -> {
-                                    onStop()
-                                    true // Consume the event
-                                }
-                                // Desktop: Enter to send (without Shift), Shift+Enter for newline
-                                keyEvent.key == Key.Enter && keyEvent.type == KeyEventType.KeyDown -> {
-                                    if (keyEvent.isShiftPressed) {
-                                        // Shift+Enter: Insert newline at cursor position and move cursor down
-                                        // If text is selected, replace selection with newline
-                                        val currentText = inputTextValue.text
-                                        val selectionStart = inputTextValue.selection.start
-                                        val selectionEnd = inputTextValue.selection.end
-                                        val newText = currentText.substring(0, selectionStart) + "\n" + currentText.substring(selectionEnd)
-                                        val newCursorPos = selectionStart + 1
-                                        onInputChange(TextFieldValue(
-                                            text = newText,
-                                            selection = TextRange(newCursorPos)
-                                        ))
-                                        true // Consume the event
-                                    } else if (hasContent && isConnected) {
-                                        // Enter without Shift: Send message
-                                        onSend()
-                                        true // Consume the event
-                                    } else {
-                                        // Empty input: do nothing
-                                        true
-                                    }
-                                }
-                                else -> false
-                            }
-                        },
-                    placeholder = {
-                        Text(
-                            if (!isConnected) "Read-only (viewing history)"
-                            else if (isStreaming) "Type to queue message..."
-                            else "Type a message..."
-                        )
-                    },
-                    enabled = true,  // Always enabled - allow typing to queue messages during streaming
-                    singleLine = false,
-                    minLines = 1,
-                    maxLines = 8,  // Allow more lines for multiline input (Shift+Enter to add newlines on desktop)
-                    // iOS: Use Default action to allow Enter for newlines (send via button only)
-                    // Desktop/Web: Use Send action (Enter sends, Shift+Enter for newlines)
-                    keyboardOptions = KeyboardOptions(
-                        imeAction = if (Platform.isIOS) ImeAction.Default else ImeAction.Send
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onSend = {
-                            if (hasContent && isConnected) {
-                                onSend()
-                            }
-                        }
-                    )
-                )
-
-                // Show both Stop button (when streaming) and Send button (always)
-                if (isStreaming) {
-                    // Stop button during streaming
-                    IconButton(
-                        onClick = onStop,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Stop generation"
-                        )
-                    }
-                }
-
-                // Send button - always visible, queues message during streaming
-                IconButton(
-                    onClick = onSend,
-                    enabled = hasContent && isConnected,
-                    colors = IconButtonDefaults.iconButtonColors(
-                        containerColor = if (isStreaming) {
-                            MaterialTheme.colorScheme.secondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        },
-                        contentColor = if (isStreaming) {
-                            MaterialTheme.colorScheme.onSecondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onPrimary
-                        },
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = if (isStreaming) "Queue message" else "Send message"
-                    )
                 }
             }
         }

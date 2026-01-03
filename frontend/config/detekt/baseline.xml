@@ -1,0 +1,275 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues></ManuallySuppressedIssues>
+  <CurrentIssues>
+    <ID>CognitiveComplexMethod:App.kt$@Composable fun AppNavigation()</ID>
+    <ID>CognitiveComplexMethod:ChatScreen.kt$@Composable private fun ChatInputBar( inputTextValue: TextFieldValue, onInputChange: (TextFieldValue) -&gt; Unit, isStreaming: Boolean, isConnected: Boolean, attachedImages: List&lt;AttachedImage&gt; = emptyList(), onAttachImages: () -&gt; Unit = {}, onRemoveImage: (String) -&gt; Unit = {}, onSend: () -&gt; Unit, onStop: () -&gt; Unit, canFocus: Boolean = true, modifier: Modifier = Modifier )</ID>
+    <ID>CognitiveComplexMethod:ChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class) @Composable fun ChatScreenContent( conversationId: String, viewModel: ChatViewModel = koinInject(), onBack: () -&gt; Unit = {}, onSessionCreated: (sessionId: String, encodedPath: String) -&gt; Unit = { _, _ -&gt; }, onNewSession: () -&gt; Unit = {} )</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$@OptIn(ExperimentalUuidApi::class) private suspend fun createSessionAndSendMessage(content: String, images: List&lt;AttachedImage&gt; = emptyList())</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$fun connect(conversationId: String)</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$fun sendMessage(content: String)</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$fun syncOnForeground()</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$fun syncStateViaRest()</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$private fun retryQueuedMessages()</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun finalizeStreamingMessage()</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun handleHistoryWatchEvent(event: HistoryWatchEvent)</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun loadMessagesFromFilesystem( encodedPath: String, sessionId: String, expectedConversationId: String, callId: String = "?" )</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun processLoadedMessages(messages: List&lt;com.claudecode.native.data.model.ClaudeMessage&gt;)</ID>
+    <ID>CognitiveComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun processOlderMessages(messages: List&lt;com.claudecode.native.data.model.ClaudeMessage&gt;)</ID>
+    <ID>CognitiveComplexMethod:HostSetupScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun HostSetupScreen( onHostConfigured: () -&gt; Unit, initialHost: String? = null )</ID>
+    <ID>CognitiveComplexMethod:LoginScreen.kt$@Composable fun LoginScreen( viewModel: LoginViewModel = koinInject(), onLoginSuccess: () -&gt; Unit )</ID>
+    <ID>CognitiveComplexMethod:MarkdownParser.kt$MarkdownParser$fun parseLineFormatting(line: String): List&lt;InlineElement&gt;</ID>
+    <ID>CognitiveComplexMethod:MarkdownText.kt$private fun AnnotatedString.Builder.appendInlineFormatting( text: String, textColor: Color, linkColor: Color, codeBackgroundColor: Color )</ID>
+    <ID>CognitiveComplexMethod:MessageBubble.kt$@Composable fun DiffHighlightedText( text: String, toolName: String, modifier: Modifier = Modifier )</ID>
+    <ID>CognitiveComplexMethod:MessageBubble.kt$@Composable fun MessageBubble( message: ChatMessage, modifier: Modifier = Modifier )</ID>
+    <ID>CognitiveComplexMethod:MessageBubble.kt$@Composable fun ToolUseItem( tool: ToolUseInfo, modifier: Modifier = Modifier )</ID>
+    <ID>CognitiveComplexMethod:MessageBubble.kt$@Composable private fun MessageInspectDialog( message: ChatMessage, onDismiss: () -&gt; Unit )</ID>
+    <ID>CognitiveComplexMethod:MessageBubble.kt$@Composable private fun ToolInspectDialog( tool: ToolUseInfo, onDismiss: () -&gt; Unit )</ID>
+    <ID>CognitiveComplexMethod:MessageParser.kt$MessageParser$fun extractToolSummary(toolName: String, input: Any?): String</ID>
+    <ID>CognitiveComplexMethod:MessageParser.kt$MessageParser$fun extractToolSummaryFromMap(toolName: String, input: Any?): String</ID>
+    <ID>CognitiveComplexMethod:MessageParser.kt$MessageParser$fun extractToolsFromContent( content: Any?, toolUses: MutableMap&lt;String, ToolUseInfo&gt;, toolResults: MutableMap&lt;String, Pair&lt;String, Boolean&gt;&gt; )</ID>
+    <ID>CognitiveComplexMethod:MessageParser.kt$MessageParser$fun hasOnlyToolResults(content: Any?): Boolean</ID>
+    <ID>CognitiveComplexMethod:MessageParser.kt$MessageParser$fun parseMessageContent(content: Any?, messageUuid: String? = null): List&lt;ContentBlock&gt;</ID>
+    <ID>CognitiveComplexMethod:MessageParser.kt$MessageParser$private fun processJsonElementToBlocks( element: JsonObject, blocks: MutableList&lt;ContentBlock&gt;, messageUuid: String? = null )</ID>
+    <ID>CognitiveComplexMethod:ProjectListScreen.kt$@Composable private fun ProjectItem( project: ClaudeProject, isFavorite: Boolean, isExpanded: Boolean, isLoading: Boolean, isInSelectionMode: Boolean = false, selectedSessions: Set&lt;String&gt; = emptySet(), onToggleExpand: () -&gt; Unit, onToggleFavorite: () -&gt; Unit, onDeleteProject: () -&gt; Unit, onSessionClick: (ClaudeSession) -&gt; Unit, onToggleSessionFavorite: (ClaudeSession) -&gt; Unit, onDeleteSession: (ClaudeSession) -&gt; Unit, onNewSession: () -&gt; Unit, onEnterSelectionMode: () -&gt; Unit = {}, onExitSelectionMode: () -&gt; Unit = {}, onToggleSessionSelection: (String) -&gt; Unit = {}, onSelectAll: (Boolean) -&gt; Unit = {}, onDeleteSelected: () -&gt; Unit = {} )</ID>
+    <ID>CognitiveComplexMethod:ProjectListScreen.kt$@Composable private fun SessionItem( session: ClaudeSession, isLoading: Boolean, isInSelectionMode: Boolean = false, isSelected: Boolean = false, onClick: () -&gt; Unit, onToggleFavorite: () -&gt; Unit, onDeleteSession: () -&gt; Unit )</ID>
+    <ID>CognitiveComplexMethod:ProjectListScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ProjectListScreenContent( viewModel: ProjectListViewModel = koinInject(), onConversationSelected: (String) -&gt; Unit, onSettingsClick: () -&gt; Unit = {}, refreshTrigger: Int = 0, pendingSessionRefresh: Pair&lt;String, String&gt;? = null, // (sessionId, encodedPath) onPendingSessionRefreshConsumed: () -&gt; Unit = {} )</ID>
+    <ID>CognitiveComplexMethod:ProjectListViewModel.kt$ProjectListViewModel$fun deleteSelectedSessions( onSuccess: (count: Int) -&gt; Unit, onError: (String) -&gt; Unit )</ID>
+    <ID>CognitiveComplexMethod:ProjectListViewModel.kt$ProjectListViewModel$fun refreshAfterSessionCreated(sessionId: String, encodedPath: String)</ID>
+    <ID>CognitiveComplexMethod:SettingsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun SettingsScreen( viewModel: SettingsViewModel = koinInject(), onBack: () -&gt; Unit, onLogout: () -&gt; Unit )</ID>
+    <ID>CognitiveComplexMethod:SlashCommandMenu.kt$@Composable fun SlashCommandMenu( visible: Boolean, filter: String = "", commands: List&lt;SlashCommand&gt; = defaultSlashCommands, isLoading: Boolean = false, onCommandSelected: (SlashCommand) -&gt; Unit, modifier: Modifier = Modifier )</ID>
+    <ID>CognitiveComplexMethod:WebSocketClient.kt$WebSocketClient$private suspend fun connectInternal()</ID>
+    <ID>ConstructorParameterNaming:ProjectApi.kt$SyncResult$val conversations_created: Int = 0</ID>
+    <ID>ConstructorParameterNaming:ProjectApi.kt$SyncResult$val messages_created: Int = 0</ID>
+    <ID>ConstructorParameterNaming:ProjectApi.kt$SyncResult$val projects_created: Int = 0</ID>
+    <ID>ConstructorParameterNaming:ProjectApi.kt$SyncResult$val projects_updated: Int = 0</ID>
+    <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable private fun ChatInputBar( inputTextValue: TextFieldValue, onInputChange: (TextFieldValue) -&gt; Unit, isStreaming: Boolean, isConnected: Boolean, attachedImages: List&lt;AttachedImage&gt; = emptyList(), onAttachImages: () -&gt; Unit = {}, onRemoveImage: (String) -&gt; Unit = {}, onSend: () -&gt; Unit, onStop: () -&gt; Unit, canFocus: Boolean = true, modifier: Modifier = Modifier )</ID>
+    <ID>CyclomaticComplexMethod:ChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class) @Composable fun ChatScreenContent( conversationId: String, viewModel: ChatViewModel = koinInject(), onBack: () -&gt; Unit = {}, onSessionCreated: (sessionId: String, encodedPath: String) -&gt; Unit = { _, _ -&gt; }, onNewSession: () -&gt; Unit = {} )</ID>
+    <ID>CyclomaticComplexMethod:ChatViewModel.kt$ChatViewModel$@OptIn(ExperimentalUuidApi::class) private suspend fun createSessionAndSendMessage(content: String, images: List&lt;AttachedImage&gt; = emptyList())</ID>
+    <ID>CyclomaticComplexMethod:ChatViewModel.kt$ChatViewModel$fun connect(conversationId: String)</ID>
+    <ID>CyclomaticComplexMethod:ChatViewModel.kt$ChatViewModel$fun syncOnForeground()</ID>
+    <ID>CyclomaticComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun handleHistoryWatchEvent(event: HistoryWatchEvent)</ID>
+    <ID>CyclomaticComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun loadMessagesFromFilesystem( encodedPath: String, sessionId: String, expectedConversationId: String, callId: String = "?" )</ID>
+    <ID>CyclomaticComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun processLoadedMessages(messages: List&lt;com.claudecode.native.data.model.ClaudeMessage&gt;)</ID>
+    <ID>CyclomaticComplexMethod:ChatViewModel.kt$ChatViewModel$private suspend fun processOlderMessages(messages: List&lt;com.claudecode.native.data.model.ClaudeMessage&gt;)</ID>
+    <ID>CyclomaticComplexMethod:LoginScreen.kt$@Composable fun LoginScreen( viewModel: LoginViewModel = koinInject(), onLoginSuccess: () -&gt; Unit )</ID>
+    <ID>CyclomaticComplexMethod:MarkdownParser.kt$MarkdownParser$fun parseLineFormatting(line: String): List&lt;InlineElement&gt;</ID>
+    <ID>CyclomaticComplexMethod:MarkdownText.kt$private fun AnnotatedString.Builder.appendInlineFormatting( text: String, textColor: Color, linkColor: Color, codeBackgroundColor: Color )</ID>
+    <ID>CyclomaticComplexMethod:MessageBubble.kt$@Composable fun DiffHighlightedText( text: String, toolName: String, modifier: Modifier = Modifier )</ID>
+    <ID>CyclomaticComplexMethod:MessageBubble.kt$@Composable fun MessageBubble( message: ChatMessage, modifier: Modifier = Modifier )</ID>
+    <ID>CyclomaticComplexMethod:MessageBubble.kt$@Composable fun ToolUseItem( tool: ToolUseInfo, modifier: Modifier = Modifier )</ID>
+    <ID>CyclomaticComplexMethod:MessageParser.kt$MessageParser$fun extractToolSummary(toolName: String, input: Any?): String</ID>
+    <ID>CyclomaticComplexMethod:MessageParser.kt$MessageParser$fun extractToolSummaryFromMap(toolName: String, input: Any?): String</ID>
+    <ID>CyclomaticComplexMethod:MessageParser.kt$MessageParser$fun extractToolsFromContent( content: Any?, toolUses: MutableMap&lt;String, ToolUseInfo&gt;, toolResults: MutableMap&lt;String, Pair&lt;String, Boolean&gt;&gt; )</ID>
+    <ID>CyclomaticComplexMethod:MessageParser.kt$MessageParser$fun hasOnlyToolResults(content: Any?): Boolean</ID>
+    <ID>CyclomaticComplexMethod:MessageParser.kt$MessageParser$fun parseMessageContent(content: Any?, messageUuid: String? = null): List&lt;ContentBlock&gt;</ID>
+    <ID>CyclomaticComplexMethod:MessageParser.kt$MessageParser$private fun processJsonElementToBlocks( element: JsonObject, blocks: MutableList&lt;ContentBlock&gt;, messageUuid: String? = null )</ID>
+    <ID>CyclomaticComplexMethod:MessageParser.kt$MessageParser$private fun processMapElementToBlocks( item: Map&lt;*, *&gt;, blocks: MutableList&lt;ContentBlock&gt;, messageUuid: String? = null )</ID>
+    <ID>CyclomaticComplexMethod:ProjectListScreen.kt$@Composable private fun ProjectItem( project: ClaudeProject, isFavorite: Boolean, isExpanded: Boolean, isLoading: Boolean, isInSelectionMode: Boolean = false, selectedSessions: Set&lt;String&gt; = emptySet(), onToggleExpand: () -&gt; Unit, onToggleFavorite: () -&gt; Unit, onDeleteProject: () -&gt; Unit, onSessionClick: (ClaudeSession) -&gt; Unit, onToggleSessionFavorite: (ClaudeSession) -&gt; Unit, onDeleteSession: (ClaudeSession) -&gt; Unit, onNewSession: () -&gt; Unit, onEnterSelectionMode: () -&gt; Unit = {}, onExitSelectionMode: () -&gt; Unit = {}, onToggleSessionSelection: (String) -&gt; Unit = {}, onSelectAll: (Boolean) -&gt; Unit = {}, onDeleteSelected: () -&gt; Unit = {} )</ID>
+    <ID>CyclomaticComplexMethod:ProjectListScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ProjectListScreenContent( viewModel: ProjectListViewModel = koinInject(), onConversationSelected: (String) -&gt; Unit, onSettingsClick: () -&gt; Unit = {}, refreshTrigger: Int = 0, pendingSessionRefresh: Pair&lt;String, String&gt;? = null, // (sessionId, encodedPath) onPendingSessionRefreshConsumed: () -&gt; Unit = {} )</ID>
+    <ID>CyclomaticComplexMethod:WebSocketClient.kt$WebSocketClient$private suspend fun connectInternal()</ID>
+    <ID>FunctionNaming:Drawable0.commonMain.kt$@InternalResourceApi internal fun _collectCommonMainDrawable0Resources(map: MutableMap&lt;String, DrawableResource&gt;)</ID>
+    <ID>FunctionNaming:Font0.commonMain.kt$@InternalResourceApi internal fun _collectCommonMainFont0Resources(map: MutableMap&lt;String, FontResource&gt;)</ID>
+    <ID>InstanceOfCheckForException:ChatViewModel.kt$ChatViewModel$e is IllegalStateException</ID>
+    <ID>InstanceOfCheckForException:ChatViewModel.kt$ChatViewModel$e is kotlinx.coroutines.CancellationException</ID>
+    <ID>LargeClass:ChatViewModel.kt$ChatViewModel</ID>
+    <ID>LongMethod:App.kt$@Composable fun AppNavigation()</ID>
+    <ID>LongMethod:ChatScreen.kt$@Composable private fun ChatInputBar( inputTextValue: TextFieldValue, onInputChange: (TextFieldValue) -&gt; Unit, isStreaming: Boolean, isConnected: Boolean, attachedImages: List&lt;AttachedImage&gt; = emptyList(), onAttachImages: () -&gt; Unit = {}, onRemoveImage: (String) -&gt; Unit = {}, onSend: () -&gt; Unit, onStop: () -&gt; Unit, canFocus: Boolean = true, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:ChatScreen.kt$@Composable private fun ConnectionStatusBar( connectionState: ConnectionState, modifier: Modifier = Modifier, onRetry: () -&gt; Unit = {} )</ID>
+    <ID>LongMethod:ChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class) @Composable fun ChatScreenContent( conversationId: String, viewModel: ChatViewModel = koinInject(), onBack: () -&gt; Unit = {}, onSessionCreated: (sessionId: String, encodedPath: String) -&gt; Unit = { _, _ -&gt; }, onNewSession: () -&gt; Unit = {} )</ID>
+    <ID>LongMethod:ChatViewModel.kt$ChatViewModel$@OptIn(ExperimentalEncodingApi::class) private suspend fun sendMessageInternal(content: String, images: List&lt;AttachedImage&gt; = emptyList())</ID>
+    <ID>LongMethod:ChatViewModel.kt$ChatViewModel$fun connect(conversationId: String)</ID>
+    <ID>LongMethod:ChatViewModel.kt$ChatViewModel$fun sendMessage(content: String)</ID>
+    <ID>LongMethod:ChatViewModel.kt$ChatViewModel$fun syncOnForeground()</ID>
+    <ID>LongMethod:ChatViewModel.kt$ChatViewModel$private fun handleQueueWebSocketMessage(message: IncomingMessage)</ID>
+    <ID>LongMethod:ChatViewModel.kt$ChatViewModel$private suspend fun handleHistoryWatchEvent(event: HistoryWatchEvent)</ID>
+    <ID>LongMethod:ChatViewModel.kt$ChatViewModel$private suspend fun loadMessagesFromFilesystem( encodedPath: String, sessionId: String, expectedConversationId: String, callId: String = "?" )</ID>
+    <ID>LongMethod:ChatViewModel.kt$ChatViewModel$private suspend fun processLoadedMessages(messages: List&lt;com.claudecode.native.data.model.ClaudeMessage&gt;)</ID>
+    <ID>LongMethod:HostSetupScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun HostSetupScreen( onHostConfigured: () -&gt; Unit, initialHost: String? = null )</ID>
+    <ID>LongMethod:ImageAttachment.kt$@Composable private fun AttachedImageThumbnail( image: AttachedImage, onRemove: () -&gt; Unit, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:LoginScreen.kt$@Composable fun LoginScreen( viewModel: LoginViewModel = koinInject(), onLoginSuccess: () -&gt; Unit )</ID>
+    <ID>LongMethod:MarkdownParser.kt$MarkdownParser$fun parseLineFormatting(line: String): List&lt;InlineElement&gt;</ID>
+    <ID>LongMethod:MarkdownText.kt$private fun AnnotatedString.Builder.appendInlineFormatting( text: String, textColor: Color, linkColor: Color, codeBackgroundColor: Color )</ID>
+    <ID>LongMethod:MessageBubble.kt$@Composable fun DiffHighlightedText( text: String, toolName: String, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:MessageBubble.kt$@Composable fun MessageBubble( message: ChatMessage, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:MessageBubble.kt$@Composable fun MessageMetadataHeader( agentId: String?, gitBranch: String?, isSidechain: Boolean, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:MessageBubble.kt$@Composable fun QueuedMessageBubble( content: String, images: List&lt;ImageSource&gt; = emptyList(), position: Int? = null, isFromCli: Boolean = false, onCancel: (() -&gt; Unit)? = null, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:MessageBubble.kt$@Composable fun ToolUseItem( tool: ToolUseInfo, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:MessageBubble.kt$@Composable private fun MessageInspectDialog( message: ChatMessage, onDismiss: () -&gt; Unit )</ID>
+    <ID>LongMethod:MessageBubble.kt$@Composable private fun ToolInspectDialog( tool: ToolUseInfo, onDismiss: () -&gt; Unit )</ID>
+    <ID>LongMethod:MessageParser.kt$MessageParser$fun parseMessageContent(content: Any?, messageUuid: String? = null): List&lt;ContentBlock&gt;</ID>
+    <ID>LongMethod:ProcessingIndicator.kt$@Composable fun ProcessingIndicator( isProcessing: Boolean, statusText: String = "Thinking", onStop: () -&gt; Unit = {}, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:ProcessingIndicator.kt$@Composable fun ThinkingBubble( modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:ProjectListScreen.kt$@Composable private fun ProjectItem( project: ClaudeProject, isFavorite: Boolean, isExpanded: Boolean, isLoading: Boolean, isInSelectionMode: Boolean = false, selectedSessions: Set&lt;String&gt; = emptySet(), onToggleExpand: () -&gt; Unit, onToggleFavorite: () -&gt; Unit, onDeleteProject: () -&gt; Unit, onSessionClick: (ClaudeSession) -&gt; Unit, onToggleSessionFavorite: (ClaudeSession) -&gt; Unit, onDeleteSession: (ClaudeSession) -&gt; Unit, onNewSession: () -&gt; Unit, onEnterSelectionMode: () -&gt; Unit = {}, onExitSelectionMode: () -&gt; Unit = {}, onToggleSessionSelection: (String) -&gt; Unit = {}, onSelectAll: (Boolean) -&gt; Unit = {}, onDeleteSelected: () -&gt; Unit = {} )</ID>
+    <ID>LongMethod:ProjectListScreen.kt$@Composable private fun SessionItem( session: ClaudeSession, isLoading: Boolean, isInSelectionMode: Boolean = false, isSelected: Boolean = false, onClick: () -&gt; Unit, onToggleFavorite: () -&gt; Unit, onDeleteSession: () -&gt; Unit )</ID>
+    <ID>LongMethod:ProjectListScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ProjectListScreenContent( viewModel: ProjectListViewModel = koinInject(), onConversationSelected: (String) -&gt; Unit, onSettingsClick: () -&gt; Unit = {}, refreshTrigger: Int = 0, pendingSessionRefresh: Pair&lt;String, String&gt;? = null, // (sessionId, encodedPath) onPendingSessionRefreshConsumed: () -&gt; Unit = {} )</ID>
+    <ID>LongMethod:SettingsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun SettingsScreen( viewModel: SettingsViewModel = koinInject(), onBack: () -&gt; Unit, onLogout: () -&gt; Unit )</ID>
+    <ID>LongMethod:SlashCommandMenu.kt$@Composable fun SlashCommandMenu( visible: Boolean, filter: String = "", commands: List&lt;SlashCommand&gt; = defaultSlashCommands, isLoading: Boolean = false, onCommandSelected: (SlashCommand) -&gt; Unit, modifier: Modifier = Modifier )</ID>
+    <ID>LongMethod:StatusLine.kt$@Composable private fun StatusLineContent( status: ProgressStatus, isTodoExpanded: Boolean = false, onToggleTodos: () -&gt; Unit = {} )</ID>
+    <ID>LongMethod:Theme.kt$@Composable fun AppTypography(): Typography</ID>
+    <ID>LongParameterList:ChatScreen.kt$( command: SlashCommand, args: List&lt;String&gt;, viewModel: ChatViewModel, onClearInput: () -&gt; Unit, onShowDeleteDialog: () -&gt; Unit, onResetScroll: () -&gt; Unit )</ID>
+    <ID>LongParameterList:ChatScreen.kt$( inputTextValue: TextFieldValue, onInputChange: (TextFieldValue) -&gt; Unit, isStreaming: Boolean, isConnected: Boolean, attachedImages: List&lt;AttachedImage&gt; = emptyList(), onAttachImages: () -&gt; Unit = {}, onRemoveImage: (String) -&gt; Unit = {}, onSend: () -&gt; Unit, onStop: () -&gt; Unit, canFocus: Boolean = true, modifier: Modifier = Modifier )</ID>
+    <ID>LongParameterList:ChatViewModel.kt$ChatViewModel$( private val webSocketClient: WebSocketClient, private val apiClient: ApiClient, private val conversationApi: ConversationApi, private val projectApi: ProjectApi, private val claudeHistoryApi: ClaudeHistoryApi, private val historyWatchClient: HistoryWatchClient, private val commandApi: CommandApi, private val queueApi: QueueApi, private val scope: CoroutineScope )</ID>
+    <ID>LongParameterList:MarkdownText.kt$( text: String, textColor: Color, linkColor: Color, codeBackgroundColor: Color, baseStyle: TextStyle, fontWeight: FontWeight, sizeFactor: Float )</ID>
+    <ID>LongParameterList:ProjectListScreen.kt$( project: ClaudeProject, isFavorite: Boolean, isExpanded: Boolean, isLoading: Boolean, isInSelectionMode: Boolean = false, selectedSessions: Set&lt;String&gt; = emptySet(), onToggleExpand: () -&gt; Unit, onToggleFavorite: () -&gt; Unit, onDeleteProject: () -&gt; Unit, onSessionClick: (ClaudeSession) -&gt; Unit, onToggleSessionFavorite: (ClaudeSession) -&gt; Unit, onDeleteSession: (ClaudeSession) -&gt; Unit, onNewSession: () -&gt; Unit, onEnterSelectionMode: () -&gt; Unit = {}, onExitSelectionMode: () -&gt; Unit = {}, onToggleSessionSelection: (String) -&gt; Unit = {}, onSelectAll: (Boolean) -&gt; Unit = {}, onDeleteSelected: () -&gt; Unit = {} )</ID>
+    <ID>LoopWithTooManyJumpStatements:ChatViewModel.kt$ChatViewModel$for</ID>
+    <ID>LoopWithTooManyJumpStatements:MessageParser.kt$MessageParser$for</ID>
+    <ID>MatchingDeclarationName:ImageDropHandler.kt$DropState</ID>
+    <ID>MatchingDeclarationName:Navigation.kt$Screen</ID>
+    <ID>MatchingDeclarationName:SlashCommandMenu.kt$SlashCommand</ID>
+    <ID>MatchingDeclarationName:StatusLine.kt$ProgressStatus</ID>
+    <ID>MaxLineLength:ApiClient.kt$ApiClient$in 400..499 -&gt; throw ApiException("Client error: ${response.status.description}", response.status.value)</ID>
+    <ID>MaxLineLength:ApiClient.kt$ApiClient$in 500..599 -&gt; throw ApiException("Server error: ${response.status.description}", response.status.value)</ID>
+    <ID>MaxLineLength:AppModule.kt$single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }</ID>
+    <ID>MaxLineLength:ChatScreen.kt$DebugLogger.d(TAG, "Session created event received: sessionId=${sessionInfo.sessionId}, encodedPath=${sessionInfo.encodedPath}")</ID>
+    <ID>MaxLineLength:ChatScreen.kt$latestMessage.content.take(50).replace("\n", " ") + if (latestMessage.content.length &gt; 50) "..." else ""</ID>
+    <ID>MaxLineLength:ChatScreen.kt$val newText = currentText.substring(0, selectionStart) + "\n" + currentText.substring(selectionEnd)</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$?:</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "About to send message via WebSocket, content='${content.take(50)}...', imageCount=${images.size}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "Added pending user message (hash=$normalizedHash, images=${images.size}): ${content.take(50)}...")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Added removed message as pending (id=$messageId)")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Dequeued message from CLI (operation=$operation)")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Detected assistant activity from HistoryWatch, activating streaming state")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: First STREAM message received, emitting session created event: ${sessionInfo.sessionId}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Foreground sync - stopping progress (server confirmed idle)")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Foreground sync - updating streaming state: ${stateResponse.isStreaming}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Foreground sync - updating todos: ${stateResponse.todos.size} items")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Found ${newToolUses.size} tool_uses, ${newToolResults.size} tool_results")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: HistoryWatch fallback - emitting session created event: ${sessionInfo.sessionId}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Loaded ${response.count} commands (${response.builtIn.size} builtin, ${response.custom.size} custom)")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: REST sync - updating streaming state: ${stateResponse.isStreaming} (was: ${_isStreaming.value})")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: REST sync - updating todos: ${stateResponse.todos.size} items")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: REST sync complete - state=${stateResponse.sessionState}, streaming=${stateResponse.isStreaming}, todos=${stateResponse.todos.size}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Remove operation - removing ${messagesToRemove.size} queued message(s) before timestamp $removeTimestamp")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Removed message already confirmed, skipping")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Skipping bash-notification enqueue (not a user message)")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Streaming complete, ${queue.size} messages in queue (already sent to CLI)")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: Updated todos (${event.todos.size} items, ${event.todos.count { it.isCompleted }} completed)")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel: stopProgressTracking() - progressFlow exists: ${progressFlow != null}, setting isActive=false")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel:1231 - Added builtin result id=${resultMessage.id}, total=${_messages.value.size}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel:1742 - HistoryWatch update, total=${_messages.value.size}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "ChatViewModel:697 - Added ${messagesToAdd.size} messages (initial load), total=${_messages.value.size}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "Connection error while retrying message (id=${msg.id}), will retry again: ${e.message}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "Connection error while sending queued message (id=${queuedMessage.id}), will retry on reconnect: ${e.message}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "Prepended ${uniqueOlderMessages.size} older messages (filtered ${olderChatMessages.size - uniqueOlderMessages.size} duplicates)")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "Queue sync from WebSocket: ${serverMessages.size} server + ${localOnlyMessages.size} local")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "Queued message (source=${queuedMessage.source}, id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$callId] !!! GUARD: Room switched during 404 handling, aborting state clear")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$callId] !!! GUARD: Room switched during message fetch, discarding ${response.messages.size} messages")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$callId] Expected: ${expectedConversationId.take(20)}, Current: ${currentConversationId?.take(20)}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$callId] Got ${response.messages.size} messages from API, hasMore=${response.hasMore}, processing...")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$callId] currentConversationId at title set time: ${currentConversationId?.take(20)}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$connectCallId] !!! Legacy GUARD TRIGGERED: room switched during message load")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$connectCallId] AFTER loadMessagesFromFilesystem, title=${_conversationTitle.value?.take(30)}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$connectCallId] BEFORE loadMessagesFromFilesystem, title=${_conversationTitle.value?.take(30)}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$connectCallId] BUT TITLE IS ALREADY SET TO: ${_conversationTitle.value?.take(50)}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$connectCallId] Current state: currentConversationId=${currentConversationId?.take(20)}, title=${_conversationTitle.value?.take(30)}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$connectCallId] Final state: title=${_conversationTitle.value?.take(40)}, msgCount=${_messages.value.size}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$connectCallId] Parsed: sessionId=${sessionId?.take(15)}, encodedPath=${encodedPath?.take(30)}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "[$connectCallId] currentConversationId now = ${currentConversationId?.take(20)}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "loadMoreMessages skipped - isLoading=${_isLoadingMore.value}, hasMore=${_hasMoreMessages.value}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$DebugLogger.d(TAG, "sendMessage(): attachedImages=${images.size}, isDraft=${_isDraftSession.value}, connectionState=${connectionState.value}, isStreaming=${_isStreaming.value}")</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$_error.value = "Message queue is full ($maxQueuedMessages messages). Please wait for current response to complete."</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$currentMessages[pendingIndex] = currentMessages[pendingIndex].copy(isPending = false)</ID>
+    <ID>MaxLineLength:ChatViewModel.kt$ChatViewModel$private</ID>
+    <ID>MaxLineLength:ClaudeHistory.kt$ClaudeSession$@SerialName("source_encoded_path") val sourceEncodedPath: String? = null // Actual directory where session file resides (for inherited sessions)</ID>
+    <ID>MaxLineLength:MarkdownParser.kt$MarkdownParser$elements.addAll(parseLineWithFormatting(line.removePrefix("# "), wrapIn = { InlineElement.Header(it, 1) }))</ID>
+    <ID>MaxLineLength:MarkdownParser.kt$MarkdownParser$elements.addAll(parseLineWithFormatting(line.removePrefix("## "), wrapIn = { InlineElement.Header(it, 2) }))</ID>
+    <ID>MaxLineLength:MarkdownParser.kt$MarkdownParser$elements.addAll(parseLineWithFormatting(line.removePrefix("### "), wrapIn = { InlineElement.Header(it, 3) }))</ID>
+    <ID>MaxLineLength:MarkdownText.kt$appendLine(buildStyledLine(trimmedLine.removePrefix("# "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.4f))</ID>
+    <ID>MaxLineLength:MarkdownText.kt$appendLine(buildStyledLine(trimmedLine.removePrefix("## "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.2f))</ID>
+    <ID>MaxLineLength:MarkdownText.kt$appendLine(buildStyledLine(trimmedLine.removePrefix("### "), textColor, linkColor, codeBackgroundColor, baseStyle, FontWeight.Bold, 1.1f))</ID>
+    <ID>MaxLineLength:MessageBubble.kt$text = block.content.take(500) + if (block.content.length &gt; 500) "..." else ""</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$Text("Delete ${selectedSessions.size} selected session(s)? This will remove the Claude CLI session files.")</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$Text("Delete project \"${deleteProjectTarget!!.second}\" from the list? This removes the project from cache but does not delete any files on disk.")</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$deleteSessionTarget = Triple(session.id, project.path, session.sourceEncodedPath)</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$if (allSelected) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$onToggleSessionSelection = { sessionId -&gt; viewModel.toggleSessionSelection(sessionId) }</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$selectedSessions = if (selectionModeProjectId == project.id) selectedSessions else emptySet()</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$tint = if (session.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$var deleteSessionTarget by remember { mutableStateOf&lt;Triple&lt;String, String, String?&gt;?&gt;(null) } // sessionId, projectPath, sourceEncodedPath</ID>
+    <ID>MaxLineLength:ProjectListScreen.kt$viewModel</ID>
+    <ID>MaxLineLength:ProjectListViewModel.kt$ProjectListViewModel$error = "Projects are automatically discovered from Claude CLI usage. Start using Claude Code in '$path' to see it here."</ID>
+    <ID>MaxLineLength:ProjectListViewModel.kt$ProjectListViewModel$println("ProjectListViewModel: Session $sessionId not found after $maxRetries attempts, doing final refresh")</ID>
+    <ID>MaxLineLength:ProjectListViewModel.kt$ProjectListViewModel$println("ProjectListViewModel: Session not found, attempt $attempt/$maxRetries, waiting ${currentDelay}ms")</ID>
+    <ID>MaxLineLength:Res.kt$Res$public</ID>
+    <ID>MaxLineLength:Res.kt$Res$public suspend</ID>
+    <ID>MaxLineLength:WebSocketClient.kt$WebSocketClient$DebugLogger.d(TAG, "send() called, type=${message.type}, hasContent=${message.content != null}, hasImages=${message.images?.isNotEmpty() == true}")</ID>
+    <ID>NestedBlockDepth:ChatViewModel.kt$ChatViewModel$@OptIn(ExperimentalUuidApi::class) private suspend fun createSessionAndSendMessage(content: String, images: List&lt;AttachedImage&gt; = emptyList())</ID>
+    <ID>NestedBlockDepth:ChatViewModel.kt$ChatViewModel$private suspend fun handleHistoryWatchEvent(event: HistoryWatchEvent)</ID>
+    <ID>NestedBlockDepth:ChatViewModel.kt$ChatViewModel$private suspend fun loadMessagesFromFilesystem( encodedPath: String, sessionId: String, expectedConversationId: String, callId: String = "?" )</ID>
+    <ID>NestedBlockDepth:MessageParser.kt$MessageParser$fun extractToolSummary(toolName: String, input: Any?): String</ID>
+    <ID>NestedBlockDepth:MessageParser.kt$MessageParser$fun extractToolsFromContent( content: Any?, toolUses: MutableMap&lt;String, ToolUseInfo&gt;, toolResults: MutableMap&lt;String, Pair&lt;String, Boolean&gt;&gt; )</ID>
+    <ID>NestedBlockDepth:MessageParser.kt$MessageParser$fun hasOnlyToolResults(content: Any?): Boolean</ID>
+    <ID>NestedBlockDepth:MessageParser.kt$MessageParser$fun parseMessageContent(content: Any?, messageUuid: String? = null): List&lt;ContentBlock&gt;</ID>
+    <ID>NestedBlockDepth:MessageParser.kt$MessageParser$private fun processJsonElementToBlocks( element: JsonObject, blocks: MutableList&lt;ContentBlock&gt;, messageUuid: String? = null )</ID>
+    <ID>NestedBlockDepth:MessageParser.kt$MessageParser$private fun processMapElementToBlocks( item: Map&lt;*, *&gt;, blocks: MutableList&lt;ContentBlock&gt;, messageUuid: String? = null )</ID>
+    <ID>PackageNaming:Drawable0.commonMain.kt$package claude_code_native.composeapp.generated.resources</ID>
+    <ID>PackageNaming:ExpectResourceCollectors.kt$package claude_code_native.composeapp.generated.resources</ID>
+    <ID>PackageNaming:Font0.commonMain.kt$package claude_code_native.composeapp.generated.resources</ID>
+    <ID>PackageNaming:Res.kt$package claude_code_native.composeapp.generated.resources</ID>
+    <ID>PrintStackTrace:ChatViewModel.kt$ChatViewModel$e</ID>
+    <ID>PrintStackTrace:HistoryWatchClient.kt$HistoryWatchClient$e</ID>
+    <ID>PrintStackTrace:WebSocketClient.kt$WebSocketClient$e</ID>
+    <ID>ReturnCount:ChatViewModel.kt$ChatViewModel$@OptIn(ExperimentalUuidApi::class) private suspend fun createSessionAndSendMessage(content: String, images: List&lt;AttachedImage&gt; = emptyList())</ID>
+    <ID>ReturnCount:ChatViewModel.kt$ChatViewModel$fun sendMessage(content: String)</ID>
+    <ID>ReturnCount:ChatViewModel.kt$ChatViewModel$private suspend fun loadMessagesFromFilesystem( encodedPath: String, sessionId: String, expectedConversationId: String, callId: String = "?" )</ID>
+    <ID>SwallowedException:App.kt$e: Exception</ID>
+    <ID>SwallowedException:ChatScreen.kt$e: Exception</ID>
+    <ID>SwallowedException:ChatViewModel.kt$ChatViewModel$e: Exception</ID>
+    <ID>SwallowedException:HistoryWatchClient.kt$HistoryWatchClient$e: Exception</ID>
+    <ID>SwallowedException:LoginViewModel.kt$LoginViewModel$e: Exception</ID>
+    <ID>SwallowedException:MessageParser.kt$MessageParser$e: Exception</ID>
+    <ID>SwallowedException:ProjectListViewModel.kt$ProjectListViewModel$e: Exception</ID>
+    <ID>SwallowedException:WebSocketClient.kt$WebSocketClient$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:App.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ChatScreen.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ChatScreen.kt$scrollError: Exception</ID>
+    <ID>TooGenericExceptionCaught:ChatViewModel.kt$ChatViewModel$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:HistoryWatchClient.kt$HistoryWatchClient$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:LoginViewModel.kt$LoginViewModel$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:MarkdownText.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:MessageParser.kt$MessageParser$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ProjectListViewModel.kt$ProjectListViewModel$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SettingsViewModel.kt$SettingsViewModel$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:WebSocketClient.kt$WebSocketClient$e: Exception</ID>
+    <ID>TooManyFunctions:ChatViewModel.kt$ChatViewModel</ID>
+    <ID>TooManyFunctions:ProjectListViewModel.kt$ProjectListViewModel</ID>
+    <ID>UnusedImports:App.kt$import com.claudecode.native.ui.screen.ChatScreen</ID>
+    <ID>UnusedImports:App.kt$import com.claudecode.native.ui.screen.ProjectListScreen</ID>
+    <ID>UnusedImports:ChatScreen.kt$import com.claudecode.native.ui.component.ProcessingIndicator</ID>
+    <ID>UnusedImports:ChatScreen.kt$import com.claudecode.native.ui.viewmodel.ContentBlock</ID>
+    <ID>UnusedImports:ChatScreen.kt$import com.claudecode.native.util.PickedImage</ID>
+    <ID>UnusedImports:ChatViewModel.kt$import com.claudecode.native.data.model.QueuedMessageDto</ID>
+    <ID>UnusedImports:ChatViewModel.kt$import com.claudecode.native.data.websocket.QueueMessagePayload</ID>
+    <ID>UnusedImports:MessageBubble.kt$import androidx.compose.foundation.layout.BoxWithConstraints</ID>
+    <ID>UnusedImports:ProcessingIndicator.kt$import androidx.compose.foundation.background</ID>
+    <ID>UnusedImports:QueueApi.kt$import com.claudecode.native.data.model.QueueSuccessResponse</ID>
+    <ID>UnusedImports:SlashCommandMenu.kt$import androidx.compose.ui.unit.sp</ID>
+    <ID>UnusedImports:StatusLine.kt$import androidx.compose.ui.graphics.Color</ID>
+    <ID>UnusedParameter:ImageAttachment.kt$onImagesSelected: (List&lt;AttachedImage&gt;) -&gt; Unit</ID>
+    <ID>UnusedParameter:MarkdownText.kt$textColor: Color</ID>
+    <ID>UnusedParameter:ProjectListViewModel.kt$ProjectListViewModel$name: String</ID>
+    <ID>UnusedPrivateMember:ChatViewModel.kt$ChatViewModel$private fun updateQueueForConversation(conversationId: String, transform: (List&lt;QueuedMessage&gt;) -&gt; List&lt;QueuedMessage&gt;)</ID>
+    <ID>UnusedPrivateProperty:ChatScreen.kt$val filteredMessagesCount = messages.count { it.blocks.isNotEmpty() }</ID>
+    <ID>UnusedPrivateProperty:ChatScreen.kt$val keyboardController = LocalSoftwareKeyboardController.current</ID>
+    <ID>UseCheckOrError:WebSocketClient.kt$WebSocketClient$throw IllegalStateException("WebSocket is not connected")</ID>
+    <ID>WildcardImport:ApiClient.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:ApiClient.kt$import io.ktor.client.call.*</ID>
+    <ID>WildcardImport:ApiClient.kt$import io.ktor.client.plugins.*</ID>
+    <ID>WildcardImport:ApiClient.kt$import io.ktor.client.plugins.contentnegotiation.*</ID>
+    <ID>WildcardImport:ApiClient.kt$import io.ktor.client.plugins.logging.*</ID>
+    <ID>WildcardImport:ApiClient.kt$import io.ktor.client.request.*</ID>
+    <ID>WildcardImport:ApiClient.kt$import io.ktor.http.*</ID>
+    <ID>WildcardImport:ApiClient.kt$import io.ktor.serialization.kotlinx.json.*</ID>
+    <ID>WildcardImport:HistoryWatchClient.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:HistoryWatchClient.kt$import io.ktor.client.plugins.websocket.*</ID>
+    <ID>WildcardImport:HistoryWatchClient.kt$import io.ktor.websocket.*</ID>
+    <ID>WildcardImport:WebSocketClient.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:WebSocketClient.kt$import io.ktor.client.plugins.websocket.*</ID>
+    <ID>WildcardImport:WebSocketClient.kt$import io.ktor.websocket.*</ID>
+  </CurrentIssues>
+</SmellBaseline>
