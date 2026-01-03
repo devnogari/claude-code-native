@@ -86,6 +86,10 @@ class UnifiedWebSocketClient(
     /** Currently subscribed conversation ID */
     val currentSubscription: StateFlow<String?> = _currentSubscription.asStateFlow()
 
+    // Cached subscription parameters for reconnection
+    private var currentSessionId: String? = null
+    private var currentEncodedPath: String? = null
+
     private val _messages = MutableSharedFlow<IncomingMessage>()
     /** Flow of incoming messages from the server. Collectors receive all messages. */
     val messages: SharedFlow<IncomingMessage> = _messages.asSharedFlow()
@@ -158,7 +162,7 @@ class UnifiedWebSocketClient(
             val previousSubscription = _currentSubscription.value
             if (previousSubscription != null) {
                 DebugLogger.d(TAG, "Re-subscribing to conversation: $previousSubscription")
-                subscribeInternal(previousSubscription)
+                subscribeInternal(previousSubscription, currentSessionId, currentEncodedPath)
             }
 
             receiveJob = scope.launch {
@@ -326,8 +330,11 @@ class UnifiedWebSocketClient(
         )
         session?.send(Frame.Text(json.encodeToString(SubscribeMessage.serializer(), subscribeMessage)))
         _currentSubscription.value = conversationId
+        // Cache subscription parameters for reconnection
+        currentSessionId = sessionId
+        currentEncodedPath = encodedPath
         _sessionState.value = null // Clear previous session state
-        DebugLogger.d(TAG, "Sent subscribe request for conversation: $conversationId")
+        DebugLogger.d(TAG, "Sent subscribe request for conversation: $conversationId, sessionId: $sessionId")
     }
 
     /**
@@ -343,6 +350,8 @@ class UnifiedWebSocketClient(
             }
 
             _currentSubscription.value = null
+            currentSessionId = null
+            currentEncodedPath = null
             _sessionState.value = null
             DebugLogger.d(TAG, "Unsubscribed from conversation: $currentConversationId")
         }
@@ -433,6 +442,8 @@ class UnifiedWebSocketClient(
             reconnectAttempt = 0
             currentToken = null
             _currentSubscription.value = null
+            currentSessionId = null
+            currentEncodedPath = null
             _sessionState.value = null
 
             _connectionState.value = ConnectionState.Disconnected

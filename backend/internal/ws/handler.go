@@ -1007,6 +1007,13 @@ func (h *Handler) HandleUserWebSocket(c *websocket.Conn) {
 	// Register client with hub
 	h.hub.Register(client)
 
+	// Send authenticated status to client
+	h.sendStatusToClient(client, "authenticated")
+
+	h.logger.Info("User WebSocket authenticated",
+		zap.String("clientID", client.ID.String()),
+		zap.String("userID", userID.String()))
+
 	// Start read/write pumps
 	go h.writePump(client)
 	h.readUserPump(client)
@@ -1070,6 +1077,12 @@ func (h *Handler) handleUserMessage(client *Client, msg *IncomingMessage) {
 
 // handleSubscribeMessage handles subscribe requests
 func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
+	// Check if this is a filesystem-based session (sessionId + encodedPath provided)
+	if msg.SessionID != "" && msg.EncodedPath != "" {
+		h.handleFilesystemSubscribe(client, msg)
+		return
+	}
+
 	// Read subscribe fields directly from msg (frontend sends fields at top level)
 	convID, err := uuid.FromString(msg.ConversationID)
 	if err != nil || msg.ConversationID == "" {
@@ -1127,6 +1140,78 @@ func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
 	h.logger.Info("Client subscribed to conversation",
 		zap.String("clientID", client.ID.String()),
 		zap.String("conversationID", convID.String()))
+}
+
+// handleFilesystemSubscribe handles subscription for filesystem-based Claude sessions
+// These don't have a DB conversation - they use sessionId + encodedPath directly
+func (h *Handler) handleFilesystemSubscribe(client *Client, msg *IncomingMessage) {
+	// Decode project path using the same scheme as HandleConnection
+	// This uses smart decoding that verifies paths exist on the filesystem
+	projectPath := decodeProjectPath(msg.EncodedPath)
+
+	// Validate the project path exists and is a directory
+	cleanPath := filepath.Clean(projectPath)
+	if !filepath.IsAbs(cleanPath) {
+		h.logger.Warn("Project path is not absolute", zap.String("path", projectPath))
+		h.sendErrorToClient(client, "Invalid project path: must be absolute")
+		return
+	}
+
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		h.logger.Warn("Project path does not exist", zap.String("path", cleanPath), zap.Error(err))
+		h.sendErrorToClient(client, "Project path not found")
+		return
+	}
+	if !info.IsDir() {
+		h.logger.Warn("Project path is not a directory", zap.String("path", cleanPath))
+		h.sendErrorToClient(client, "Invalid project path: not a directory")
+		return
+	}
+	projectPath = cleanPath
+
+	// Parse sessionId as UUID
+	sessionUUID, err := uuid.FromString(msg.SessionID)
+	if err != nil {
+		h.logger.Warn("Failed to parse session ID as UUID", zap.Error(err), zap.String("sessionID", msg.SessionID))
+		h.sendErrorToClient(client, "Invalid session ID format")
+		return
+	}
+
+	// Generate a deterministic UUID from sessionId + encodedPath for subscription tracking
+	// This allows consistent subscription management without a DB conversation
+	virtualConvID := uuid.NewV5(uuid.NamespaceOID, msg.SessionID+":"+msg.EncodedPath)
+
+	// Cache project path and Claude session ID
+	client.ProjectPath = projectPath
+	client.ClaudeSessionID = sessionUUID
+	client.IsFilesystemSession = true
+
+	// Subscribe to the virtual conversation
+	resp := make(chan error, 1)
+	h.hub.Subscribe(&SubscribeRequest{
+		Client:         client,
+		ConversationID: virtualConvID,
+		SessionID:      msg.SessionID,
+		EncodedPath:    msg.EncodedPath,
+		Response:       resp,
+	})
+	<-resp
+
+	// Send subscribed confirmation with the virtual conversation ID
+	h.sendSubscribedToClient(client, virtualConvID)
+
+	// Send session state for filesystem session (no DB queue lookup)
+	h.sendFilesystemSessionStateToClient(client, virtualConvID, msg.SessionID, msg.EncodedPath)
+
+	// Send empty queue sync for filesystem sessions (they don't use DB queues)
+	h.sendEmptyQueueSyncToClient(client)
+
+	h.logger.Info("Client subscribed to filesystem session",
+		zap.String("clientID", client.ID.String()),
+		zap.String("sessionID", msg.SessionID),
+		zap.String("projectPath", projectPath),
+		zap.String("virtualConvID", virtualConvID.String()))
 }
 
 // sendSubscribedToClient sends subscription confirmation
@@ -1210,6 +1295,70 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 	}
 }
 
+// sendFilesystemSessionStateToClient sends session state for filesystem-based sessions
+// Unlike sendSessionStateToClient, this doesn't query the database for queue messages
+func (h *Handler) sendFilesystemSessionStateToClient(client *Client, convID uuid.UUID, sessionID, encodedPath string) {
+	// Determine session state and todos
+	var sessionState SessionStateType = SessionStateIdle
+	var isStreaming bool = false
+	var todos []TodoItem
+
+	// Check if there's an active Claude process
+	if h.claudeMgr != nil {
+		process := h.claudeMgr.GetProcess(convID)
+		if process != nil && process.GetStatus() == claude.ProcessStatusRunning {
+			sessionState = SessionStateStreaming
+			isStreaming = true
+		}
+	}
+
+	// Build payload with empty queue (filesystem sessions don't use DB queues)
+	payload := SessionStatePayload{
+		ConversationID: convID.String(),
+		SessionState:   sessionState,
+		IsStreaming:    isStreaming,
+		Todos:          todos,
+		Queue:          []interface{}{}, // Empty queue for filesystem sessions
+	}
+
+	msg := OutgoingMessage{
+		Type:    MessageTypeSessionState,
+		Payload: payload,
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("Failed to marshal filesystem session state message", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	default:
+		h.logger.Warn("Failed to send filesystem session state - buffer full")
+	}
+}
+
+// sendEmptyQueueSyncToClient sends an empty queue sync to a client
+// Used for filesystem sessions that don't have DB-backed queues
+func (h *Handler) sendEmptyQueueSyncToClient(client *Client) {
+	payload := queue.QueueSyncPayload{
+		Messages: []queue.QueuedMessageResponse{},
+	}
+
+	msg := createQueueSyncMessage(payload)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("failed to marshal empty queue sync message", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	default:
+		// Buffer full, skip
+	}
+}
+
 // handleUnsubscribeMessage handles unsubscribe requests
 func (h *Handler) handleUnsubscribeMessage(client *Client) {
 	h.hub.UnsubscribeClient(client)
@@ -1240,8 +1389,8 @@ func (h *Handler) handleUserChatMessage(client *Client, msg *IncomingMessage) {
 		return
 	}
 
-	// Delegate to existing chat handler logic
-	h.handleChatMessage(client, msg.Content, msg.Images, client.ProjectPath, client.ClaudeSessionID, false)
+	// Delegate to existing chat handler logic, using cached IsFilesystemSession flag
+	h.handleChatMessage(client, msg.Content, msg.Images, client.ProjectPath, client.ClaudeSessionID, client.IsFilesystemSession)
 }
 
 // handleUserStopMessage handles stop messages in user WebSocket

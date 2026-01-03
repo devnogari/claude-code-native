@@ -30,6 +30,8 @@ type Client struct {
 	ProjectPath string
 	// ClaudeSessionID is the Claude session ID to use for this conversation
 	ClaudeSessionID uuid.UUID
+	// IsFilesystemSession indicates if this is a filesystem-based session (not DB-backed)
+	IsFilesystemSession bool
 }
 
 // NewClient creates a new WebSocket client
