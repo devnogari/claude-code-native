@@ -254,6 +254,12 @@ func (h *HistoryReader) GetProjects() ([]ClaudeProject, error) {
 		projectPath := DecodeProjectPath(encodedPath)
 		projectDir := filepath.Join(h.basePath, encodedPath)
 
+		// Skip git worktree directories (they reference the same git repo as parent)
+		if isWorktreePath(projectPath) {
+			h.logger.Debug("skipping worktree project", "path", projectPath)
+			continue
+		}
+
 		// Get sessions for this project
 		sessions, lastAccessed, err := h.getProjectSessions(projectDir)
 		if err != nil {
@@ -291,6 +297,13 @@ func (h *HistoryReader) GetProjects() ([]ClaudeProject, error) {
 
 // GetProject returns a specific project by its encoded path
 func (h *HistoryReader) GetProject(encodedPath string) (*ClaudeProject, error) {
+	projectPath := DecodeProjectPath(encodedPath)
+
+	// Skip git worktree directories (they reference the same git repo as parent)
+	if isWorktreePath(projectPath) {
+		return nil, os.ErrNotExist
+	}
+
 	projectDir := filepath.Join(h.basePath, encodedPath)
 	info, err := os.Stat(projectDir)
 	if err != nil {
@@ -300,7 +313,6 @@ func (h *HistoryReader) GetProject(encodedPath string) (*ClaudeProject, error) {
 		return nil, os.ErrNotExist
 	}
 
-	projectPath := DecodeProjectPath(encodedPath)
 	sessions, lastAccessed, err := h.getProjectSessions(projectDir)
 	if err != nil {
 		return nil, err
@@ -714,4 +726,28 @@ func GetSessionTodos(sessionID string) ([]TodoItem, error) {
 	}
 
 	return todos, nil
+}
+
+// isWorktreePath checks if a path is inside a git worktree directory.
+// Worktrees share the same git repository as their parent, so syncing them
+// would create duplicate entries for the same conversations.
+// Used in GetProjects() and GetProject() to filter out worktree directories.
+func isWorktreePath(path string) bool {
+	// Normalize backslashes to forward slashes for consistent cross-platform matching
+	// Note: filepath.ToSlash only converts the current OS separator, so we handle
+	// backslashes explicitly for Windows paths processed on any OS
+	normalized := strings.ReplaceAll(path, "\\", "/")
+
+	// Common worktree directory patterns
+	worktreePatterns := []string{
+		"/.worktrees/",
+		"/worktrees/",
+	}
+
+	for _, pattern := range worktreePatterns {
+		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
 }
