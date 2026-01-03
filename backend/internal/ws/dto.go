@@ -27,6 +27,16 @@ const (
 	MessageTypeQueueRemove = "queue_remove"
 	// MessageTypeQueueSync is sent by server to sync the full queue state
 	MessageTypeQueueSync = "queue_sync"
+
+	// New message types for unified WebSocket
+	// MessageTypeSubscribe is sent by client to subscribe to a conversation
+	MessageTypeSubscribe = "subscribe"
+	// MessageTypeUnsubscribe is sent by client to unsubscribe from current conversation
+	MessageTypeUnsubscribe = "unsubscribe"
+	// MessageTypeSubscribed is sent by server to confirm subscription
+	MessageTypeSubscribed = "subscribed"
+	// MessageTypeSessionState is sent by server with full session state
+	MessageTypeSessionState = "session_state"
 )
 
 // ImageContent represents an image attachment in a chat message
@@ -133,4 +143,34 @@ func createQueueSyncMessage(payload interface{}) *QueueMessage {
 		Type:    MessageTypeQueueSync,
 		Payload: payload,
 	}
+}
+
+// SubscribePayload is sent by client to subscribe to a conversation
+type SubscribePayload struct {
+	ConversationID string `json:"conversationId"`
+	SessionID      string `json:"sessionId,omitempty"`   // For filesystem sessions
+	EncodedPath    string `json:"encodedPath,omitempty"` // For filesystem sessions
+}
+
+// SubscribedPayload is sent by server to confirm subscription
+type SubscribedPayload struct {
+	ConversationID string `json:"conversationId"`
+}
+
+// SessionStatePayload is sent by server with full session state
+type SessionStatePayload struct {
+	ConversationID string        `json:"conversationId"`
+	SessionState   string        `json:"sessionState"` // idle, queued, streaming
+	IsStreaming    bool          `json:"isStreaming"`
+	Todos          []TodoItem    `json:"todos"`
+	Queue          []interface{} `json:"queue"` // Use interface{} to avoid circular import with queue package
+}
+
+// TodoItem represents a todo from Claude Code's TodoWrite
+type TodoItem struct {
+	Content    string  `json:"content"`
+	Status     string  `json:"status"`
+	ActiveForm *string `json:"activeForm,omitempty"`
+	Priority   *string `json:"priority,omitempty"`
+	ID         *string `json:"id,omitempty"`
 }
