@@ -63,7 +63,11 @@ func (s *Server) setupRoutes() {
 	protected.Post("/commands/list", s.commandHandler.List)
 	protected.Post("/commands/execute", s.commandHandler.Execute)
 
-	// WebSocket route for real-time conversation streaming
+	// Unified user WebSocket (single connection per user, multiplexes all conversations)
+	// IMPORTANT: This route MUST come before /ws/:conversationID to avoid "user" being matched as a conversationID
+	protected.Get("/ws/user", s.wsHandler.Upgrade, websocket.New(s.wsHandler.HandleUserWebSocket))
+
+	// WebSocket route for real-time conversation streaming (per-conversation, kept for backward compatibility)
 	// Auth is handled via query params within the handler for WebSocket connections
 	protected.Get("/ws/:conversationID", s.wsHandler.Upgrade, websocket.New(s.wsHandler.HandleConnection))
 
