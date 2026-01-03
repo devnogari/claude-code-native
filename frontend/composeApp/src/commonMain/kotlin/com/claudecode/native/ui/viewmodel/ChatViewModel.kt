@@ -45,6 +45,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -234,18 +236,19 @@ class ChatViewModel(
     // Per-conversation streaming start times (Map: conversationId -> timestamp)
     private val streamingStartTimes = mutableMapOf<String, Long>()
 
-    // Static fallback for when no conversation is selected (avoids creating new StateFlow each access)
-    private val _inactiveProgressStatus = MutableStateFlow(ProgressStatus()).asStateFlow()
-
     /**
      * Progress status for the current conversation's status line UI (Claude Code style).
      * Tracks elapsed time, status text, tokens, and thinking time during streaming.
-     * Returns the status for currentConversationId, or inactive status if none.
+     * Reactively switches to the correct StateFlow when conversation changes.
      */
-    val progressStatus: StateFlow<ProgressStatus>
-        get() = currentConversationId?.let { convId ->
-            _progressStatusMap.getOrPut(convId) { MutableStateFlow(ProgressStatus()) }
-        }?.asStateFlow() ?: _inactiveProgressStatus
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val progressStatus: StateFlow<ProgressStatus> by lazy {
+        _currentConversationIdFlow.flatMapLatest { convId ->
+            convId?.let {
+                _progressStatusMap.getOrPut(it) { MutableStateFlow(ProgressStatus()) }
+            } ?: flowOf(ProgressStatus())
+        }.stateIn(scope, SharingStarted.WhileSubscribed(5000), ProgressStatus())
+    }
 
     /** Connection state exposed from the unified WebSocket client. */
     val connectionState: StateFlow<ConnectionState>
