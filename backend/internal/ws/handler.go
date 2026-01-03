@@ -39,6 +39,9 @@ const (
 
 	// maxContentLength is the maximum content length for chat messages
 	maxContentLength = 100 * 1024 // 100KB
+
+	// dbOperationTimeout is the timeout for database operations
+	dbOperationTimeout = 5 * time.Second
 )
 
 // ConversationRepository defines the interface for conversation data access
@@ -1060,7 +1063,7 @@ func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
 
 	// Validate user has access to this conversation
 	// Use timeout context to prevent indefinite DB waits
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
 	defer cancel()
 
 	conv, err := h.convRepo.FindByID(ctx, convID)
@@ -1160,10 +1163,10 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 		}
 	}
 
-	// Convert queue to interface slice
-	var queueInterface []interface{}
-	for _, q := range queueMsgs {
-		queueInterface = append(queueInterface, q)
+	// Convert queue to interface slice (pre-allocate to avoid repeated reallocation)
+	queueInterface := make([]interface{}, len(queueMsgs))
+	for i, q := range queueMsgs {
+		queueInterface[i] = q
 	}
 
 	payload := SessionStatePayload{
