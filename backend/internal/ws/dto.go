@@ -68,7 +68,7 @@ type IncomingMessage struct {
 
 // OutgoingMessage represents a message sent to the WebSocket client
 type OutgoingMessage struct {
-	// Type is the message type (stream, status, error, complete, pong)
+	// Type is the message type (stream, status, error, complete, pong, subscribed, session_state)
 	Type string `json:"type"`
 	// ConversationID identifies which conversation this message belongs to
 	ConversationID string `json:"conversation_id,omitempty"`
@@ -78,6 +78,8 @@ type OutgoingMessage struct {
 	Error string `json:"error,omitempty"`
 	// Status contains the status message (used for status type)
 	Status string `json:"status,omitempty"`
+	// Payload is the structured payload for subscribed, session_state messages
+	Payload interface{} `json:"payload,omitempty"`
 }
 
 // Helper functions to create outgoing messages
@@ -150,13 +152,6 @@ func createQueueSyncMessage(payload interface{}) *QueueMessage {
 		Type:    MessageTypeQueueSync,
 		Payload: payload,
 	}
-}
-
-// SubscribePayload is sent by client to subscribe to a conversation
-type SubscribePayload struct {
-	ConversationID string `json:"conversationId"`
-	SessionID      string `json:"sessionId,omitempty"`   // For filesystem sessions
-	EncodedPath    string `json:"encodedPath,omitempty"` // For filesystem sessions
 }
 
 // SubscribedPayload is sent by server to confirm subscription

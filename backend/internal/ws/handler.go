@@ -1108,11 +1108,10 @@ func (h *Handler) sendSubscribedToClient(client *Client, convID uuid.UUID) {
 	payload := SubscribedPayload{
 		ConversationID: convID.String(),
 	}
-	payloadBytes, _ := json.Marshal(payload)
 
 	msg := OutgoingMessage{
 		Type:    MessageTypeSubscribed,
-		Content: string(payloadBytes),
+		Payload: payload,
 	}
 	data, _ := json.Marshal(msg)
 
@@ -1126,7 +1125,13 @@ func (h *Handler) sendSubscribedToClient(client *Client, convID uuid.UUID) {
 // sendSessionStateToClient sends full session state
 func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, sessionID, encodedPath string) {
 	// Get queue from service
-	queueMsgs, _ := h.queueService.GetQueue(context.Background(), convID)
+	queueMsgs, err := h.queueService.GetQueue(context.Background(), convID)
+	if err != nil {
+		h.logger.Error("Failed to get queue for session state",
+			zap.String("conversationID", convID.String()),
+			zap.Error(err))
+		// Continue with empty queue rather than failing
+	}
 
 	// Determine session state and todos
 	var sessionState string = "idle"
@@ -1155,11 +1160,10 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 		Todos:          todos,
 		Queue:          queueInterface,
 	}
-	payloadBytes, _ := json.Marshal(payload)
 
 	msg := OutgoingMessage{
 		Type:    MessageTypeSessionState,
-		Content: string(payloadBytes),
+		Payload: payload,
 	}
 	data, _ := json.Marshal(msg)
 

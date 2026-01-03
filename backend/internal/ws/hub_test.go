@@ -430,7 +430,7 @@ func TestHub_MultipleConversations(t *testing.T) {
 func TestHub_Subscribe(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
-	defer close(hub.register) // Stop the hub
+	// Note: Hub.Run() doesn't have a shutdown mechanism, goroutine will exit with test
 
 	// Create a client
 	clientID, _ := uuid.NewV7()
