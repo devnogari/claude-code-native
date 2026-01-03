@@ -132,7 +132,7 @@ class ProgressTracker {
      * Stops progress tracking for a conversation.
      *
      * Cancels the elapsed time counter and sets isActive to false.
-     * Preserves existing todos.
+     * Clears todos if all are completed, otherwise preserves them.
      *
      * @param conversationId The conversation ID
      */
@@ -144,11 +144,18 @@ class ProgressTracker {
             elapsedTimeJobs[conversationId]?.cancel()
             elapsedTimeJobs.remove(conversationId)
 
-            // Update progress status to inactive, preserving todos
+            // Update progress status to inactive
             val progressFlow = progressStatusMap[conversationId]
             progressFlow?.let { flow ->
                 val existingTodos = flow.value.todos
-                flow.value = ProgressStatus(isActive = false, todos = existingTodos)
+                // Clear todos if all are completed, otherwise preserve them
+                val shouldClearTodos = existingTodos.isNotEmpty() &&
+                    existingTodos.all { it.isCompleted }
+                val todosToKeep = if (shouldClearTodos) emptyList() else existingTodos
+                if (shouldClearTodos) {
+                    DebugLogger.d(TAG, "stopProgressTracking: clearing ${existingTodos.size} completed todos")
+                }
+                flow.value = ProgressStatus(isActive = false, todos = todosToKeep)
             }
         }
     }
