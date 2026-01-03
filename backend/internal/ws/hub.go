@@ -138,6 +138,18 @@ func (h *Hub) unregisterClient(client *Client) {
 	close(client.Send)
 }
 
+// removeClientFromConversation removes a client from a conversation's client map.
+// Must be called with h.mu held.
+func (h *Hub) removeClientFromConversation(clientID, conversationID uuid.UUID) {
+	if clients, ok := h.conversations[conversationID]; ok {
+		delete(clients, clientID)
+		// Clean up empty conversation map
+		if len(clients) == 0 {
+			delete(h.conversations, conversationID)
+		}
+	}
+}
+
 // handleSubscribe processes a subscription request
 func (h *Hub) handleSubscribe(req *SubscribeRequest) {
 	h.mu.Lock()
@@ -148,13 +160,7 @@ func (h *Hub) handleSubscribe(req *SubscribeRequest) {
 
 	// 1. Unsubscribe from previous conversation if any
 	if oldConvID, exists := h.subscriptions[client.ID]; exists {
-		if clients, ok := h.conversations[oldConvID]; ok {
-			delete(clients, client.ID)
-			// Clean up empty conversation map
-			if len(clients) == 0 {
-				delete(h.conversations, oldConvID)
-			}
-		}
+		h.removeClientFromConversation(client.ID, oldConvID)
 	}
 
 	// 2. Subscribe to new conversation
@@ -252,12 +258,7 @@ func (h *Hub) UnsubscribeClient(client *Client) {
 	defer h.mu.Unlock()
 
 	if oldConvID, exists := h.subscriptions[client.ID]; exists {
-		if clients, ok := h.conversations[oldConvID]; ok {
-			delete(clients, client.ID)
-			if len(clients) == 0 {
-				delete(h.conversations, oldConvID)
-			}
-		}
+		h.removeClientFromConversation(client.ID, oldConvID)
 		delete(h.subscriptions, client.ID)
 	}
 	client.ConversationID = uuid.Nil

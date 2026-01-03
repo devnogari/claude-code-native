@@ -161,8 +161,31 @@ data class QueueImagePayload(
 )
 
 /**
+ * Outgoing subscribe message for unified WebSocket.
+ * Type-safe wrapper for subscribe requests.
+ */
+@Serializable
+data class SubscribeMessage(
+    val type: String = MessageType.SUBSCRIBE,
+    @SerialName("conversation_id") val conversationId: String,
+    @SerialName("session_id") val sessionId: String? = null,
+    @SerialName("encoded_path") val encodedPath: String? = null
+)
+
+/**
+ * Outgoing unsubscribe message for unified WebSocket.
+ * Type-safe wrapper for unsubscribe requests.
+ */
+@Serializable
+data class UnsubscribeMessage(
+    val type: String = MessageType.UNSUBSCRIBE,
+    @SerialName("conversation_id") val conversationId: String
+)
+
+/**
  * Payload for subscribe WebSocket message (unified WebSocket).
  * Used to subscribe to a conversation without reconnecting.
+ * @deprecated Use SubscribeMessage instead for type safety
  */
 @Serializable
 data class SubscribePayload(

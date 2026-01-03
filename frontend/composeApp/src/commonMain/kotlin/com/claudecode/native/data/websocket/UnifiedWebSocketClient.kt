@@ -319,22 +319,12 @@ class UnifiedWebSocketClient(
      * Internal subscribe method - must be called within mutex lock.
      */
     private suspend fun subscribeInternal(conversationId: String, sessionId: String? = null, encodedPath: String? = null) {
-        val payload = SubscribePayload(conversationId, sessionId, encodedPath)
-        val payloadJson = json.encodeToJsonElement(SubscribePayload.serializer(), payload)
-        val message = OutgoingMessage(
-            type = MessageType.SUBSCRIBE,
-            content = null
+        val subscribeMessage = SubscribeMessage(
+            conversationId = conversationId,
+            sessionId = sessionId,
+            encodedPath = encodedPath
         )
-        // We need to send the message with payload - for now, encode conversationId in content
-        // TODO: Update OutgoingMessage to support payload field
-        val subscribeMessage = mapOf(
-            "type" to MessageType.SUBSCRIBE,
-            "conversation_id" to conversationId,
-            "session_id" to sessionId,
-            "encoded_path" to encodedPath
-        ).filterValues { it != null }
-
-        session?.send(Frame.Text(json.encodeToString(subscribeMessage)))
+        session?.send(Frame.Text(json.encodeToString(SubscribeMessage.serializer(), subscribeMessage)))
         _currentSubscription.value = conversationId
         _sessionState.value = null // Clear previous session state
         DebugLogger.d(TAG, "Sent subscribe request for conversation: $conversationId")
@@ -348,11 +338,8 @@ class UnifiedWebSocketClient(
             val currentConversationId = _currentSubscription.value ?: return@withLock
 
             if (_connectionState.value == ConnectionState.Connected) {
-                val unsubscribeMessage = mapOf(
-                    "type" to MessageType.UNSUBSCRIBE,
-                    "conversation_id" to currentConversationId
-                )
-                session?.send(Frame.Text(json.encodeToString(unsubscribeMessage)))
+                val unsubscribeMessage = UnsubscribeMessage(conversationId = currentConversationId)
+                session?.send(Frame.Text(json.encodeToString(UnsubscribeMessage.serializer(), unsubscribeMessage)))
             }
 
             _currentSubscription.value = null

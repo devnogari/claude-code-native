@@ -45,9 +45,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.withLock
 
 /**
@@ -283,9 +286,11 @@ class ChatViewModel(
         private const val TAG = "ChatViewModel"
         /** Marker for draft sessions that haven't been created yet. */
         const val DRAFT_SESSION_MARKER = "draft"
-        /** Number of attempts to wait for WebSocket connection. */
+        /** Timeout for WebSocket connection establishment in milliseconds. */
+        private const val CONNECTION_TIMEOUT_MS = 5000L
+        /** Number of attempts to wait for WebSocket connection (for legacy polling). */
         private const val CONNECTION_TIMEOUT_ATTEMPTS = 50
-        /** Interval between connection checks in milliseconds. */
+        /** Interval between connection checks in milliseconds (for legacy polling). */
         private const val CONNECTION_CHECK_INTERVAL_MS = 100L
         private val WHITESPACE_REGEX = Regex("\\s+")
 
@@ -1099,17 +1104,15 @@ class ChatViewModel(
             DebugLogger.d(TAG, "connectUnified: Establishing connection...")
             unifiedWebSocketClient.connect(token)
 
-            // Wait for connection to be established
-            var attempts = 0
-            while (!unifiedWebSocketClient.isConnected() && attempts < CONNECTION_TIMEOUT_ATTEMPTS) {
-                delay(CONNECTION_CHECK_INTERVAL_MS)
-                attempts++
-            }
-
-            if (!unifiedWebSocketClient.isConnected()) {
+            // Wait for connection using StateFlow - more idiomatic coroutine approach
+            try {
+                withTimeout(CONNECTION_TIMEOUT_MS) {
+                    unifiedWebSocketClient.connectionState.first { it == ConnectionState.Connected }
+                }
+                DebugLogger.d(TAG, "connectUnified: Connection established")
+            } catch (e: TimeoutCancellationException) {
                 throw IllegalStateException("Failed to establish unified WebSocket connection")
             }
-            DebugLogger.d(TAG, "connectUnified: Connection established after $attempts attempts")
         }
 
         // Subscribe to the conversation

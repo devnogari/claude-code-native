@@ -1059,7 +1059,10 @@ func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
 	}
 
 	// Validate user has access to this conversation
-	ctx := context.Background()
+	// Use timeout context to prevent indefinite DB waits
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	conv, err := h.convRepo.FindByID(ctx, convID)
 	if err != nil {
 		h.sendErrorToClient(client, "Conversation not found")
