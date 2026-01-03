@@ -13,7 +13,6 @@ import com.claudecode.native.data.repository.PreferencesRepository
 import com.claudecode.native.data.repository.ThemeRepository
 import com.claudecode.native.data.websocket.HistoryWatchClient
 import com.claudecode.native.data.websocket.UnifiedWebSocketClient
-import com.claudecode.native.data.websocket.WebSocketClient
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.LoginViewModel
 import com.claudecode.native.ui.viewmodel.ProjectListViewModel
@@ -85,17 +84,9 @@ val appModule = module {
 
     // ViewModels - use single to maintain state across recomposition (e.g., theme changes)
     single { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
-    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }  // UnifiedWebSocketClient, WebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, HistoryWatchClient, CommandApi, QueueApi, CoroutineScope
+    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }  // UnifiedWebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, HistoryWatchClient, CommandApi, QueueApi, CoroutineScope
     single { ProjectListViewModel(get(), get(), get()) }  // ClaudeHistoryApi, FavoriteRepository, CoroutineScope
     single { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
-    // WebSocket Client for real-time communication
-    // URL is determined by stored server host in TokenStorage
-    single {
-        WebSocketClient(
-            httpClient = get(),
-            scope = get()
-        )
-    }
 
     // History Watch WebSocket Client for real-time session file changes
     single {

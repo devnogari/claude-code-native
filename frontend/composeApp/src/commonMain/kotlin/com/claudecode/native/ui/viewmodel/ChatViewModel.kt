@@ -25,7 +25,6 @@ import com.claudecode.native.data.websocket.QueueMessagePayload
 import com.claudecode.native.data.websocket.SessionStatePayload
 import com.claudecode.native.data.websocket.TodoItemPayload
 import com.claudecode.native.data.websocket.UnifiedWebSocketClient
-import com.claudecode.native.data.websocket.WebSocketClient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import com.claudecode.native.ui.component.ProgressStatus
@@ -57,13 +56,13 @@ import kotlinx.coroutines.sync.withLock
  * ViewModel for the chat screen, managing real-time messaging via WebSocket.
  *
  * Handles:
- * - WebSocket connection lifecycle
+ * - WebSocket connection lifecycle (single unified connection per user)
  * - Message sending and receiving
  * - Streaming response accumulation
  * - Connection state exposure for UI updates
  * - Loading messages from file-based Claude history
  *
- * @param webSocketClient Client for WebSocket communication
+ * @param unifiedWebSocketClient Unified WebSocket client (single connection per user)
  * @param apiClient API client for auth token retrieval
  * @param conversationApi API client for conversation operations
  * @param projectApi API client for project operations
@@ -72,7 +71,6 @@ import kotlinx.coroutines.sync.withLock
  */
 class ChatViewModel(
     private val unifiedWebSocketClient: UnifiedWebSocketClient,
-    private val webSocketClient: WebSocketClient,
     private val apiClient: ApiClient,
     private val conversationApi: ConversationApi,
     private val projectApi: ProjectApi,
@@ -249,8 +247,9 @@ class ChatViewModel(
             _progressStatusMap.getOrPut(convId) { MutableStateFlow(ProgressStatus()) }
         }?.asStateFlow() ?: _inactiveProgressStatus
 
-    /** Connection state exposed from the WebSocket client. */
-    val connectionState: StateFlow<ConnectionState> = webSocketClient.connectionState
+    /** Connection state exposed from the unified WebSocket client. */
+    val connectionState: StateFlow<ConnectionState>
+        get() = unifiedWebSocketClient.connectionState
 
     private var currentConversationId: String? = null
     private var currentEncodedPath: String? = null
@@ -260,18 +259,6 @@ class ChatViewModel(
     private var loadCommandsJob: Job? = null
     private var currentConnectJob: Job? = null  // Track current connect job to cancel on room switch
     private var isStreamingFromHistoryWatch = false
-
-    // ============================================================================
-    // UNIFIED WEBSOCKET MODE (Feature Flag)
-    // ============================================================================
-    // When true, uses UnifiedWebSocketClient (single connection per user, subscribe/unsubscribe)
-    // When false, uses legacy WebSocketClient (new connection per conversation)
-    // Set to true to enable the new unified WebSocket mode
-    private var useUnifiedWebSocket = true
-
-    /** Connection state exposed - uses unified or legacy client based on mode */
-    val unifiedConnectionState: StateFlow<ConnectionState>
-        get() = if (useUnifiedWebSocket) unifiedWebSocketClient.connectionState else webSocketClient.connectionState
 
     // Session-level tool tracking for matching tool_use with tool_result across messages
     // Using mutableMapOf with Mutex for thread safety across WebSocket and HistoryWatch handlers
@@ -288,10 +275,6 @@ class ChatViewModel(
         const val DRAFT_SESSION_MARKER = "draft"
         /** Timeout for WebSocket connection establishment in milliseconds. */
         private const val CONNECTION_TIMEOUT_MS = 5000L
-        /** Number of attempts to wait for WebSocket connection (for legacy polling). */
-        private const val CONNECTION_TIMEOUT_ATTEMPTS = 50
-        /** Interval between connection checks in milliseconds (for legacy polling). */
-        private const val CONNECTION_CHECK_INTERVAL_MS = 100L
         private val WHITESPACE_REGEX = Regex("\\s+")
 
         /**
@@ -677,30 +660,17 @@ class ChatViewModel(
 
 
     init {
-        // Collect incoming WebSocket messages (legacy per-conversation client)
-        scope.launch {
-            webSocketClient.messages.collect { message ->
-                if (!useUnifiedWebSocket) {
-                    handleIncomingMessage(message)
-                }
-            }
-        }
-
-        // Collect incoming WebSocket messages (unified single-connection client)
+        // Collect incoming WebSocket messages from unified client
         scope.launch {
             unifiedWebSocketClient.messages.collect { message ->
-                if (useUnifiedWebSocket) {
-                    handleIncomingMessage(message)
-                }
+                handleIncomingMessage(message)
             }
         }
 
         // Collect session state updates from unified WebSocket client
         scope.launch {
             unifiedWebSocketClient.sessionState.collect { state ->
-                if (useUnifiedWebSocket) {
-                    state?.let { handleSessionState(it) }
-                }
+                state?.let { handleSessionState(it) }
             }
         }
 
@@ -711,11 +681,10 @@ class ChatViewModel(
             }
         }
 
-        // Sync queue and retry local messages when reconnected (both modes)
+        // Sync queue and retry local messages when reconnected
         scope.launch {
             var previousState: ConnectionState? = null
-            val stateFlow = if (useUnifiedWebSocket) unifiedWebSocketClient.connectionState else connectionState
-            stateFlow.collect { newState ->
+            unifiedWebSocketClient.connectionState.collect { newState ->
                 // Check if we just reconnected (transition to Connected from non-Connected state)
                 if (newState == ConnectionState.Connected && previousState != ConnectionState.Connected) {
                     // Server will send queue_sync via WebSocket, but also sync local messages
@@ -854,11 +823,7 @@ class ChatViewModel(
                 try {
                     DebugLogger.d(TAG, "Retrying queued message (id=${msg.id})")
                     if (msg.images.isEmpty()) {
-                        if (useUnifiedWebSocket) {
-                            unifiedWebSocketClient.sendChat(msg.content)
-                        } else {
-                            webSocketClient.sendChat(msg.content)
-                        }
+                        unifiedWebSocketClient.sendChat(msg.content)
                     } else {
                         val imageDtos = msg.images.map { img ->
                             ImageContentDto(
@@ -867,11 +832,7 @@ class ChatViewModel(
                                 data = Base64.encode(img.data)
                             )
                         }
-                        if (useUnifiedWebSocket) {
-                            unifiedWebSocketClient.sendChatWithImages(msg.content, imageDtos)
-                        } else {
-                            webSocketClient.sendChatWithImages(msg.content, imageDtos)
-                        }
+                        unifiedWebSocketClient.sendChatWithImages(msg.content, imageDtos)
                     }
                     DebugLogger.d(TAG, "Successfully retried queued message (id=${msg.id}), waiting for dequeue event")
                     // Don't remove from queue here - wait for CLI's dequeue event
@@ -927,13 +888,8 @@ class ChatViewModel(
                 DebugLogger.d(TAG, "[$connectCallId] Inside coroutine, checking if need to disconnect")
                 // Disconnect from previous conversation if any
                 if (currentConversationId != null && currentConversationId != conversationId) {
-                    // For unified mode, we just unsubscribe (connection stays open)
-                    // For legacy mode, we disconnect completely
-                    if (useUnifiedWebSocket) {
-                        unifiedWebSocketClient.unsubscribe()
-                    } else {
-                        webSocketClient.disconnect()
-                    }
+                    // Unsubscribe from current conversation (unified connection stays open)
+                    unifiedWebSocketClient.unsubscribe()
                     historyWatchClient.disconnect()
                     isStreamingFromHistoryWatch = false
 
@@ -1028,14 +984,8 @@ class ChatViewModel(
 
                     // Connect WebSocket with the full session identifier
                     // This allows continuing the conversation
-                    DebugLogger.d(TAG, "[$connectCallId] Connecting WebSocket for filesystem session (unified=$useUnifiedWebSocket)")
-                    if (useUnifiedWebSocket) {
-                        // Unified mode: connect once and subscribe to conversations
-                        connectUnified(token, conversationId, sessionId, encodedPath)
-                    } else {
-                        // Legacy mode: new connection per conversation
-                        webSocketClient.connect(conversationId, token)
-                    }
+                    DebugLogger.d(TAG, "[$connectCallId] Connecting WebSocket for filesystem session")
+                    connectUnified(token, conversationId, sessionId, encodedPath)
                     DebugLogger.d(TAG, "[$connectCallId] <<< connect() COMPLETE for: $shortConvId")
                     DebugLogger.d(TAG, "[$connectCallId] Final state: title=${_conversationTitle.value?.take(40)}, msgCount=${_messages.value.size}")
                 } else {
@@ -1048,12 +998,7 @@ class ChatViewModel(
                         return@launch
                     }
 
-                    if (useUnifiedWebSocket) {
-                        // Unified mode for legacy conversations (just subscribe, no encodedPath)
-                        connectUnified(token, conversationId, null, null)
-                    } else {
-                        webSocketClient.connect(conversationId, token)
-                    }
+                    connectUnified(token, conversationId, null, null)
                     connectHistoryWatch(conversationId, token)
                     DebugLogger.d(TAG, "[$connectCallId] <<< Legacy connect() COMPLETE")
                 }
@@ -1679,8 +1624,8 @@ class ChatViewModel(
     fun disconnect() {
         scope.launch {
             try {
-                // Disconnect both clients (HistoryWatch is now suspend, properly awaits)
-                webSocketClient.disconnect()
+                // Unsubscribe from current conversation and disconnect history watch
+                unifiedWebSocketClient.unsubscribe()
                 historyWatchClient.disconnect()
 
                 currentConversationId = null
@@ -1705,7 +1650,7 @@ class ChatViewModel(
     fun retryConnection() {
         scope.launch {
             try {
-                webSocketClient.resetAndReconnect()
+                unifiedWebSocketClient.resetAndReconnect()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1780,13 +1725,9 @@ class ChatViewModel(
                 // The message will be processed by Claude when ready
                 // Message stays in queue until CLI sends "dequeue" event
                 try {
-                    DebugLogger.d(TAG, "Sending queued message to CLI (id=${queuedMessage.id}, unified=$useUnifiedWebSocket)")
+                    DebugLogger.d(TAG, "Sending queued message to CLI (id=${queuedMessage.id})")
                     if (queuedMessage.images.isEmpty()) {
-                        if (useUnifiedWebSocket) {
-                            unifiedWebSocketClient.sendChat(queuedMessage.content)
-                        } else {
-                            webSocketClient.sendChat(queuedMessage.content)
-                        }
+                        unifiedWebSocketClient.sendChat(queuedMessage.content)
                     } else {
                         val imageDtos = queuedMessage.images.map { img ->
                             ImageContentDto(
@@ -1795,11 +1736,7 @@ class ChatViewModel(
                                 data = Base64.encode(img.data)
                             )
                         }
-                        if (useUnifiedWebSocket) {
-                            unifiedWebSocketClient.sendChatWithImages(queuedMessage.content, imageDtos)
-                        } else {
-                            webSocketClient.sendChatWithImages(queuedMessage.content, imageDtos)
-                        }
+                        unifiedWebSocketClient.sendChatWithImages(queuedMessage.content, imageDtos)
                     }
                     DebugLogger.d(TAG, "Queued message sent to CLI, waiting for dequeue event (id=${queuedMessage.id})")
                     // Don't remove from queue here - wait for CLI's dequeue event
@@ -1865,32 +1802,7 @@ class ChatViewModel(
 
             // Connect WebSocket with the new session ID
             DebugLogger.d(TAG, "ChatViewModel: Connecting WebSocket for new session: $newConversationId")
-            webSocketClient.connect(newConversationId, token)
-
-            // Wait for connection to be established
-            var attempts = 0
-            while (connectionState.value != ConnectionState.Connected && attempts < CONNECTION_TIMEOUT_ATTEMPTS) {
-                kotlinx.coroutines.delay(CONNECTION_CHECK_INTERVAL_MS)
-                attempts++
-                // Handle error or disconnected states - fail fast
-                val currentState = connectionState.value
-                if (currentState is ConnectionState.Error || currentState is ConnectionState.Disconnected) {
-                    val errorMsg = if (currentState is ConnectionState.Error) {
-                        "Failed to connect: ${currentState.message}"
-                    } else {
-                        "Connection lost"
-                    }
-                    _error.value = errorMsg
-                    _isDraftSession.value = true  // Revert to draft mode
-                    return
-                }
-            }
-
-            if (connectionState.value != ConnectionState.Connected) {
-                _error.value = "Connection timeout"
-                _isDraftSession.value = true  // Revert to draft mode
-                return
-            }
+            connectUnified(token, newConversationId, newSessionId, encodedPath)
 
             // Connect history watch for real-time updates
             DebugLogger.d(TAG, "ChatViewModel: Connecting history watch for new session: $encodedPath / $newSessionId")
@@ -1969,16 +1881,11 @@ class ChatViewModel(
             _scrollToBottomSignal.update { it + 1 }
 
             // Send via WebSocket (with images if present)
-            DebugLogger.d(TAG, "About to send message via WebSocket (unified=$useUnifiedWebSocket), content='${content.take(50)}...', imageCount=${images.size}")
+            DebugLogger.d(TAG, "About to send message via WebSocket, content='${content.take(50)}...', imageCount=${images.size}")
             try {
                 if (images.isEmpty()) {
-                    if (useUnifiedWebSocket) {
-                        DebugLogger.d(TAG, "Calling unifiedWebSocketClient.sendChat()")
-                        unifiedWebSocketClient.sendChat(content)
-                    } else {
-                        DebugLogger.d(TAG, "Calling webSocketClient.sendChat()")
-                        webSocketClient.sendChat(content)
-                    }
+                    DebugLogger.d(TAG, "Calling unifiedWebSocketClient.sendChat()")
+                    unifiedWebSocketClient.sendChat(content)
                     DebugLogger.d(TAG, "sendChat() completed successfully")
                 } else {
                     DebugLogger.d(TAG, "Preparing imageDtos for ${images.size} images")
@@ -1990,13 +1897,8 @@ class ChatViewModel(
                             data = Base64.encode(img.data)
                         )
                     }
-                    if (useUnifiedWebSocket) {
-                        DebugLogger.d(TAG, "Calling unifiedWebSocketClient.sendChatWithImages()")
-                        unifiedWebSocketClient.sendChatWithImages(content, imageDtos)
-                    } else {
-                        DebugLogger.d(TAG, "Calling webSocketClient.sendChatWithImages()")
-                        webSocketClient.sendChatWithImages(content, imageDtos)
-                    }
+                    DebugLogger.d(TAG, "Calling unifiedWebSocketClient.sendChatWithImages()")
+                    unifiedWebSocketClient.sendChatWithImages(content, imageDtos)
                     DebugLogger.d(TAG, "sendChatWithImages() completed successfully")
                 }
             } catch (e: Exception) {
@@ -2111,11 +2013,7 @@ class ChatViewModel(
     fun stopGeneration() {
         scope.launch {
             try {
-                if (useUnifiedWebSocket) {
-                    unifiedWebSocketClient.sendStop()
-                } else {
-                    webSocketClient.sendStop()
-                }
+                unifiedWebSocketClient.sendStop()
                 finalizeStreamingMessage()
             } catch (e: CancellationException) {
                 throw e
