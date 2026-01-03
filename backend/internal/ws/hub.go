@@ -21,6 +21,15 @@ type BroadcastMessage struct {
 	Data           []byte
 }
 
+// SubscribeRequest represents a client subscription request
+type SubscribeRequest struct {
+	Client         *Client
+	ConversationID uuid.UUID
+	SessionID      string
+	EncodedPath    string
+	Response       chan error // For sync response
+}
+
 // Hub maintains the set of active clients and broadcasts messages
 type Hub struct {
 	// clients maps client IDs to their Client instances
@@ -29,11 +38,17 @@ type Hub struct {
 	// conversations maps conversation IDs to a map of client IDs to Clients
 	conversations map[uuid.UUID]map[uuid.UUID]*Client
 
+	// subscriptions tracks current subscription per client (clientID -> conversationID)
+	subscriptions map[uuid.UUID]uuid.UUID
+
 	// register channel for client registration requests
 	register chan *Client
 
 	// unregister channel for client unregistration requests
 	unregister chan *Client
+
+	// subscribe channel for subscription requests
+	subscribe chan *SubscribeRequest
 
 	// broadcast channel for messages to be broadcast to conversations
 	broadcast chan *BroadcastMessage
@@ -47,13 +62,15 @@ func NewHub() *Hub {
 	return &Hub{
 		clients:       make(map[uuid.UUID]*Client),
 		conversations: make(map[uuid.UUID]map[uuid.UUID]*Client),
+		subscriptions: make(map[uuid.UUID]uuid.UUID),
 		register:      make(chan *Client),
 		unregister:    make(chan *Client),
+		subscribe:     make(chan *SubscribeRequest),
 		broadcast:     make(chan *BroadcastMessage),
 	}
 }
 
-// Run starts the hub's main loop processing register, unregister, and broadcast messages
+// Run starts the hub's main loop processing register, unregister, subscribe, and broadcast messages
 // This should be called as a goroutine
 func (h *Hub) Run() {
 	for {
@@ -63,6 +80,9 @@ func (h *Hub) Run() {
 
 		case client := <-h.unregister:
 			h.unregisterClient(client)
+
+		case req := <-h.subscribe:
+			h.handleSubscribe(req)
 
 		case message := <-h.broadcast:
 			h.broadcastMessage(message)
@@ -115,6 +135,41 @@ func (h *Hub) unregisterClient(client *Client) {
 	close(client.Send)
 }
 
+// handleSubscribe processes a subscription request
+func (h *Hub) handleSubscribe(req *SubscribeRequest) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	client := req.Client
+	newConvID := req.ConversationID
+
+	// 1. Unsubscribe from previous conversation if any
+	if oldConvID, exists := h.subscriptions[client.ID]; exists {
+		if clients, ok := h.conversations[oldConvID]; ok {
+			delete(clients, client.ID)
+			// Clean up empty conversation map
+			if len(clients) == 0 {
+				delete(h.conversations, oldConvID)
+			}
+		}
+	}
+
+	// 2. Subscribe to new conversation
+	h.subscriptions[client.ID] = newConvID
+	if h.conversations[newConvID] == nil {
+		h.conversations[newConvID] = make(map[uuid.UUID]*Client)
+	}
+	h.conversations[newConvID][client.ID] = client
+
+	// 3. Update client's conversation ID
+	client.ConversationID = newConvID
+
+	// Signal success
+	if req.Response != nil {
+		req.Response <- nil
+	}
+}
+
 // broadcastMessage sends a message to all clients in a conversation
 // Uses retry logic with timeout to avoid silent message drops
 func (h *Hub) broadcastMessage(message *BroadcastMessage) {
@@ -155,6 +210,11 @@ func (h *Hub) Register(client *Client) {
 // Unregister queues a client for unregistration
 func (h *Hub) Unregister(client *Client) {
 	h.unregister <- client
+}
+
+// Subscribe queues a subscription request
+func (h *Hub) Subscribe(req *SubscribeRequest) {
+	h.subscribe <- req
 }
 
 // BroadcastToConversation queues a message to be broadcast to all clients in a conversation
