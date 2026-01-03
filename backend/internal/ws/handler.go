@@ -1113,7 +1113,11 @@ func (h *Handler) sendSubscribedToClient(client *Client, convID uuid.UUID) {
 		Type:    MessageTypeSubscribed,
 		Payload: payload,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("Failed to marshal subscribed message", zap.Error(err))
+		return
+	}
 
 	select {
 	case client.Send <- data:
@@ -1134,7 +1138,7 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 	}
 
 	// Determine session state and todos
-	var sessionState string = "idle"
+	var sessionState SessionStateType = SessionStateIdle
 	var isStreaming bool = false
 	var todos []TodoItem
 
@@ -1142,7 +1146,7 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 	if h.claudeMgr != nil {
 		process := h.claudeMgr.GetProcess(convID)
 		if process != nil && process.GetStatus() == claude.ProcessStatusRunning {
-			sessionState = "streaming"
+			sessionState = SessionStateStreaming
 			isStreaming = true
 		}
 	}
@@ -1165,7 +1169,11 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 		Type:    MessageTypeSessionState,
 		Payload: payload,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("Failed to marshal session state message", zap.Error(err))
+		return
+	}
 
 	select {
 	case client.Send <- data:
@@ -1178,6 +1186,17 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 func (h *Handler) handleUnsubscribeMessage(client *Client) {
 	h.hub.UnsubscribeClient(client)
 	h.logger.Info("Client unsubscribed", zap.String("clientID", client.ID.String()))
+}
+
+// getClaudeSessionID determines the Claude session ID to use for a conversation
+// If the conversation has a synced ClaudeSession, it uses that; otherwise, falls back to defaultID
+func (h *Handler) getClaudeSessionID(conv *conversation.Conversation, defaultID uuid.UUID) uuid.UUID {
+	if conv.ClaudeSession != nil && *conv.ClaudeSession != "" {
+		if parsedID, err := uuid.FromString(*conv.ClaudeSession); err == nil {
+			return parsedID
+		}
+	}
+	return defaultID
 }
 
 // handleUserChatMessage handles chat messages in user WebSocket
@@ -1201,18 +1220,7 @@ func (h *Handler) handleUserChatMessage(client *Client, msg *IncomingMessage) {
 		return
 	}
 
-	// Determine the Claude session ID to use
-	var claudeSessionID uuid.UUID
-	if conv.ClaudeSession != nil && *conv.ClaudeSession != "" {
-		parsedID, err := uuid.FromString(*conv.ClaudeSession)
-		if err == nil {
-			claudeSessionID = parsedID
-		} else {
-			claudeSessionID = client.ConversationID
-		}
-	} else {
-		claudeSessionID = client.ConversationID
-	}
+	claudeSessionID := h.getClaudeSessionID(conv, client.ConversationID)
 
 	// Delegate to existing chat handler logic
 	h.handleChatMessage(client, msg.Content, msg.Images, proj.Path, claudeSessionID, false)
@@ -1233,18 +1241,6 @@ func (h *Handler) handleUserStopMessage(client *Client) {
 		return
 	}
 
-	// Determine the Claude session ID
-	var claudeSessionID uuid.UUID
-	if conv.ClaudeSession != nil && *conv.ClaudeSession != "" {
-		parsedID, err := uuid.FromString(*conv.ClaudeSession)
-		if err == nil {
-			claudeSessionID = parsedID
-		} else {
-			claudeSessionID = client.ConversationID
-		}
-	} else {
-		claudeSessionID = client.ConversationID
-	}
-
+	claudeSessionID := h.getClaudeSessionID(conv, client.ConversationID)
 	h.handleStopMessage(client, claudeSessionID)
 }

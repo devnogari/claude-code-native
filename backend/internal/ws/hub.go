@@ -118,6 +118,9 @@ func (h *Hub) unregisterClient(client *Client) {
 	// Remove from clients map
 	delete(h.clients, client.ID)
 
+	// Remove from subscriptions map to prevent memory leak
+	delete(h.subscriptions, client.ID)
+
 	// Remove from conversations map
 	if convClients, exists := h.conversations[client.ConversationID]; exists {
 		delete(convClients, client.ID)

@@ -159,13 +159,25 @@ type SubscribedPayload struct {
 	ConversationID string `json:"conversationId"`
 }
 
+// SessionStateType represents the state of a Claude session
+type SessionStateType string
+
+const (
+	// SessionStateIdle indicates the session is idle (no active processing)
+	SessionStateIdle SessionStateType = "idle"
+	// SessionStateQueued indicates there are queued messages waiting
+	SessionStateQueued SessionStateType = "queued"
+	// SessionStateStreaming indicates the session is actively streaming a response
+	SessionStateStreaming SessionStateType = "streaming"
+)
+
 // SessionStatePayload is sent by server with full session state
 type SessionStatePayload struct {
-	ConversationID string        `json:"conversationId"`
-	SessionState   string        `json:"sessionState"` // idle, queued, streaming
-	IsStreaming    bool          `json:"isStreaming"`
-	Todos          []TodoItem    `json:"todos"`
-	Queue          []interface{} `json:"queue"` // Use interface{} to avoid circular import with queue package
+	ConversationID string           `json:"conversationId"`
+	SessionState   SessionStateType `json:"sessionState"`
+	IsStreaming    bool             `json:"isStreaming"`
+	Todos          []TodoItem       `json:"todos"`
+	Queue          []interface{}    `json:"queue"` // Use interface{} to avoid circular import with queue package
 }
 
 // TodoItem represents a todo from Claude Code's TodoWrite
