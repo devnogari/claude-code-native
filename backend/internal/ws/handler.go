@@ -964,19 +964,35 @@ func (h *Handler) BroadcastQueueSync(convID uuid.UUID, messages []queue.QueuedMe
 // HandleUserWebSocket handles the unified user WebSocket connection
 // This is the new endpoint: /api/v1/ws/user
 func (h *Handler) HandleUserWebSocket(c *websocket.Conn) {
-	// Get user ID from context (set by auth middleware)
+	// Try to get userID from middleware (query param auth - backward compatibility)
 	userIDStr := c.Locals("userID")
-	if userIDStr == nil {
-		h.logger.Error("No user ID in context for user WebSocket")
-		c.Close()
-		return
-	}
 
-	userID, err := uuid.FromString(userIDStr.(string))
-	if err != nil {
-		h.logger.Error("Invalid user ID", zap.Error(err))
-		c.Close()
-		return
+	// If no userID from middleware, wait for auth message (more secure approach)
+	var userID uuid.UUID
+	if userIDStr == nil {
+		// Wait for first message which should be auth
+		authUserID, err := h.waitForAuthMessage(c)
+		if err != nil {
+			h.logger.Error("auth failed for user WebSocket", zap.Error(err))
+			h.sendError(c, "authentication failed: "+err.Error())
+			return
+		}
+		userID = authUserID
+	} else {
+		userIDString, ok := userIDStr.(string)
+		if !ok {
+			h.logger.Error("invalid user ID type", zap.Any("userID", userIDStr))
+			h.sendError(c, "invalid user ID")
+			return
+		}
+
+		var err error
+		userID, err = uuid.FromString(userIDString)
+		if err != nil {
+			h.logger.Error("invalid user ID format", zap.String("userID", userIDString), zap.Error(err))
+			h.sendError(c, "invalid user ID format")
+			return
+		}
 	}
 
 	// Create client without conversation ID (will be set on subscribe)
