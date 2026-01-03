@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gofrs/uuid/v5"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewHub(t *testing.T) {
@@ -424,4 +425,61 @@ func TestHub_MultipleConversations(t *testing.T) {
 	if len(hub.GetClientsForConversation(convID3)) != 2 {
 		t.Errorf("expected 2 clients in conv3, got %d", len(hub.GetClientsForConversation(convID3)))
 	}
+}
+
+func TestHub_Subscribe(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	defer close(hub.register) // Stop the hub
+
+	// Create a client
+	clientID, _ := uuid.NewV7()
+	userID, _ := uuid.NewV7()
+	convID1, _ := uuid.NewV7()
+	convID2, _ := uuid.NewV7()
+
+	client := &Client{
+		ID:             clientID,
+		UserID:         userID,
+		ConversationID: convID1,
+		Send:           make(chan []byte, 256),
+		Done:           make(chan struct{}),
+	}
+
+	// Register client
+	hub.Register(client)
+	time.Sleep(10 * time.Millisecond) // Wait for processing
+
+	// Subscribe to first conversation
+	resp := make(chan error, 1)
+	hub.Subscribe(&SubscribeRequest{
+		Client:         client,
+		ConversationID: convID1,
+		Response:       resp,
+	})
+	err := <-resp
+	assert.NoError(t, err)
+
+	// Verify subscription
+	hub.mu.RLock()
+	assert.Equal(t, convID1, hub.subscriptions[clientID])
+	assert.Contains(t, hub.conversations[convID1], clientID)
+	hub.mu.RUnlock()
+
+	// Switch to second conversation
+	resp2 := make(chan error, 1)
+	hub.Subscribe(&SubscribeRequest{
+		Client:         client,
+		ConversationID: convID2,
+		Response:       resp2,
+	})
+	err = <-resp2
+	assert.NoError(t, err)
+
+	// Verify switched
+	hub.mu.RLock()
+	assert.Equal(t, convID2, hub.subscriptions[clientID])
+	assert.Contains(t, hub.conversations[convID2], clientID)
+	assert.NotContains(t, hub.conversations[convID1], clientID)
+	hub.mu.RUnlock()
 }
