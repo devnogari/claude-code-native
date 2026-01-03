@@ -1078,6 +1078,10 @@ func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
 		return
 	}
 
+	// Cache project path and Claude session ID to avoid DB lookups on each message
+	client.ProjectPath = proj.Path
+	client.ClaudeSessionID = h.getClaudeSessionID(conv, convID)
+
 	// Subscribe to conversation
 	resp := make(chan error, 1)
 	h.hub.Subscribe(&SubscribeRequest{
@@ -1140,6 +1144,8 @@ func (h *Handler) sendSessionStateToClient(client *Client, convID uuid.UUID, ses
 	// Determine session state and todos
 	var sessionState SessionStateType = SessionStateIdle
 	var isStreaming bool = false
+	// TODO: Fetch todos from Claude session state when available.
+	// Currently empty as Claude CLI doesn't expose todos via API.
 	var todos []TodoItem
 
 	// Check if there's an active Claude process
@@ -1206,24 +1212,14 @@ func (h *Handler) handleUserChatMessage(client *Client, msg *IncomingMessage) {
 		return
 	}
 
-	// Get project path from conversation
-	ctx := context.Background()
-	conv, err := h.convRepo.FindByID(ctx, client.ConversationID)
-	if err != nil {
-		h.sendErrorToClient(client, "Conversation not found")
+	// Use cached values from subscription (no DB lookup needed)
+	if client.ProjectPath == "" {
+		h.sendErrorToClient(client, "Subscription state invalid - please resubscribe")
 		return
 	}
-
-	proj, err := h.projRepo.FindByID(ctx, conv.ProjectID)
-	if err != nil {
-		h.sendErrorToClient(client, "Project not found")
-		return
-	}
-
-	claudeSessionID := h.getClaudeSessionID(conv, client.ConversationID)
 
 	// Delegate to existing chat handler logic
-	h.handleChatMessage(client, msg.Content, msg.Images, proj.Path, claudeSessionID, false)
+	h.handleChatMessage(client, msg.Content, msg.Images, client.ProjectPath, client.ClaudeSessionID, false)
 }
 
 // handleUserStopMessage handles stop messages in user WebSocket
@@ -1233,14 +1229,6 @@ func (h *Handler) handleUserStopMessage(client *Client) {
 		return
 	}
 
-	// Get conversation to determine Claude session ID
-	ctx := context.Background()
-	conv, err := h.convRepo.FindByID(ctx, client.ConversationID)
-	if err != nil {
-		h.sendErrorToClient(client, "Conversation not found")
-		return
-	}
-
-	claudeSessionID := h.getClaudeSessionID(conv, client.ConversationID)
-	h.handleStopMessage(client, claudeSessionID)
+	// Use cached ClaudeSessionID from subscription (no DB lookup needed)
+	h.handleStopMessage(client, client.ClaudeSessionID)
 }

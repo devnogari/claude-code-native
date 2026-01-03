@@ -156,7 +156,7 @@ func createQueueSyncMessage(payload interface{}) *QueueMessage {
 
 // SubscribedPayload is sent by server to confirm subscription
 type SubscribedPayload struct {
-	ConversationID string `json:"conversationId"`
+	ConversationID string `json:"conversation_id"`
 }
 
 // SessionStateType represents the state of a Claude session
@@ -173,9 +173,9 @@ const (
 
 // SessionStatePayload is sent by server with full session state
 type SessionStatePayload struct {
-	ConversationID string           `json:"conversationId"`
-	SessionState   SessionStateType `json:"sessionState"`
-	IsStreaming    bool             `json:"isStreaming"`
+	ConversationID string           `json:"conversation_id"`
+	SessionState   SessionStateType `json:"session_state"`
+	IsStreaming    bool             `json:"is_streaming"`
 	Todos          []TodoItem       `json:"todos"`
 	Queue          []interface{}    `json:"queue"` // Use interface{} to avoid circular import with queue package
 }
@@ -184,7 +184,7 @@ type SessionStatePayload struct {
 type TodoItem struct {
 	Content    string  `json:"content"`
 	Status     string  `json:"status"`
-	ActiveForm *string `json:"activeForm,omitempty"`
+	ActiveForm *string `json:"active_form,omitempty"`
 	Priority   *string `json:"priority,omitempty"`
 	ID         *string `json:"id,omitempty"`
 }
