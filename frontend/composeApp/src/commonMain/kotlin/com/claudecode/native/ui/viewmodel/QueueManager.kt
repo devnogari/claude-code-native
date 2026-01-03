@@ -1,8 +1,9 @@
 package com.claudecode.native.ui.viewmodel
 
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,27 +34,19 @@ class QueueManager(
     private val mutex = Mutex()
 
     /**
-     * Gets a StateFlow of the queue for a specific conversation.
+     * Gets a Flow of the queue for a specific conversation.
      * Returns an empty list if no queue exists for the conversation.
      *
+     * This returns a Flow instead of StateFlow to avoid creating new objects
+     * on every call, which can cause performance issues in Compose.
+     * Consumers should use .stateIn() if they need a StateFlow.
+     *
      * @param conversationId The conversation ID to get the queue for
-     * @return StateFlow emitting the current queue state
+     * @return Flow emitting the current queue state
      */
-    fun getQueue(conversationId: String): StateFlow<List<QueuedMessage>> {
-        // Create a derived StateFlow that always returns the queue for this conversation
-        return object : StateFlow<List<QueuedMessage>> {
-            override val replayCache: List<List<QueuedMessage>>
-                get() = listOf(value)
-
-            override val value: List<QueuedMessage>
-                get() = _queuesMap.value[conversationId] ?: emptyList()
-
-            override suspend fun collect(collector: kotlinx.coroutines.flow.FlowCollector<List<QueuedMessage>>): Nothing {
-                _queuesMap.collect { map ->
-                    collector.emit(map[conversationId] ?: emptyList())
-                }
-            }
-        }
+    fun getQueue(conversationId: String): Flow<List<QueuedMessage>> {
+        return _queuesMap.map { it[conversationId] ?: emptyList() }
+            .distinctUntilChanged()
     }
 
     /**

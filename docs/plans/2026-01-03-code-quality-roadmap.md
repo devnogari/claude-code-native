@@ -231,16 +231,16 @@ Modify `frontend/gradle/libs.versions.toml`:
 ```toml
 [versions]
 # ... existing versions
-kotlin-test = "2.1.0"
-kotlinx-coroutines-test = "1.10.1"
+# Note: kotlin-test uses the kotlin version (2.3.0)
+# Note: kotlinx-coroutines-test uses the kotlinx-coroutines version (1.10.2)
 mockk = "1.13.14"
 turbine = "1.2.0"
 
 [libraries]
 # ... existing libraries
-kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin-test" }
-kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin-test" }
-kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines-test" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
 ```

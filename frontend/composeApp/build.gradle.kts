@@ -139,11 +139,10 @@ kotlin {
         }
 
         desktopTest.dependencies {
-            implementation(libs.kotlin.test)
-            implementation(libs.kotlinx.coroutines.test)
+            // mockk is desktop-specific (not available on other targets)
             implementation(libs.mockk)
-            implementation(libs.turbine)
-            implementation(libs.ktor.client.mock)
+            // Note: kotlin-test, kotlinx-coroutines-test, turbine, and ktor-client-mock
+            // are inherited from commonTest and don't need to be repeated here
         }
 
         desktopMain.dependencies {
