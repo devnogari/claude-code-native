@@ -240,7 +240,13 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 	// Create a new client
 	client := NewClient(userID, convID, c)
 
-	// Store the project path and claude session ID in client for later use
+	// Store project path and claude session ID on client struct for recovery operations
+	// This is needed for handleCompactionRecovery to access these values
+	client.ProjectPath = projectPath
+	client.ClaudeSessionID = claudeSessionID
+	client.IsFilesystemSession = isFilesystemSession
+
+	// Also store in Locals for backward compatibility (some handlers may still read from Locals)
 	c.Locals("projectPath", projectPath)
 	c.Locals("claudeSessionID", claudeSessionID.String())
 	c.Locals("isFilesystemSession", isFilesystemSession)
@@ -552,12 +558,25 @@ func (h *Handler) handlePingMessage(client *Client) {
 	h.sendPongToClient(client)
 }
 
+// CompactionErrorPattern is the error message pattern for conversation too long errors
+const CompactionErrorPattern = "Conversation too long"
+
 // streamProcessOutput streams Claude CLI output to the WebSocket client
 // It monitors the client.Done channel to detect client disconnection and avoid race conditions
 // imagePaths are cleaned up after the process completes (cannot be done in handleChatMessage due to async execution)
 func (h *Handler) streamProcessOutput(client *Client, process *claude.Process, isFilesystemSession bool, imagePaths []string) {
+	h.streamProcessOutputWithRecovery(client, process, isFilesystemSession, imagePaths, 0)
+}
+
+// maxCompactionRetries is the maximum number of times to retry /compact after "Conversation too long" error
+const maxCompactionRetries = 1
+
+// streamProcessOutputWithRecovery streams Claude CLI output with automatic recovery for compaction errors
+// retryCount tracks the number of recovery attempts to prevent infinite loops
+func (h *Handler) streamProcessOutputWithRecovery(client *Client, process *claude.Process, isFilesystemSession bool, imagePaths []string, retryCount int) {
 	convID := client.ConversationID
 	var assistantContent string
+	var needsCompactionRecovery bool
 
 	// Clean up temp image files after Claude CLI finishes (regardless of success/failure)
 	defer func() {
@@ -588,6 +607,26 @@ streamLoop:
 			if !ok {
 				// Channel closed, process finished
 				break streamLoop
+			}
+
+			// Handle stderr - check for compaction errors
+			if output.Type == "stderr" {
+				if strings.Contains(output.Content, CompactionErrorPattern) {
+					h.logger.Warn("detected compaction error, will attempt recovery",
+						zap.String("conversationID", convID.String()),
+						zap.String("error", output.Content),
+						zap.Int("retryCount", retryCount))
+					needsCompactionRecovery = true
+					// Don't break yet - let the process finish naturally
+				}
+				// Forward stderr to client for visibility
+				select {
+				case <-client.Done:
+					break streamLoop
+				default:
+					h.sendStderrToClient(client, output.Content)
+				}
+				continue
 			}
 
 			// Parse stream-json output and extract displayable text
@@ -623,6 +662,17 @@ streamLoop:
 		}
 	}
 
+	// Handle compaction recovery if needed
+	if needsCompactionRecovery && retryCount < maxCompactionRetries {
+		select {
+		case <-client.Done:
+			// Client disconnected, skip recovery
+		default:
+			h.handleCompactionRecovery(client, process, isFilesystemSession, retryCount)
+			return // Recovery handles completion message
+		}
+	}
+
 	// Save the assistant message if we received any content (database-based sessions only)
 	// For filesystem sessions, Claude CLI manages its own history
 	if assistantContent != "" && !isFilesystemSession {
@@ -651,6 +701,80 @@ streamLoop:
 	default:
 		h.sendCompleteToClient(client)
 	}
+}
+
+// handleCompactionRecovery handles automatic recovery from "Conversation too long" error
+// It creates a new session with --resume and retries /compact
+func (h *Handler) handleCompactionRecovery(client *Client, oldProcess *claude.Process, isFilesystemSession bool, retryCount int) {
+	convID := client.ConversationID
+	claudeSessionID := client.ClaudeSessionID
+	projectPath := client.ProjectPath
+
+	h.logger.Info("starting compaction recovery",
+		zap.String("conversationID", convID.String()),
+		zap.String("claudeSessionID", claudeSessionID.String()),
+		zap.Int("retryCount", retryCount))
+
+	// Notify client about recovery
+	h.sendStatusToClient(client, "recovering")
+
+	// Stop the old process
+	if err := h.claudeMgr.StopProcess(claudeSessionID); err != nil {
+		h.logger.Warn("failed to stop old process during recovery",
+			zap.String("claudeSessionID", claudeSessionID.String()),
+			zap.Error(err))
+	}
+
+	// Wait for old process to fully terminate using Done channel with timeout
+	// This is more robust than a fixed sleep as it adapts to actual process termination time
+	select {
+	case <-oldProcess.Done:
+		h.logger.Debug("old process terminated successfully during recovery",
+			zap.String("claudeSessionID", claudeSessionID.String()))
+	case <-time.After(2 * time.Second):
+		h.logger.Warn("timeout waiting for old process to terminate during recovery",
+			zap.String("claudeSessionID", claudeSessionID.String()))
+	}
+
+	// Create a new process - it will use --resume automatically since session file exists
+	newProcess, err := h.claudeMgr.CreateProcess(claudeSessionID, projectPath, nil)
+	if err != nil {
+		h.logger.Error("failed to create new process for recovery",
+			zap.String("claudeSessionID", claudeSessionID.String()),
+			zap.Error(err))
+		h.sendErrorToClient(client, "Recovery failed: could not create new session")
+		h.sendCompleteToClient(client)
+		return
+	}
+
+	// Start in interactive mode
+	if err := newProcess.StartInteractive(); err != nil {
+		h.logger.Error("failed to start new process for recovery",
+			zap.String("claudeSessionID", claudeSessionID.String()),
+			zap.Error(err))
+		h.sendErrorToClient(client, "Recovery failed: could not start new session")
+		h.sendCompleteToClient(client)
+		return
+	}
+
+	// Send /compact command
+	compactCommand := "/compact"
+	if err := newProcess.SendMessage(compactCommand, nil); err != nil {
+		h.logger.Error("failed to send /compact during recovery",
+			zap.String("claudeSessionID", claudeSessionID.String()),
+			zap.Error(err))
+		h.sendErrorToClient(client, "Recovery failed: could not send /compact")
+		// Stop the process we just started
+		_ = h.claudeMgr.StopProcess(claudeSessionID)
+		h.sendCompleteToClient(client)
+		return
+	}
+
+	h.logger.Info("compaction recovery initiated successfully",
+		zap.String("claudeSessionID", claudeSessionID.String()))
+
+	// Continue streaming with the new process (increment retry count)
+	h.streamProcessOutputWithRecovery(client, newProcess, isFilesystemSession, nil, retryCount+1)
 }
 
 // Helper methods for sending messages
@@ -691,6 +815,15 @@ func (h *Handler) sendPongToClient(client *Client) {
 
 func (h *Handler) sendStreamToClient(client *Client, content string) {
 	msg := createOutgoingStream(client.ConversationID, content)
+	data, _ := json.Marshal(msg)
+	select {
+	case client.Send <- data:
+	default:
+	}
+}
+
+func (h *Handler) sendStderrToClient(client *Client, content string) {
+	msg := createOutgoingStderr(client.ConversationID, content)
 	data, _ := json.Marshal(msg)
 	select {
 	case client.Send <- data:

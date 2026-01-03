@@ -358,4 +358,33 @@ func TestHandler_HelperMethods(t *testing.T) {
 		assert.Equal(t, MessageTypeComplete, msg.Type)
 		assert.Equal(t, convID.String(), msg.ConversationID)
 	})
+
+	t.Run("createOutgoingStderr creates stderr message", func(t *testing.T) {
+		convID := uuid.Must(uuid.NewV7())
+		msg := createOutgoingStderr(convID, "Error: something went wrong")
+
+		require.NotNil(t, msg)
+		assert.Equal(t, MessageTypeStderr, msg.Type)
+		assert.Equal(t, convID.String(), msg.ConversationID)
+		assert.Equal(t, "Error: something went wrong", msg.Content)
+	})
+}
+
+func TestCompactionErrorPattern(t *testing.T) {
+	t.Run("CompactionErrorPattern matches expected error", func(t *testing.T) {
+		// This is the error pattern from Claude CLI when conversation is too long
+		errorMsg := "Error: Error during compaction: Error: Conversation too long. Press esc twice to go up a few messages and try again."
+		assert.Contains(t, errorMsg, CompactionErrorPattern)
+	})
+
+	t.Run("CompactionErrorPattern does not match unrelated errors", func(t *testing.T) {
+		unrelatedError := "Error: Network timeout"
+		assert.NotContains(t, unrelatedError, CompactionErrorPattern)
+	})
+}
+
+func TestStderrMessageType(t *testing.T) {
+	t.Run("stderr message type constant is correct", func(t *testing.T) {
+		assert.Equal(t, "stderr", MessageTypeStderr)
+	})
 }
