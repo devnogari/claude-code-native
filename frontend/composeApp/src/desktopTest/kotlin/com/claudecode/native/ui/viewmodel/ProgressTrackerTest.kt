@@ -149,11 +149,12 @@ class ProgressTrackerTest : ViewModelTestBase() {
     }
 
     @Test
-    fun `todos preserved when stopping progress`() = runTestWithCleanup {
+    fun `todos preserved when stopping progress with pending items`() = runTestWithCleanup {
         tracker.startProgressTracking("conv-1", "Processing", this)
 
         val todos = listOf(
-            TodoItem(content = "Task 1", status = "completed", activeForm = "Doing Task 1")
+            TodoItem(content = "Task 1", status = "completed", activeForm = "Doing Task 1"),
+            TodoItem(content = "Task 2", status = "pending", activeForm = "Doing Task 2")
         )
         tracker.updateTodos("conv-1", todos)
         tracker.stopProgressTracking("conv-1")
@@ -162,8 +163,52 @@ class ProgressTrackerTest : ViewModelTestBase() {
         status.test {
             val current = awaitItem()
             assertFalse(current.isActive)
-            assertEquals(1, current.todos.size)
-            assertEquals("Task 1", current.todos[0].content)
+            // Todos should be preserved because not all are completed
+            assertEquals(2, current.todos.size)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `todos cleared when stopping progress if all completed`() = runTestWithCleanup {
+        tracker.startProgressTracking("conv-1", "Processing", this)
+
+        // All todos are completed
+        val todos = listOf(
+            TodoItem(content = "Task 1", status = "completed", activeForm = "Doing Task 1"),
+            TodoItem(content = "Task 2", status = "completed", activeForm = "Doing Task 2"),
+            TodoItem(content = "Task 3", status = "completed", activeForm = "Doing Task 3")
+        )
+        tracker.updateTodos("conv-1", todos)
+        tracker.stopProgressTracking("conv-1")
+
+        val status = tracker.getProgressStatus("conv-1")
+        status.test {
+            val current = awaitItem()
+            assertFalse(current.isActive)
+            // BUG FIX: Todos should be cleared when all are completed
+            assertTrue(current.todos.isEmpty(), "Todos should be cleared when all are completed")
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `todos preserved when stopping progress with in_progress items`() = runTestWithCleanup {
+        tracker.startProgressTracking("conv-1", "Processing", this)
+
+        val todos = listOf(
+            TodoItem(content = "Task 1", status = "completed", activeForm = "Doing Task 1"),
+            TodoItem(content = "Task 2", status = "in_progress", activeForm = "Doing Task 2")
+        )
+        tracker.updateTodos("conv-1", todos)
+        tracker.stopProgressTracking("conv-1")
+
+        val status = tracker.getProgressStatus("conv-1")
+        status.test {
+            val current = awaitItem()
+            assertFalse(current.isActive)
+            // Todos should be preserved because there's an in_progress item
+            assertEquals(2, current.todos.size)
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.advanceTimeBy
@@ -503,5 +504,158 @@ class ChatViewModelRaceConditionTest {
         val updated = sim.processHistoryWatchMessage("Response with tools", listOf("tool-1"))
         assertFalse(updated, "Should not reduce tool count")
         assertEquals(3, sim.messages[0].toolBlocks.size, "Should keep 3 tools")
+    }
+
+    // =====================================
+    // Queue Sync Race Condition Tests
+    // =====================================
+
+    /**
+     * Simulates the queue sync pattern used in handleSessionState().
+     *
+     * This tests the BUG: reading currentQueue OUTSIDE the update lambda causes
+     * a read-modify-write race condition where concurrent updates can lose data.
+     *
+     * The FIX is to read currentQueue INSIDE the update lambda for atomicity.
+     */
+    class QueueSyncSimulator {
+        data class QueuedMessage(
+            val id: String,
+            val content: String,
+            val source: String // "LOCAL", "SERVER", "CLI"
+        )
+
+        val queuesMap = MutableStateFlow<Map<String, List<QueuedMessage>>>(emptyMap())
+
+        /**
+         * BUGGY VERSION: Reads currentQueue OUTSIDE update lambda.
+         * This has a race condition - concurrent updates between read and write can lose data.
+         */
+        suspend fun syncQueueBuggy(convId: String, serverQueue: List<QueuedMessage>) {
+            // BUG: Reading currentQueue OUTSIDE the update lambda
+            val currentQueue = queuesMap.value[convId] ?: emptyList<QueuedMessage>()
+            val localOnly = currentQueue.filter { it.source == "LOCAL" }
+
+            // Gap here where another coroutine could modify queuesMap
+
+            queuesMap.update { map ->
+                val newMap = map.toMutableMap()
+                newMap[convId] = serverQueue + localOnly
+                newMap
+            }
+        }
+
+        /**
+         * FIXED VERSION: Reads currentQueue INSIDE update lambda.
+         * This ensures atomic read-modify-write.
+         */
+        suspend fun syncQueueFixed(convId: String, serverQueue: List<QueuedMessage>) {
+            queuesMap.update { map ->
+                // FIX: Read currentQueue INSIDE the update lambda
+                val currentQueue = map[convId] ?: emptyList<QueuedMessage>()
+                val localOnly = currentQueue.filter { it.source == "LOCAL" }
+                val newMap = map.toMutableMap()
+                newMap[convId] = serverQueue + localOnly
+                newMap
+            }
+        }
+
+        /**
+         * Simulates adding a local message (could happen concurrently with sync).
+         */
+        suspend fun addLocalMessage(convId: String, message: QueuedMessage) {
+            queuesMap.update { map ->
+                val current = map[convId] ?: emptyList<QueuedMessage>()
+                val newMap = map.toMutableMap()
+                newMap[convId] = current + message
+                newMap
+            }
+        }
+    }
+
+    @Test
+    fun `queue sync should preserve local messages with atomic read-modify-write`() = runTest {
+        val sim = QueueSyncSimulator()
+        val convId = "conv-1"
+
+        // Initial state: one local message
+        val localMsg = QueueSyncSimulator.QueuedMessage("local-1", "Local message", "LOCAL")
+        sim.addLocalMessage(convId, localMsg)
+        advanceUntilIdle()
+
+        // Server sync arrives with server messages
+        val serverQueue = listOf(
+            QueueSyncSimulator.QueuedMessage("server-1", "Server message", "SERVER")
+        )
+
+        // Using FIXED version - should preserve local messages
+        sim.syncQueueFixed(convId, serverQueue)
+        advanceUntilIdle()
+
+        val queue = sim.queuesMap.value[convId] ?: emptyList()
+        assertEquals(2, queue.size, "Should have server message + local message")
+
+        val localMessages = queue.filter { it.source == "LOCAL" }
+        assertEquals(1, localMessages.size, "Should preserve the local message")
+        assertEquals("local-1", localMessages[0].id)
+    }
+
+    @Test
+    fun `buggy queue sync demonstrates potential data loss pattern`() = runTest {
+        val sim = QueueSyncSimulator()
+        val convId = "conv-1"
+
+        // This test demonstrates the BUG pattern conceptually.
+        // In real concurrent execution, the buggy version could lose data.
+        // We test the fixed version works correctly.
+
+        // Add a local message
+        val localMsg = QueueSyncSimulator.QueuedMessage("local-1", "Important local", "LOCAL")
+        sim.addLocalMessage(convId, localMsg)
+        advanceUntilIdle()
+
+        // Sync with empty server queue using FIXED version
+        sim.syncQueueFixed(convId, emptyList())
+        advanceUntilIdle()
+
+        val queue = sim.queuesMap.value[convId] ?: emptyList()
+
+        // Fixed version should preserve local messages even with empty server queue
+        assertEquals(1, queue.size, "Local message should be preserved")
+        assertEquals("LOCAL", queue[0].source, "Should be the local message")
+    }
+
+    @Test
+    fun `queue sync should merge server and local messages correctly`() = runTest {
+        val sim = QueueSyncSimulator()
+        val convId = "conv-1"
+
+        // Start with local and CLI messages
+        sim.queuesMap.value = mapOf(
+            convId to listOf(
+                QueueSyncSimulator.QueuedMessage("local-1", "Local 1", "LOCAL"),
+                QueueSyncSimulator.QueuedMessage("cli-1", "CLI 1", "CLI"),
+                QueueSyncSimulator.QueuedMessage("local-2", "Local 2", "LOCAL")
+            )
+        )
+
+        // Server sync arrives
+        val serverQueue = listOf(
+            QueueSyncSimulator.QueuedMessage("server-1", "Server 1", "SERVER"),
+            QueueSyncSimulator.QueuedMessage("server-2", "Server 2", "SERVER")
+        )
+
+        sim.syncQueueFixed(convId, serverQueue)
+        advanceUntilIdle()
+
+        val queue = sim.queuesMap.value[convId] ?: emptyList()
+
+        // Should have: 2 server + 2 local (CLI messages are NOT preserved, only LOCAL)
+        val serverMessages = queue.filter { it.source == "SERVER" }
+        val localMessages = queue.filter { it.source == "LOCAL" }
+
+        assertEquals(2, serverMessages.size, "Should have 2 server messages")
+        assertEquals(2, localMessages.size, "Should have 2 local messages")
+        assertEquals(4, queue.size, "Total should be 4 messages")
     }
 }

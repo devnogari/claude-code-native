@@ -734,10 +734,12 @@ class ChatViewModel(
                         source = QueuedMessageSource.SERVER
                     )
                 }
-                // Preserve local-only messages
-                val currentQueue = _queuedMessagesMap.value[convId] ?: emptyList()
-                val localOnly = currentQueue.filter { it.source == QueuedMessageSource.LOCAL }
+                // FIX: Atomic read-modify-write to prevent race condition
+                // Reading currentQueue INSIDE the update lambda ensures we get
+                // the latest value and don't lose concurrent updates
                 _queuedMessagesMap.update { map ->
+                    val currentQueue = map[convId] ?: emptyList()
+                    val localOnly = currentQueue.filter { it.source == QueuedMessageSource.LOCAL }
                     map + (convId to (serverQueue + localOnly))
                 }
             }
