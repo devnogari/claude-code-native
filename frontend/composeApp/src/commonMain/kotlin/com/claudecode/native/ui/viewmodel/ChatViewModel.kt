@@ -348,6 +348,10 @@ class ChatViewModel(
 
     /**
      * Adds a message to the server queue, falling back to local-only on failure.
+     *
+     * For filesystem-based sessions (new format: "sessionId?project=encodedPath"),
+     * uses local queue only since these sessions don't have database conversation IDs.
+     *
      * @return true if successfully added to server, false if stored locally
      */
     private suspend fun addToServerQueue(content: String, images: List<AttachedImage>): QueuedMessage {
@@ -355,6 +359,12 @@ class ChatViewModel(
 
         // If no conversation or offline, store locally
         if (convId == null) {
+            return createLocalQueuedMessage(content, images)
+        }
+
+        // Filesystem-based sessions don't have database conversation IDs, so use local queue only.
+        if (isFilesystemSession(convId)) {
+            DebugLogger.d(TAG, "Filesystem-based session detected, using local queue")
             return createLocalQueuedMessage(content, images)
         }
 
@@ -773,6 +783,8 @@ class ChatViewModel(
     /**
      * Syncs local-only messages to the server after reconnection.
      * Processes messages sequentially to avoid race conditions with WebSocket queue_sync.
+     *
+     * Note: Skipped for filesystem-based sessions which don't have database conversation IDs.
      */
     private fun syncLocalMessagesToServer() {
         val queue = getCurrentQueue()
@@ -784,6 +796,12 @@ class ChatViewModel(
         // Process sequentially in a single coroutine to avoid race conditions
         scope.launch {
             val convId = _currentConversationIdFlow.value ?: return@launch
+
+            // Skip sync for filesystem-based sessions (no database conversation ID)
+            if (isFilesystemSession(convId)) {
+                DebugLogger.d(TAG, "Skipping queue sync for filesystem-based session")
+                return@launch
+            }
 
             for (msg in localMessages) {
                 try {
@@ -1018,11 +1036,20 @@ class ChatViewModel(
     }
 
     /**
+     * Checks if the conversation ID represents a filesystem-based session.
+     * Filesystem sessions use "sessionId?project=encodedPath" format and
+     * don't have database conversation IDs.
+     */
+    private fun isFilesystemSession(conversationId: String): Boolean {
+        return conversationId.contains("?project=")
+    }
+
+    /**
      * Parses the conversationId to extract session ID and encoded path.
      * @return Pair of (sessionId, encodedPath) or (null, null) for legacy format
      */
     private fun parseConversationId(conversationId: String): Pair<String?, String?> {
-        if (!conversationId.contains("?project=")) {
+        if (!isFilesystemSession(conversationId)) {
             return Pair(null, null)
         }
         val parts = conversationId.split("?project=")
@@ -1968,10 +1995,12 @@ class ChatViewModel(
                 updateCurrentQueue { q -> q.filter { it.id != messageId } }
 
                 // If it's a server message, also remove from server
+                // (Skip for filesystem-based sessions which don't have database conversation IDs)
                 if (message.source == QueuedMessageSource.SERVER) {
                     scope.launch {
                         try {
                             val convId = _currentConversationIdFlow.value ?: return@launch
+                            if (isFilesystemSession(convId)) return@launch // Skip filesystem sessions
                             queueApi.removeFromQueue(convId, messageId)
                             DebugLogger.d(TAG, "Removed message from server queue: $messageId")
                         } catch (e: Exception) {
@@ -2000,11 +2029,13 @@ class ChatViewModel(
             updateCurrentQueue { cliMessages }
 
             // Clear server queue if any server messages
+            // (Skip for filesystem-based sessions which don't have database conversation IDs)
             val hasServerMessages = clearableMessages.any { it.source == QueuedMessageSource.SERVER }
             if (hasServerMessages) {
                 scope.launch {
                     try {
                         val convId = _currentConversationIdFlow.value ?: return@launch
+                        if (isFilesystemSession(convId)) return@launch // Skip filesystem sessions
                         queueApi.clearQueue(convId)
                         DebugLogger.d(TAG, "Cleared server queue")
                     } catch (e: Exception) {
