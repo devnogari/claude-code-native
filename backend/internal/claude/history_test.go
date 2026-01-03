@@ -461,3 +461,67 @@ func TestGetSessionState_RecentMessageWithoutStopReason(t *testing.T) {
 	state := GetSessionState(messages)
 	assert.Equal(t, SessionStateStreaming, state, "recent message without stop_reason should return streaming")
 }
+
+func TestIsWorktreePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		// Should be detected as worktree paths
+		{
+			name:     "hidden worktree directory",
+			path:     "/Users/user/project/.worktrees/feature-branch",
+			expected: true,
+		},
+		{
+			name:     "visible worktree directory",
+			path:     "/Users/user/project/worktrees/feature-branch",
+			expected: true,
+		},
+		{
+			name:     "nested worktree path",
+			path:     "/Users/user/project/.worktrees/feature/nested",
+			expected: true,
+		},
+		{
+			name:     "windows hidden worktree",
+			path:     "C:\\Users\\user\\project\\.worktrees\\feature-branch",
+			expected: true,
+		},
+		{
+			name:     "windows visible worktree",
+			path:     "C:\\Users\\user\\project\\worktrees\\feature-branch",
+			expected: true,
+		},
+
+		// Should NOT be detected as worktree paths
+		{
+			name:     "regular project path",
+			path:     "/Users/user/my-project",
+			expected: false,
+		},
+		{
+			name:     "path with worktree in name",
+			path:     "/Users/user/my-worktrees-project",
+			expected: false,
+		},
+		{
+			name:     "path ending with .worktrees",
+			path:     "/Users/user/.worktrees",
+			expected: false,
+		},
+		{
+			name:     "empty path",
+			path:     "",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isWorktreePath(tt.path)
+			assert.Equal(t, tt.expected, result, "isWorktreePath(%q)", tt.path)
+		})
+	}
+}
