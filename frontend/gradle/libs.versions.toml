@@ -1,5 +1,6 @@
 [versions]
 kotlin = "2.3.0"
+detekt = "1.23.7"
 compose-multiplatform = "1.9.3"
 compose-hot-reload = "1.0.0"
 material3-adaptive = "1.2.0"
@@ -17,6 +18,8 @@ slf4j = "2.0.17"
 androidx-activityCompose = "1.12.2"
 androidx-lifecycle = "2.10.0"
 lifecycle-compose = "2.8.4"
+mockk = "1.13.14"
+turbine = "1.2.0"
 
 [libraries]
 # Ktor Client
@@ -51,8 +54,12 @@ kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.
 slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 
 # Testing
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
 ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
 
 # Material3 Adaptive
 compose-material3-adaptive = { module = "org.jetbrains.compose.material3.adaptive:adaptive", version.ref = "material3-adaptive" }
@@ -69,3 +76,4 @@ compose-hot-reload = { id = "org.jetbrains.compose.hot-reload", version.ref = "c
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
