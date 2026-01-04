@@ -28,7 +28,7 @@ fun ServerManagementSection(
 
     sectionWrapper("Servers") {
         state.currentServer?.let { CurrentServerIndicator(it); Spacer(Modifier.height(12.dp)) }
-        state.servers.forEach { server ->
+        state.servers.sortedByDescending { it.lastConnectedAt ?: 0L }.forEach { server ->
             ServerListItem(server, server.id == state.currentServerId, { viewModel.switchToServer(server.id) }, { editingServer = server }, { deleteTarget = server }, !isLoading)
             Spacer(Modifier.height(8.dp))
         }

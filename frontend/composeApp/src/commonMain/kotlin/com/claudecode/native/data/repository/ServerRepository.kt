@@ -110,9 +110,15 @@ class ServerRepository {
     fun deleteServer(id: String) {
         _state.update { current ->
             val newServers = current.servers.filter { it.id != id }
+            val newCurrentId = if (current.currentServerId == id) {
+                // Switch to the most recently used of the remaining servers
+                newServers.sortedByDescending { it.lastConnectedAt ?: 0L }.firstOrNull()?.id
+            } else {
+                current.currentServerId
+            }
             ServerListState(
                 servers = newServers,
-                currentServerId = if (current.currentServerId == id) newServers.firstOrNull()?.id else current.currentServerId
+                currentServerId = newCurrentId
             )
         }
         persistState()
