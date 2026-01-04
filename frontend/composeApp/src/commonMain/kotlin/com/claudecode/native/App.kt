@@ -93,6 +93,7 @@ private suspend fun validateTokenOrClearOnUnauthorized(
         // Catch-all for network errors (connection refused, timeout, DNS failures)
         // and any other pre-request exceptions that aren't wrapped in ApiException.
         // These are transient errors - preserve the token so user can retry.
+        println("Token validation failed with unexpected exception: ${e.message}")
         false
     }
 }
