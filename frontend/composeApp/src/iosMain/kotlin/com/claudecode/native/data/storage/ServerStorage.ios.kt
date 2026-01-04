@@ -37,6 +37,7 @@ actual object ServerStorage {
             defaults.setObject(content, SERVERS_KEY)
         } catch (e: Exception) {
             NSLog("ServerStorage: Failed to save server list: %@", e.message ?: "unknown error")
+            throw IllegalStateException("Failed to save server list due to serialization error", e)
         }
     }
 

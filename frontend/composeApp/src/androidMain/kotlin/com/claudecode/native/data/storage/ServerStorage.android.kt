@@ -56,6 +56,7 @@ actual object ServerStorage {
             prefs.edit().putString(SERVERS_KEY, content).apply()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save server list", e)
+            throw IllegalStateException("Failed to save server list due to serialization error", e)
         }
     }
 
