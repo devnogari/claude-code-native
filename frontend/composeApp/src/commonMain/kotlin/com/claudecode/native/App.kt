@@ -34,6 +34,7 @@ import com.claudecode.native.ui.screen.ProjectListScreenContent
 import com.claudecode.native.ui.screen.SettingsScreen
 import com.claudecode.native.ui.theme.AppTheme
 import com.claudecode.native.ui.viewmodel.ServerViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -42,6 +43,9 @@ import org.koin.compose.koinInject
 
 /** Timeout for waiting for server configuration to complete. */
 private const val SERVER_SETUP_TIMEOUT_MS = 5000L
+
+/** Error message shown when server configuration times out. */
+private const val SERVER_SETUP_TIMEOUT_ERROR = "Server configuration timed out. Please try again."
 
 @Composable
 fun App() {
@@ -76,6 +80,9 @@ private suspend fun validateTokenOrClearOnUnauthorized(
     return try {
         claudeHistoryApi.getProjects()
         true
+    } catch (e: CancellationException) {
+        // Rethrow cancellation to allow proper coroutine cancellation
+        throw e
     } catch (e: ApiException) {
         // Only clear token on 401 (Unauthorized) - token is actually invalid
         if (e.isUnauthorized()) {
@@ -211,7 +218,7 @@ fun AppNavigation() {
                             // Server setup timed out - show error only if no other error already set
                             // (addServer might have set a more specific error)
                             if (serverViewModel.error.value == null) {
-                                serverViewModel.setError("Server configuration timed out. Please try again.")
+                                serverViewModel.setError(SERVER_SETUP_TIMEOUT_ERROR)
                             }
                         }
                     }
