@@ -58,6 +58,9 @@ class ServerRepository {
                 currentServerId = server.id
             )
             ServerStorage.saveServerList(state)
+            // Clean up legacy storage after successful migration
+            TokenStorage.clearToken()
+            TokenStorage.clearServerHost()
             state
         } else {
             ServerListState()
