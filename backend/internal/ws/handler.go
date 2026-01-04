@@ -1363,8 +1363,9 @@ func (h *Handler) sendSubscribedToClient(client *Client, convID uuid.UUID) {
 	}
 
 	msg := OutgoingMessage{
-		Type:    MessageTypeSubscribed,
-		Payload: payload,
+		Type:           MessageTypeSubscribed,
+		ConversationID: convID.String(), // Also set at top level for frontend compatibility
+		Payload:        payload,
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
