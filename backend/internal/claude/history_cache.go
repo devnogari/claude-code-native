@@ -121,12 +121,10 @@ func (c *HistoryCache) GetProjects() []ClaudeProject {
 		if !ok {
 			// First occurrence - create a deep copy to prevent data races
 			// (shallow copy would share the sessions slice with original)
-			copy := *p
-			copy.Sessions = make([]ClaudeSession, len(p.Sessions))
-			for i := range p.Sessions {
-				copy.Sessions[i] = p.Sessions[i]
-			}
-			byPath[p.Path] = &copy
+			cpy := *p
+			cpy.Sessions = make([]ClaudeSession, len(p.Sessions))
+			copy(cpy.Sessions, p.Sessions)
+			byPath[p.Path] = &cpy
 		} else {
 			// Merge sessions from duplicate project
 			existing.Sessions = append(existing.Sessions, p.Sessions...)
