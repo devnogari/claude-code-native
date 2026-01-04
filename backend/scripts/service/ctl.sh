@@ -118,6 +118,13 @@ macos_logs() {
     fi
 }
 
+macos_update() {
+    log_info "Building backend binary..."
+    (cd "$BACKEND_DIR" && go build -o ccn-backend ./cmd/server)
+    log_success "Build complete"
+    macos_restart
+}
+
 # Linux functions
 linux_install() {
     local service_src="$SCRIPT_DIR/ccn-backend.service"
@@ -202,6 +209,13 @@ linux_logs() {
     fi
 }
 
+linux_update() {
+    log_info "Building backend binary..."
+    (cd "$BACKEND_DIR" && go build -o ccn-backend ./cmd/server)
+    log_success "Build complete"
+    linux_restart
+}
+
 # Windows stub (use PowerShell script directly)
 windows_help() {
     log_info "For Windows, use the PowerShell script:"
@@ -219,10 +233,11 @@ case "$OS" in
             start)     macos_start ;;
             stop)      macos_stop ;;
             restart)   macos_restart ;;
+            update)    macos_update ;;
             status)    macos_status ;;
             logs)      macos_logs "$2" ;;
             *)
-                echo "Usage: $0 {install|uninstall|start|stop|restart|status|logs [-f]}"
+                echo "Usage: $0 {install|uninstall|start|stop|restart|update|status|logs [-f]}"
                 exit 1
                 ;;
         esac
@@ -234,10 +249,11 @@ case "$OS" in
             start)     linux_start ;;
             stop)      linux_stop ;;
             restart)   linux_restart ;;
+            update)    linux_update ;;
             status)    linux_status ;;
             logs)      linux_logs "$2" ;;
             *)
-                echo "Usage: $0 {install|uninstall|start|stop|restart|status|logs [-f]}"
+                echo "Usage: $0 {install|uninstall|start|stop|restart|update|status|logs [-f]}"
                 exit 1
                 ;;
         esac

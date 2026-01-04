@@ -3,7 +3,7 @@
 
 param(
     [Parameter(Position=0, Mandatory=$true)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'install', 'uninstall')]
+    [ValidateSet('start', 'stop', 'restart', 'update', 'status', 'logs', 'install', 'uninstall')]
     [string]$Command,
 
     [switch]$Follow
@@ -101,10 +101,35 @@ function Uninstall-Backend {
     & $scriptPath -Uninstall
 }
 
+function Update-Backend {
+    $backendDir = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    Write-Host "[INFO] Building backend binary..." -ForegroundColor Blue
+    Push-Location $backendDir
+    try {
+        & go build -o ccn-backend.exe ./cmd/server
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[OK] Build complete" -ForegroundColor Green
+
+            # Copy to install location if service is installed
+            $installPath = "$env:ProgramFiles\ccn-backend"
+            if (Test-Path $installPath) {
+                Copy-Item "ccn-backend.exe" -Destination $installPath -Force
+            }
+
+            Restart-Backend
+        } else {
+            Write-Error "Build failed"
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 switch ($Command) {
     'start'     { Start-Backend }
     'stop'      { Stop-Backend }
     'restart'   { Restart-Backend }
+    'update'    { Update-Backend }
     'status'    { Show-Status }
     'logs'      { Show-Logs }
     'install'   { Install-Backend }
