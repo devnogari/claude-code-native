@@ -1,23 +1,4 @@
 services:
-  traefik:
-    image: traefik:v3.0
-    container_name: ccn-traefik
-    restart: unless-stopped
-    command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - ccn-network
-
   backend:
     build:
       context: ./backend
@@ -36,11 +17,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`ccn.localhost`)"
-      - "traefik.http.routers.backend.entrypoints=web"
-      - "traefik.http.services.backend.loadbalancer.server.port=8080"
+    ports:
+      - "8083:8080"
     networks:
       - ccn-network
 
@@ -61,7 +39,7 @@ services:
       timeout: 5s
       retries: 5
     ports:
-      - "5432:5432"
+      - "5438:5432"
     networks:
       - ccn-network
 

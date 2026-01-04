@@ -15,11 +15,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.claudecode.native.ui.viewmodel.LoginUiState
 import com.claudecode.native.ui.viewmodel.LoginViewModel
+import com.claudecode.native.ui.viewmodel.ServerViewModel
 import org.koin.compose.koinInject
 
 @Composable
 fun LoginScreen(
     viewModel: LoginViewModel = koinInject(),
+    serverViewModel: ServerViewModel = koinInject(),
     onLoginSuccess: () -> Unit
 ) {
     var username by remember { mutableStateOf("") }
@@ -31,6 +33,9 @@ fun LoginScreen(
 
     LaunchedEffect(uiState) {
         if (uiState is LoginUiState.Success) {
+            // Save token to current server
+            val token = (uiState as LoginUiState.Success).response.token
+            serverViewModel.saveCurrentToken(token)
             onLoginSuccess()
             viewModel.resetState()
         }

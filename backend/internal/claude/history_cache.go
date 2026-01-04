@@ -13,7 +13,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const excludedProjectsFile = ".excluded_projects"
+const (
+	excludedProjectsFile        = ".excluded_projects"
+	maxConcurrentProjectLoads   = 10 // Limit concurrent file I/O operations
+)
 
 // SessionChangeCallback is called when a session file changes
 type SessionChangeCallback func(encodedPath, sessionID string, newMessages []ClaudeMessage)
@@ -57,9 +60,16 @@ type HistoryCache struct {
 }
 
 // NewHistoryCache creates a new cache with file watching
-func NewHistoryCache(logger *zap.Logger) (*HistoryCache, error) {
-	home, _ := os.UserHomeDir()
-	basePath := filepath.Join(home, ".claude", "projects")
+// basePath should be the path to Claude base directory (e.g., ~/.claude or /claude-projects)
+func NewHistoryCache(logger *zap.Logger, basePath string) (*HistoryCache, error) {
+	// If basePath starts with ~, expand it
+	if strings.HasPrefix(basePath, "~") {
+		home, _ := os.UserHomeDir()
+		basePath = strings.Replace(basePath, "~", home, 1)
+	}
+	// Always append "projects" subdirectory - Claude stores project data in {basePath}/projects/
+	basePath = filepath.Join(basePath, "projects")
+	logger.Info("HistoryCache initialized", zap.String("basePath", basePath))
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -98,18 +108,52 @@ func NewHistoryCache(logger *zap.Logger) (*HistoryCache, error) {
 }
 
 // GetProjects returns all cached projects sorted by last accessed
+// Projects with the same path (cwd) are merged into a single entry
 func (c *HistoryCache) GetProjects() []ClaudeProject {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Debug: check specific project
-	if p, ok := c.projects["-Users-probe-git-devnogari-claude-code-native-frontend"]; ok {
-		c.logger.Info("GetProjects: frontend project in cache",
-			zap.Int("sessions", len(p.Sessions)))
+	// Group projects by their actual path (cwd) to deduplicate
+	// Multiple encoded paths can resolve to the same project path
+	byPath := make(map[string]*ClaudeProject)
+	for _, p := range c.projects {
+		existing, ok := byPath[p.Path]
+		if !ok {
+			// First occurrence - create a deep copy to prevent data races
+			// (shallow copy would share the sessions slice with original)
+			cpy := *p
+			cpy.Sessions = make([]ClaudeSession, len(p.Sessions))
+			copy(cpy.Sessions, p.Sessions)
+			byPath[p.Path] = &cpy
+		} else {
+			// Merge sessions from duplicate project
+			existing.Sessions = append(existing.Sessions, p.Sessions...)
+			// Update last accessed if newer
+			if p.LastAccessed.After(existing.LastAccessed) {
+				existing.LastAccessed = p.LastAccessed
+			}
+		}
 	}
 
-	projects := make([]ClaudeProject, 0, len(c.projects))
-	for _, p := range c.projects {
+	// Deduplicate sessions within each merged project (by session ID)
+	for _, p := range byPath {
+		seen := make(map[string]bool)
+		unique := make([]ClaudeSession, 0, len(p.Sessions))
+		for _, s := range p.Sessions {
+			if !seen[s.ID] {
+				seen[s.ID] = true
+				unique = append(unique, s)
+			}
+		}
+		p.Sessions = unique
+		// Re-sort sessions by updated time
+		sort.Slice(p.Sessions, func(i, j int) bool {
+			return p.Sessions[i].UpdatedAt.After(p.Sessions[j].UpdatedAt)
+		})
+	}
+
+	projects := make([]ClaudeProject, 0, len(byPath))
+	for _, p := range byPath {
 		projects = append(projects, *p)
 	}
 
@@ -117,15 +161,6 @@ func (c *HistoryCache) GetProjects() []ClaudeProject {
 	sort.Slice(projects, func(i, j int) bool {
 		return projects[i].LastAccessed.After(projects[j].LastAccessed)
 	})
-
-	// Debug: print project order after sorting
-	c.logger.Info("GetProjects sorted order")
-	for i, p := range projects {
-		c.logger.Info("project order",
-			zap.Int("index", i),
-			zap.String("name", p.Name),
-			zap.Time("lastAccessed", p.LastAccessed))
-	}
 
 	return projects
 }
@@ -145,9 +180,44 @@ func (c *HistoryCache) GetProject(encodedPath string) (*ClaudeProject, bool) {
 }
 
 // GetSessionMessages returns messages for a session (still reads from file)
+// Handles inherited sessions by checking SourceEncodedPath if file not found
 func (c *HistoryCache) GetSessionMessages(encodedPath, sessionID string) ([]ClaudeMessage, error) {
 	sessionFile := filepath.Join(c.basePath, encodedPath, sessionID+".jsonl")
-	return parseJsonlFile(sessionFile)
+	messages, err := parseJsonlFile(sessionFile)
+	if err == nil {
+		return messages, nil
+	}
+
+	// File not found - check if this is an inherited session
+	if os.IsNotExist(err) {
+		if sourceEncodedPath := c.findSessionSourcePath(encodedPath, sessionID); sourceEncodedPath != "" {
+			sessionFile = filepath.Join(c.basePath, sourceEncodedPath, sessionID+".jsonl")
+			return parseJsonlFile(sessionFile)
+		}
+	}
+	return nil, err
+}
+
+// findSessionSourcePath looks up the SourceEncodedPath for a session in the cache
+func (c *HistoryCache) findSessionSourcePath(encodedPath, sessionID string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	project, ok := c.projects[encodedPath]
+	if !ok {
+		return ""
+	}
+
+	for _, session := range project.Sessions {
+		if session.ID == sessionID && session.SourceEncodedPath != "" && session.SourceEncodedPath != encodedPath {
+			c.logger.Debug("found inherited session source",
+				zap.String("encodedPath", encodedPath),
+				zap.String("sessionID", sessionID),
+				zap.String("sourceEncodedPath", session.SourceEncodedPath))
+			return session.SourceEncodedPath
+		}
+	}
+	return ""
 }
 
 // Close stops the watcher
@@ -155,7 +225,7 @@ func (c *HistoryCache) Close() error {
 	return c.watcher.Close()
 }
 
-// loadAll loads all projects into cache
+// loadAll loads all projects into cache using parallel workers
 func (c *HistoryCache) loadAll() error {
 	entries, err := os.ReadDir(c.basePath)
 	if err != nil {
@@ -165,10 +235,7 @@ func (c *HistoryCache) loadAll() error {
 		return err
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Get excluded projects while holding the lock
+	// Get excluded projects
 	c.excludedMu.RLock()
 	excludedProjects := make(map[string]bool, len(c.excluded))
 	for k, v := range c.excluded {
@@ -176,36 +243,56 @@ func (c *HistoryCache) loadAll() error {
 	}
 	c.excludedMu.RUnlock()
 
+	// Collect valid project paths
+	var projectPaths []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		encodedPath := entry.Name()
-
-		// Skip excluded projects
 		if excludedProjects[encodedPath] {
 			continue
 		}
+		projectPaths = append(projectPaths, encodedPath)
+	}
 
-		if project, err := c.loadProject(encodedPath); err == nil {
-			c.projects[encodedPath] = project
-			// Debug: log projects with inherited sessions
-			if len(project.Sessions) > 0 && strings.Contains(encodedPath, "frontend") {
-				c.logger.Info("loaded project with sessions",
-					zap.String("project", encodedPath),
-					zap.Int("sessions", len(project.Sessions)))
+	// Load projects in parallel with worker pool
+	type result struct {
+		path    string
+		project *ClaudeProject
+	}
+	results := make(chan result, len(projectPaths))
+	sem := make(chan struct{}, maxConcurrentProjectLoads)
+
+	var wg sync.WaitGroup
+	for _, path := range projectPaths {
+		wg.Add(1)
+		go func(encodedPath string) {
+			defer wg.Done()
+			sem <- struct{}{}        // Acquire
+			defer func() { <-sem }() // Release
+
+			if project, err := c.loadProject(encodedPath); err == nil {
+				results <- result{path: encodedPath, project: project}
 			}
-		}
+		}(path)
+	}
+
+	// Close results when all workers done
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for r := range results {
+		c.projects[r.path] = r.project
 	}
 
 	c.logger.Info("loaded claude history cache",
 		zap.Int("projects", len(c.projects)))
-
-	// Debug: verify specific project
-	if p, ok := c.projects["-Users-probe-git-devnogari-claude-code-native-frontend"]; ok {
-		c.logger.Info("verification: frontend project in cache",
-			zap.Int("sessions", len(p.Sessions)))
-	}
 
 	return nil
 }
@@ -213,9 +300,8 @@ func (c *HistoryCache) loadAll() error {
 // loadProject loads a single project
 func (c *HistoryCache) loadProject(encodedPath string) (*ClaudeProject, error) {
 	projectDir := filepath.Join(c.basePath, encodedPath)
-	projectPath := DecodeProjectPath(encodedPath)
 
-	sessions, lastAccessed, err := c.loadSessions(projectDir, encodedPath)
+	sessions, lastAccessed, projectPath, err := c.loadSessions(projectDir, encodedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -225,10 +311,14 @@ func (c *HistoryCache) loadProject(encodedPath string) (*ClaudeProject, error) {
 	if len(sessions) == 0 {
 		c.logger.Debug("no sessions found, trying parent lookup",
 			zap.String("project", encodedPath))
-		if parentSessions, parentLastAccessed := c.findParentProjectSessions(encodedPath); len(parentSessions) > 0 {
+		if parentSessions, parentLastAccessed, parentPath := c.findParentProjectSessions(encodedPath); len(parentSessions) > 0 {
 			sessions = parentSessions
 			if parentLastAccessed.After(lastAccessed) {
 				lastAccessed = parentLastAccessed
+			}
+			// Use parent path if we don't have one yet
+			if projectPath == "" && parentPath != "" {
+				projectPath = parentPath
 			}
 			c.logger.Info("inherited sessions from parent project",
 				zap.String("project", encodedPath),
@@ -237,6 +327,11 @@ func (c *HistoryCache) loadProject(encodedPath string) (*ClaudeProject, error) {
 			c.logger.Debug("no parent sessions found",
 				zap.String("project", encodedPath))
 		}
+	}
+
+	// Fallback to DecodeProjectPath if cwd not found in sessions
+	if projectPath == "" {
+		projectPath = DecodeProjectPath(encodedPath)
 	}
 
 	name := filepath.Base(projectPath)
@@ -260,19 +355,59 @@ func (c *HistoryCache) loadProject(encodedPath string) (*ClaudeProject, error) {
 
 // findParentProjectSessions looks for sessions in parent project directories
 // This handles the case where Claude CLI stores sessions in git root, not subdirectories
-func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSession, time.Time) {
-	// Try removing path segments from the end to find parent project
-	parts := strings.Split(encodedPath, "-")
+// Returns sessions, lastAccessed time, and projectPath extracted from session cwd
+func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSession, time.Time, string) {
+	// Try using DecodeProjectPath for accurate path resolution (handles dashes in directory names)
+	// Falls back to encoded path segment removal for test environments
+	decodedPath := DecodeProjectPath(encodedPath)
 
 	c.logger.Debug("looking for parent sessions",
 		zap.String("encodedPath", encodedPath),
+		zap.String("decodedPath", decodedPath))
+
+	// Check if decoded path exists (won't exist in test environments with synthetic paths)
+	if _, err := os.Stat(decodedPath); err == nil {
+		// Use filepath.Dir approach for real paths - more reliable for paths with dashes
+		currentPath := decodedPath
+		for {
+			parentPath := filepath.Dir(currentPath)
+			if parentPath == currentPath || parentPath == "/" || parentPath == "." {
+				break // Reached root
+			}
+			currentPath = parentPath
+			parentEncodedPath := EncodeProjectPath(parentPath)
+
+			if isHomeDirectory(parentEncodedPath) {
+				c.logger.Debug("skipping home directory",
+					zap.String("parentEncodedPath", parentEncodedPath))
+				continue
+			}
+
+			parentDir := filepath.Join(c.basePath, parentEncodedPath)
+			c.logger.Debug("checking parent dir (decoded)",
+				zap.String("parentEncodedPath", parentEncodedPath),
+				zap.String("parentDir", parentDir))
+
+			if info, err := os.Stat(parentDir); err == nil && info.IsDir() {
+				if sessions, lastAccessed, projectPath, err := c.loadSessions(parentDir, parentEncodedPath); err == nil && len(sessions) > 0 {
+					c.logger.Info("found parent sessions",
+						zap.String("parentDir", parentDir),
+						zap.Int("sessions", len(sessions)),
+						zap.String("projectPath", projectPath))
+					return sessions, lastAccessed, projectPath
+				}
+			}
+		}
+	}
+
+	// Fallback: Split by "-" for synthetic/test paths where decoded path doesn't exist
+	parts := strings.Split(encodedPath, "-")
+	c.logger.Debug("using fallback segment-based parent search",
 		zap.Int("parts", len(parts)))
 
 	for i := len(parts) - 1; i > 1; i-- {
 		parentEncodedPath := strings.Join(parts[:i], "-")
 
-		// Skip home directory - it contains unrelated sessions from ad-hoc CLI usage
-		// Home directories look like: -Users-username, -home-username, -root
 		if isHomeDirectory(parentEncodedPath) {
 			c.logger.Debug("skipping home directory",
 				zap.String("parentEncodedPath", parentEncodedPath))
@@ -280,24 +415,22 @@ func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSe
 		}
 
 		parentDir := filepath.Join(c.basePath, parentEncodedPath)
-
-		c.logger.Debug("checking parent dir",
+		c.logger.Debug("checking parent dir (fallback)",
 			zap.String("parentEncodedPath", parentEncodedPath),
 			zap.String("parentDir", parentDir))
 
-		// Check if parent project directory exists
 		if info, err := os.Stat(parentDir); err == nil && info.IsDir() {
-			// Pass parentEncodedPath so sessions know their actual source location
-			if sessions, lastAccessed, err := c.loadSessions(parentDir, parentEncodedPath); err == nil && len(sessions) > 0 {
+			if sessions, lastAccessed, projectPath, err := c.loadSessions(parentDir, parentEncodedPath); err == nil && len(sessions) > 0 {
 				c.logger.Info("found parent sessions",
 					zap.String("parentDir", parentDir),
-					zap.Int("sessions", len(sessions)))
-				return sessions, lastAccessed
+					zap.Int("sessions", len(sessions)),
+					zap.String("projectPath", projectPath))
+				return sessions, lastAccessed, projectPath
 			}
 		}
 	}
 
-	return nil, time.Time{}
+	return nil, time.Time{}, ""
 }
 
 // isHomeDirectory checks if the encoded path represents a home directory
@@ -332,14 +465,16 @@ func isHomeDirectory(encodedPath string) bool {
 
 // loadSessions loads sessions for a project directory
 // encodedPath is the encoded path of the directory where session files are located (used for deletion)
-func (c *HistoryCache) loadSessions(projectDir string, encodedPath string) ([]ClaudeSession, time.Time, error) {
+// Returns sessions, lastAccessed time, projectPath extracted from session cwd, and error
+func (c *HistoryCache) loadSessions(projectDir string, encodedPath string) ([]ClaudeSession, time.Time, string, error) {
 	entries, err := os.ReadDir(projectDir)
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, "", err
 	}
 
 	var sessions []ClaudeSession
 	var lastAccessed time.Time
+	var projectPath string // Extracted from session cwd
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
@@ -361,27 +496,29 @@ func (c *HistoryCache) loadSessions(projectDir string, encodedPath string) ([]Cl
 			lastAccessed = modTime
 		}
 
-		messages, err := parseJsonlFile(filePath)
+		// Use fast metadata parsing instead of full file parse
+		meta, err := parseSessionMetadataFast(filePath)
 		if err != nil {
 			continue
 		}
 
-		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
-		firstMsg := extractFirstUserMessage(messages)
-		createdAt := extractCreatedAt(messages)
-		messageCount := countUserAssistantMessages(messages)
+		// Extract cwd from session metadata
+		if projectPath == "" && meta.Cwd != "" {
+			projectPath = meta.Cwd
+		}
 
 		// Skip sessions with 0 messages (but lastAccessed is already updated above)
-		if messageCount == 0 {
+		if meta.MessageCount == 0 {
 			continue
 		}
 
+		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
 		sessions = append(sessions, ClaudeSession{
 			ID:                sessionID,
 			Filename:          entry.Name(),
-			MessageCount:      messageCount,
-			FirstMessage:      truncateString(firstMsg, 100),
-			CreatedAt:         createdAt,
+			MessageCount:      meta.MessageCount,
+			FirstMessage:      truncateString(meta.FirstMessage, 100),
+			CreatedAt:         meta.CreatedAt,
 			UpdatedAt:         modTime,
 			SourceEncodedPath: encodedPath, // Track where the session file actually resides
 		})
@@ -391,18 +528,7 @@ func (c *HistoryCache) loadSessions(projectDir string, encodedPath string) ([]Cl
 		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
 	})
 
-	// Debug: print session order for this project
-	c.logger.Info("loadSessions sorted order",
-		zap.String("projectDir", projectDir))
-	for i, s := range sessions {
-		c.logger.Info("session order",
-			zap.Int("index", i),
-			zap.String("sessionID", s.ID[:8]),
-			zap.Time("updatedAt", s.UpdatedAt),
-			zap.String("firstMsg", truncateString(s.FirstMessage, 30)))
-	}
-
-	return sessions, lastAccessed, nil
+	return sessions, lastAccessed, projectPath, nil
 }
 
 // setupWatchers adds the base path and project directories to the watcher
@@ -653,11 +779,21 @@ func (c *HistoryCache) saveExcludedProjects() {
 }
 
 // GetSessionMessagesPaginated returns messages with pagination (most recent first)
+// Handles inherited sessions by checking SourceEncodedPath if file not found
 func (c *HistoryCache) GetSessionMessagesPaginated(encodedPath, sessionID string, limit, offset int) (*PaginatedMessages, error) {
 	sessionFile := filepath.Join(c.basePath, encodedPath, sessionID+".jsonl")
 	allMessages, err := parseJsonlFile(sessionFile)
 	if err != nil {
-		return nil, err
+		// File not found - check if this is an inherited session
+		if os.IsNotExist(err) {
+			if sourceEncodedPath := c.findSessionSourcePath(encodedPath, sessionID); sourceEncodedPath != "" {
+				sessionFile = filepath.Join(c.basePath, sourceEncodedPath, sessionID+".jsonl")
+				allMessages, err = parseJsonlFile(sessionFile)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Filter only user/assistant messages

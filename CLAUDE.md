@@ -2,12 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Session Start (IMPORTANT)
+---
+## 🔴 BLOCKER - 세션 시작 필수 작업 (DO THIS FIRST)
 
-**Serena Auto-Activation**: At session start, activate the Serena project for semantic code analysis:
+**다른 작업 전에 반드시 실행하세요. 건너뛰면 안 됩니다.**
+
 ```bash
 mcp-cli call serena/activate_project '{"project": "claude-code-native"}'
 ```
+
+✅ 실행 완료 후 다른 작업 진행
+❌ 이 단계 건너뛰기 금지 - 코드 분석 품질 저하
+
+---
 
 ## Workflow Preferences (ALWAYS APPLY)
 

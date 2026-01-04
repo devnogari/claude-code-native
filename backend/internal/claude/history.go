@@ -14,6 +14,10 @@ import (
 // uuidRegex matches UUID format (session IDs)
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// maxMetadataScanLines is the number of lines to parse for metadata in parseSessionMetadataFast.
+// Metadata (cwd, timestamp, first message) typically appears in the first few lines.
+const maxMetadataScanLines = 5
+
 // ClaudeProject represents a discovered Claude Code project
 type ClaudeProject struct {
 	ID           string          `json:"id"`
@@ -534,6 +538,77 @@ func EncodeProjectPath(path string) string {
 		encoded = encoded[1:]
 	}
 	return encoded
+}
+
+// SessionMetadata contains only the essential info needed for listing
+type SessionMetadata struct {
+	Cwd          string
+	FirstMessage string
+	CreatedAt    time.Time
+	MessageCount int
+}
+
+// parseSessionMetadataFast extracts session metadata without parsing entire file
+// This is much faster than parseJsonlFile for large session files
+func parseSessionMetadataFast(filePath string) (*SessionMetadata, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	meta := &SessionMetadata{}
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	lineCount := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		lineCount++
+
+		// Fast message counting using string search (avoid full JSON parse)
+		// Note: This may have rare false positives if role strings appear in content,
+		// but the trade-off for performance is acceptable since counts are approximate.
+		// Handle common JSON spacing variants.
+		if strings.Contains(line, `"role":"user"`) || strings.Contains(line, `"role": "user"`) ||
+			strings.Contains(line, `"role":"assistant"`) || strings.Contains(line, `"role": "assistant"`) {
+			meta.MessageCount++
+		}
+
+		// Only parse JSON for first few lines to get metadata
+		if lineCount <= maxMetadataScanLines && (meta.Cwd == "" || meta.FirstMessage == "" || meta.CreatedAt.IsZero()) {
+			var msg ClaudeMessage
+			if err := json.Unmarshal([]byte(line), &msg); err == nil {
+				if meta.Cwd == "" && msg.Cwd != "" {
+					meta.Cwd = msg.Cwd
+				}
+				if meta.CreatedAt.IsZero() && !msg.Timestamp.IsZero() {
+					meta.CreatedAt = msg.Timestamp
+				}
+				if meta.FirstMessage == "" && msg.Message != nil && msg.Message.Role == "user" {
+					switch content := msg.Message.Content.(type) {
+					case string:
+						meta.FirstMessage = content
+					case []interface{}:
+						for _, item := range content {
+							if m, ok := item.(map[string]interface{}); ok {
+								if text, ok := m["text"].(string); ok {
+									meta.FirstMessage = text
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return meta, scanner.Err()
 }
 
 // parseJsonlFile reads and parses a JSONL file
