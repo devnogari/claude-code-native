@@ -546,14 +546,14 @@ class ChatViewModel(
             }
 
             // Update todos from session state
-            if (!state.todos.isNullOrEmpty()) {
-                updateProgressFromTodos(state.todos!!)
+            state.todos?.takeIf { it.isNotEmpty() }?.let { todos ->
+                updateProgressFromTodos(todos)
             }
 
             // Update queue from session state (sync with server)
-            if (!state.queue.isNullOrEmpty()) {
+            state.queue?.takeIf { it.isNotEmpty() }?.let { queue ->
                 val convId = _currentConversationIdFlow.value ?: return@launch
-                val serverQueue = state.queue!!.map { msg ->
+                val serverQueue = queue.map { msg ->
                     QueuedMessage(
                         id = msg.id,
                         content = msg.content,
@@ -1271,8 +1271,8 @@ class ChatViewModel(
                         }
 
                         // Update todos
-                        if (!stateResponse.todos.isNullOrEmpty()) {
-                            val todoItems = stateResponse.todos!!.map { payload ->
+                        stateResponse.todos?.takeIf { it.isNotEmpty() }?.let { todos ->
+                            val todoItems = todos.map { payload ->
                                 com.claudecode.native.data.model.TodoItem(
                                     content = payload.content,
                                     status = payload.status,
@@ -1365,8 +1365,9 @@ class ChatViewModel(
                 }
 
                 // Update todos in progress status (always update, todos are additive/safe)
-                if (!stateResponse.todos.isNullOrEmpty()) {
-                    val todoItems = stateResponse.todos!!.map { payload ->
+                val todos = stateResponse.todos
+                if (!todos.isNullOrEmpty()) {
+                    val todoItems = todos.map { payload ->
                         com.claudecode.native.data.model.TodoItem(
                             content = payload.content,
                             status = payload.status,
@@ -1383,7 +1384,7 @@ class ChatViewModel(
                     }
                 }
 
-                DebugLogger.d(TAG, "ChatViewModel: REST sync complete - state=${stateResponse.sessionState}, streaming=${stateResponse.isStreaming}, todos=${stateResponse.todos?.size ?: 0}")
+                DebugLogger.d(TAG, "ChatViewModel: REST sync complete - state=${stateResponse.sessionState}, streaming=${stateResponse.isStreaming}, todos=${todos?.size ?: 0}")
 
             } catch (e: CancellationException) {
                 throw e

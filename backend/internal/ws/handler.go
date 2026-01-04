@@ -619,7 +619,16 @@ streamLoop:
 					needsCompactionRecovery = true
 					// Don't break yet - let the process finish naturally
 				}
-				// Forward stderr to client for visibility
+
+				// Filter out JSON lines from stderr - these are internal Claude CLI messages
+				// that shouldn't be displayed in the UI (e.g., {"type":"system","subtype":"init"})
+				trimmedContent := strings.TrimSpace(output.Content)
+				if strings.HasPrefix(trimmedContent, "{") && strings.HasSuffix(trimmedContent, "}") {
+					// Skip JSON lines - they're internal protocol messages
+					continue
+				}
+
+				// Forward non-JSON stderr to client for visibility
 				select {
 				case <-client.Done:
 					break streamLoop

@@ -11,6 +11,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Configuration for unified WebSocket client.
@@ -65,6 +66,7 @@ class UnifiedWebSocketClient(
         private const val TAG = "UnifiedWebSocketClient"
         private const val DEFAULT_HOST = "localhost:8083"
         private const val API_PATH = "/api/v1"
+        private const val SUBSCRIPTION_TIMEOUT_MS = 5000L
     }
 
     /** Get the current WebSocket base URL from stored server host */
@@ -89,6 +91,9 @@ class UnifiedWebSocketClient(
     // Cached subscription parameters for reconnection
     private var currentSessionId: String? = null
     private var currentEncodedPath: String? = null
+
+    // Subscription confirmation - waits for server's "subscribed" message before returning
+    private var pendingSubscription: CompletableDeferred<String>? = null
 
     private val _messages = MutableSharedFlow<IncomingMessage>()
     /** Flow of incoming messages from the server. Collectors receive all messages. */
@@ -217,6 +222,11 @@ class UnifiedWebSocketClient(
         when (message.type) {
             MessageType.SUBSCRIBED -> {
                 DebugLogger.d(TAG, "Subscribed to conversation: ${message.conversationId}")
+                // Complete the pending subscription confirmation
+                message.conversationId?.let { convId ->
+                    pendingSubscription?.complete(convId)
+                    pendingSubscription = null
+                }
             }
             MessageType.SESSION_STATE -> {
                 message.payload?.let { payload ->
@@ -305,22 +315,62 @@ class UnifiedWebSocketClient(
 
     /**
      * Subscribes to a conversation to receive its messages and state.
+     * Waits for server confirmation before returning to prevent race conditions
+     * where chat messages are sent before subscription is complete.
      *
      * @param conversationId The ID of the conversation to subscribe to
      * @param sessionId Optional session ID for resuming a specific session
      * @param encodedPath Optional encoded project path
+     * @throws IllegalStateException if not connected or subscription times out
      */
     suspend fun subscribe(conversationId: String, sessionId: String? = null, encodedPath: String? = null) {
+        // Create the deferred before sending to avoid race condition
+        val confirmation = CompletableDeferred<String>()
+
         mutex.withLock {
             if (_connectionState.value != ConnectionState.Connected) {
                 throw IllegalStateException("WebSocket is not connected")
             }
-            subscribeInternal(conversationId, sessionId, encodedPath)
+
+            // Cancel any previous pending subscription
+            pendingSubscription?.cancel()
+            pendingSubscription = confirmation
+
+            // Cache subscription parameters for reconnection (before sending)
+            currentSessionId = sessionId
+            currentEncodedPath = encodedPath
+            _sessionState.value = null // Clear previous session state
+
+            // Send subscribe request
+            val subscribeMessage = SubscribeMessage(
+                conversationId = conversationId,
+                sessionId = sessionId,
+                encodedPath = encodedPath
+            )
+            session?.send(Frame.Text(json.encodeToString(SubscribeMessage.serializer(), subscribeMessage)))
+            DebugLogger.d(TAG, "Sent subscribe request for conversation: $conversationId, sessionId: $sessionId")
+        }
+
+        // Wait for server confirmation outside the mutex lock
+        try {
+            val confirmedId = withTimeout(SUBSCRIPTION_TIMEOUT_MS) {
+                confirmation.await()
+            }
+            _currentSubscription.value = confirmedId
+            DebugLogger.d(TAG, "Subscription confirmed for conversation: $confirmedId")
+        } catch (e: TimeoutCancellationException) {
+            pendingSubscription = null
+            DebugLogger.e(TAG, "Subscription timeout for conversation: $conversationId")
+            throw IllegalStateException("Subscription timed out")
+        } catch (e: CancellationException) {
+            pendingSubscription = null
+            throw e
         }
     }
 
     /**
-     * Internal subscribe method - must be called within mutex lock.
+     * Internal subscribe method for reconnection - does NOT wait for confirmation.
+     * Used only during reconnection when we need to re-subscribe without blocking.
      */
     private suspend fun subscribeInternal(conversationId: String, sessionId: String? = null, encodedPath: String? = null) {
         val subscribeMessage = SubscribeMessage(
@@ -334,7 +384,7 @@ class UnifiedWebSocketClient(
         currentSessionId = sessionId
         currentEncodedPath = encodedPath
         _sessionState.value = null // Clear previous session state
-        DebugLogger.d(TAG, "Sent subscribe request for conversation: $conversationId, sessionId: $sessionId")
+        DebugLogger.d(TAG, "Sent subscribe request for conversation (reconnect): $conversationId, sessionId: $sessionId")
     }
 
     /**

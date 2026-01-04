@@ -43,10 +43,19 @@ class QueueManager(
     companion object {
         private const val TAG = "QueueManager"
         const val MAX_QUEUED_MESSAGES = 10
+        /**
+         * Grace period to ignore queue_sync messages after clearing (in milliseconds).
+         * This accounts for network latency where server may send queue_sync with stale data
+         * after streaming completes but before server processes the dequeue event.
+         */
+        private const val QUEUE_SYNC_GRACE_PERIOD_MS = 2000L
     }
 
     /** Messages queued per conversation (Map<ConversationId, List<QueuedMessage>>). */
     private val _queuedMessagesMap = MutableStateFlow<Map<String, List<QueuedMessage>>>(emptyMap())
+
+    /** Tracks when queue was last cleared per conversation (for grace period handling). */
+    private val lastQueueClearTime = MutableStateFlow<Map<String, Long>>(emptyMap())
 
     /**
      * Checks if the queue for a conversation has reached max capacity.
@@ -222,6 +231,22 @@ class QueueManager(
 
             MessageType.QUEUE_SYNC -> {
                 try {
+                    val convId = conversationId ?: return
+
+                    // Check if we're within the grace period after clearing queue
+                    // This prevents race conditions where queue_sync arrives after streaming completes
+                    val lastClearTime = lastQueueClearTime.value[convId]
+                    val now = Clock.System.now().toEpochMilliseconds()
+                    if (lastClearTime != null) {
+                        if ((now - lastClearTime) < QUEUE_SYNC_GRACE_PERIOD_MS) {
+                            DebugLogger.d(TAG, "Ignoring queue_sync during grace period (${now - lastClearTime}ms since clear)")
+                            return
+                        } else {
+                            // Grace period expired, clean up the entry to prevent memory growth
+                            lastQueueClearTime.update { it - convId }
+                        }
+                    }
+
                     val syncPayload = json.decodeFromJsonElement<QueueSyncPayload>(payload)
                     val serverMessages = syncPayload.messages.map { msg ->
                         val serverImages = msg.images.map { img ->
@@ -417,6 +442,15 @@ class QueueManager(
 
             if (clearedCount > 0) {
                 DebugLogger.d(TAG, "Cleared $clearedCount sent queue messages for conv=${convId.take(30)} (CLI messages kept: ${cliMessages.size})")
+                val now = Clock.System.now().toEpochMilliseconds()
+                // Record the clear time and clean up stale entries to prevent memory growth
+                lastQueueClearTime.update { currentMap ->
+                    // Remove entries older than 2x grace period (definitely expired)
+                    val cleanedMap = currentMap.filterValues { timestamp ->
+                        (now - timestamp) < (QUEUE_SYNC_GRACE_PERIOD_MS * 2)
+                    }
+                    cleanedMap + (convId to now)
+                }
                 map + (convId to cliMessages)
             } else {
                 map // Nothing to clear
