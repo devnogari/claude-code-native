@@ -12,10 +12,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.claudecode.native.data.api.ApiClient
+import com.claudecode.native.data.api.ApiException
 import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.repository.ServerRepository
 import com.claudecode.native.data.repository.ThemeRepository
@@ -32,6 +34,8 @@ import com.claudecode.native.ui.screen.ProjectListScreenContent
 import com.claudecode.native.ui.screen.SettingsScreen
 import com.claudecode.native.ui.theme.AppTheme
 import com.claudecode.native.ui.viewmodel.ServerViewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.koin.compose.KoinApplication
 import org.koin.compose.koinInject
 
@@ -51,6 +55,32 @@ fun App() {
                 AppNavigation()
             }
         }
+    }
+}
+
+/**
+ * Validates the auth token by making an API call.
+ * Only clears the token on 401 (Unauthorized) errors.
+ * Network errors and other exceptions preserve the token for retry.
+ *
+ * @return true if token is valid, false otherwise
+ */
+private suspend fun validateTokenOrClearOnUnauthorized(
+    claudeHistoryApi: ClaudeHistoryApi,
+    serverViewModel: ServerViewModel
+): Boolean {
+    return try {
+        claudeHistoryApi.getProjects()
+        true
+    } catch (e: ApiException) {
+        // Only clear token on 401 (Unauthorized) - token is actually invalid
+        if (e.isUnauthorized()) {
+            serverViewModel.clearCurrentToken()
+        }
+        false
+    } catch (e: Exception) {
+        // Network or other errors - don't clear token, user can retry
+        false
     }
 }
 
@@ -84,6 +114,7 @@ fun AppNavigation() {
     val claudeHistoryApi: ClaudeHistoryApi = koinInject()
     val serverRepository: ServerRepository = koinInject()
     val serverViewModel: ServerViewModel = koinInject()
+    val scope = rememberCoroutineScope()
 
     // Track if we've completed initial checks
     var isInitializing by remember { mutableStateOf(true) }
@@ -100,13 +131,8 @@ fun AppNavigation() {
             // Check if new server has valid token
             val currentServer = serverRepository.currentServer
             if (currentServer?.authToken != null) {
-                try {
-                    claudeHistoryApi.getProjects()
-                    currentScreen = Screen.ProjectList
-                } catch (e: Exception) {
-                    serverViewModel.clearCurrentToken()
-                    currentScreen = Screen.Login
-                }
+                val isValid = validateTokenOrClearOnUnauthorized(claudeHistoryApi, serverViewModel)
+                currentScreen = if (isValid) Screen.ProjectList else Screen.Login
             } else {
                 currentScreen = Screen.Login
             }
@@ -130,16 +156,8 @@ fun AppNavigation() {
         // Check for saved token on current server
         val savedToken = currentServer.authToken
         if (savedToken != null) {
-            // Try to validate the token by making an API call
-            try {
-                claudeHistoryApi.getProjects()
-                // Token is valid, navigate to ProjectList
-                currentScreen = Screen.ProjectList
-            } catch (e: Exception) {
-                // Token is invalid, clear it and stay on login
-                serverViewModel.clearCurrentToken()
-                currentScreen = Screen.Login
-            }
+            val isValid = validateTokenOrClearOnUnauthorized(claudeHistoryApi, serverViewModel)
+            currentScreen = if (isValid) Screen.ProjectList else Screen.Login
         } else {
             currentScreen = Screen.Login
         }
@@ -175,8 +193,16 @@ fun AppNavigation() {
             HostSetupScreen(
                 onHostConfigured = {
                     // After host is configured, initialize with current server and go to login
-                    serverViewModel.initializeWithCurrentServer()
-                    currentScreen = Screen.Login
+                    // Note: addServer() is async (launches coroutine internally), so we need to wait
+                    // for the server to be available before initializing ApiClient
+                    scope.launch {
+                        // Wait until server is added to repository (addServer is async)
+                        while (serverRepository.currentServer == null) {
+                            delay(10)
+                        }
+                        serverViewModel.initializeWithCurrentServer()
+                        currentScreen = Screen.Login
+                    }
                 }
             )
         }

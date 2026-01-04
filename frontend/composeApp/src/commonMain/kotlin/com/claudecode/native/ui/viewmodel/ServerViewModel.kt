@@ -233,12 +233,13 @@ class ServerViewModel(
     /**
      * Initializes the clients with the current server configuration.
      * Should be called on app startup.
+     *
+     * Note: This is a suspend function that waits for initialization to complete.
+     * This ensures the token is set in ApiClient before any API calls are made.
      */
-    fun initializeWithCurrentServer() {
+    suspend fun initializeWithCurrentServer() {
         val server = serverRepository.currentServer ?: return
-        scope.launch {
-            applyServerToClients(server)
-        }
+        applyServerToClients(server)
     }
 
     /**
