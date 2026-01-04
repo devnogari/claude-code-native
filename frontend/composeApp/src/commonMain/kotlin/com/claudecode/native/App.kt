@@ -36,6 +36,7 @@ import com.claudecode.native.ui.theme.AppTheme
 import com.claudecode.native.ui.viewmodel.ServerViewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.compose.KoinApplication
 import org.koin.compose.koinInject
 
@@ -192,14 +193,21 @@ fun AppNavigation() {
         is Screen.HostSetup -> {
             HostSetupScreen(
                 onHostConfigured = {
-                    // After host is configured, initialize with current server and go to login
-                    // Note: addServer() is async (launches coroutine internally), so we need to wait
-                    // for the server to be available before initializing ApiClient
+                    // After host is configured, wait for server to be added and go to login
+                    // Note: addServer() is async and also initializes API clients for first server,
+                    // so we only need to wait for state update, no separate initialization needed
                     scope.launch {
-                        // Wait until server is added to repository using Flow's first operator
-                        serverRepository.state.first { it.currentServer != null }
-                        serverViewModel.initializeWithCurrentServer()
-                        currentScreen = Screen.Login
+                        // Wait for server to be added, with timeout to prevent hanging on errors
+                        val serverState = withTimeoutOrNull(5000L) {
+                            serverRepository.state.first { it.currentServer != null }
+                        }
+
+                        if (serverState != null) {
+                            currentScreen = Screen.Login
+                        } else {
+                            // Server setup timed out, likely due to an error
+                            println("Error: Timed out waiting for server configuration")
+                        }
                     }
                 }
             )
