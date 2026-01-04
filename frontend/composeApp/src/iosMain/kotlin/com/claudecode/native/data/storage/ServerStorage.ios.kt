@@ -2,6 +2,7 @@ package com.claudecode.native.data.storage
 
 import com.claudecode.native.data.model.ServerListState
 import kotlinx.serialization.json.Json
+import platform.Foundation.NSLog
 import platform.Foundation.NSUserDefaults
 
 /**
@@ -25,7 +26,7 @@ actual object ServerStorage {
                 null
             }
         } catch (e: Exception) {
-            println("ServerStorage: Failed to read server list: ${e.message}")
+            NSLog("ServerStorage: Failed to read server list: %@", e.message ?: "unknown error")
             null
         }
     }
@@ -35,7 +36,7 @@ actual object ServerStorage {
             val content = json.encodeToString(ServerListState.serializer(), state)
             defaults.setObject(content, SERVERS_KEY)
         } catch (e: Exception) {
-            println("ServerStorage: Failed to save server list: ${e.message}")
+            NSLog("ServerStorage: Failed to save server list: %@", e.message ?: "unknown error")
         }
     }
 

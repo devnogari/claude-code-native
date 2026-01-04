@@ -2,8 +2,11 @@ package com.claudecode.native.data.storage
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import com.claudecode.native.data.model.ServerListState
 import kotlinx.serialization.json.Json
+
+private const val TAG = "ServerStorage"
 
 /**
  * Android implementation using SharedPreferences for persistent storage.
@@ -17,36 +20,47 @@ actual object ServerStorage {
         encodeDefaults = true
     }
 
-    private var prefs: SharedPreferences? = null
+    private lateinit var prefs: SharedPreferences
 
     fun init(context: Context) {
+        // Avoid re-initialization on Android process recreation
+        if (::prefs.isInitialized) return
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
     actual fun getServerList(): ServerListState? {
+        if (!::prefs.isInitialized) {
+            Log.w(TAG, "ServerStorage not initialized")
+            return null
+        }
         return try {
-            val content = prefs?.getString(SERVERS_KEY, null)
+            val content = prefs.getString(SERVERS_KEY, null)
             if (content != null && content.isNotBlank()) {
                 json.decodeFromString<ServerListState>(content)
             } else {
                 null
             }
         } catch (e: Exception) {
-            println("ServerStorage: Failed to read server list: ${e.message}")
+            Log.e(TAG, "Failed to read server list", e)
             null
         }
     }
 
     actual fun saveServerList(state: ServerListState) {
+        if (!::prefs.isInitialized) {
+            Log.w(TAG, "ServerStorage not initialized")
+            return
+        }
         try {
             val content = json.encodeToString(ServerListState.serializer(), state)
-            prefs?.edit()?.putString(SERVERS_KEY, content)?.apply()
+            prefs.edit().putString(SERVERS_KEY, content).apply()
         } catch (e: Exception) {
-            println("ServerStorage: Failed to save server list: ${e.message}")
+            Log.e(TAG, "Failed to save server list", e)
         }
     }
 
     actual fun clear() {
-        prefs?.edit()?.remove(SERVERS_KEY)?.apply()
+        if (!::prefs.isInitialized) return
+        prefs.edit().remove(SERVERS_KEY).apply()
     }
 }
