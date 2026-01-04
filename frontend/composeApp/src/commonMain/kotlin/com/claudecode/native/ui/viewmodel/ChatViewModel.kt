@@ -92,7 +92,7 @@ class ChatViewModel(
         unifiedWebSocketClient = unifiedWebSocketClient,
         scope = scope,
         onError = { error -> _error.value = error },
-        isFilesystemSession = ::isFilesystemSession,
+        isFilesystemSession = ::isFilesystemSessionId,
         generateMessageId = ::generateMessageId
     )
 
@@ -769,16 +769,12 @@ class ChatViewModel(
         }
     }
 
-    private fun isFilesystemSession(conversationId: String): Boolean {
-        return isFilesystemSessionId(conversationId)
-    }
-
     /**
      * Parses the conversationId to extract session ID and encoded path.
      * @return Pair of (sessionId, encodedPath) or (null, null) for legacy format
      */
     private fun parseConversationId(conversationId: String): Pair<String?, String?> {
-        if (!isFilesystemSession(conversationId)) {
+        if (!isFilesystemSessionId(conversationId)) {
             return Pair(null, null)
         }
         val parts = conversationId.split("?project=")

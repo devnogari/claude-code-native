@@ -192,9 +192,12 @@ class ServerViewModel(
 
     /**
      * Applies the server configuration to API and WebSocket clients.
+     * Note: UnifiedWebSocketClient reads server host from TokenStorage dynamically
+     * via its baseUrl getter, so updating ApiClient (which updates TokenStorage)
+     * is sufficient. The WebSocket will use the new host on next connection.
      */
     private suspend fun applyServerToClients(server: ServerConfig) {
-        // Update API client
+        // Update API client (also updates TokenStorage, which WebSocket reads from)
         apiClient.updateServerHost(server.host)
 
         // Set auth token if available
