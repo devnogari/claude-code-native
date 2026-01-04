@@ -40,6 +40,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.compose.KoinApplication
 import org.koin.compose.koinInject
 
+/** Timeout for waiting for server configuration to complete. */
+private const val SERVER_SETUP_TIMEOUT_MS = 5000L
+
 @Composable
 fun App() {
     KoinApplication(application = {
@@ -198,15 +201,17 @@ fun AppNavigation() {
                     // so we only need to wait for state update, no separate initialization needed
                     scope.launch {
                         // Wait for server to be added, with timeout to prevent hanging on errors
-                        val serverState = withTimeoutOrNull(5000L) {
+                        val serverState = withTimeoutOrNull(SERVER_SETUP_TIMEOUT_MS) {
                             serverRepository.state.first { it.currentServer != null }
                         }
 
                         if (serverState != null) {
                             currentScreen = Screen.Login
                         } else {
-                            // Server setup timed out, likely due to an error
-                            println("Error: Timed out waiting for server configuration")
+                            // Server setup timed out - show error state
+                            // Navigate to HostSetup with an error indication
+                            // (the HostSetupScreen can display the error via serverViewModel.error)
+                            serverViewModel.setError("Server configuration timed out. Please try again.")
                         }
                     }
                 }
