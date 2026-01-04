@@ -10,7 +10,10 @@ import com.claudecode.native.data.websocket.UnifiedWebSocketClient
 import com.claudecode.native.data.websocket.ImageContentDto
 import com.claudecode.native.util.DebugLogger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -259,6 +262,7 @@ class QueueManager(
     /**
      * Retries sending all queued messages after reconnection.
      * Messages with images are sent with images, text-only messages are sent as text.
+     * Aggregates all errors and reports them once after all retries complete.
      *
      * @param conversationId Current conversation ID
      */
@@ -268,37 +272,48 @@ class QueueManager(
 
         DebugLogger.d(TAG, "Retrying ${queue.size} queued messages after reconnection")
 
-        queue.forEach { msg ->
-            scope.launch {
-                try {
-                    DebugLogger.d(TAG, "Retrying queued message (id=${msg.id})")
-                    if (msg.images.isEmpty()) {
-                        unifiedWebSocketClient.sendChat(msg.content)
-                    } else {
-                        val imageDtos = msg.images.map { img ->
-                            ImageContentDto(
-                                type = "base64",
-                                mediaType = img.mediaType,
-                                data = Base64.encode(img.data)
-                            )
-                        }
-                        unifiedWebSocketClient.sendChatWithImages(msg.content, imageDtos)
-                    }
-                    DebugLogger.d(TAG, "Successfully retried queued message (id=${msg.id}), waiting for dequeue event")
-                    // Don't remove from queue here - wait for CLI's dequeue event
-                } catch (e: Exception) {
-                    val isConnectionError = e is kotlinx.coroutines.CancellationException ||
-                        (e is IllegalStateException && e.message?.contains("not connected") == true)
+        scope.launch {
+            val errors = mutableListOf<String>()
+            val errorsMutex = Mutex()
 
-                    if (isConnectionError) {
-                        DebugLogger.d(TAG, "Connection error while retrying message (id=${msg.id}), will retry again: ${e.message}")
-                    } else {
-                        DebugLogger.e(TAG, "Failed to retry queued message (id=${msg.id}): ${e.message}", e)
-                        // Keep failed messages in queue so users can see, copy, or manually delete them
-                        // Message remains visible in UI with error state displayed
-                        onError("Failed to send message: ${e.message}")
+            queue.map { msg ->
+                launch {
+                    try {
+                        DebugLogger.d(TAG, "Retrying queued message (id=${msg.id})")
+                        if (msg.images.isEmpty()) {
+                            unifiedWebSocketClient.sendChat(msg.content)
+                        } else {
+                            val imageDtos = msg.images.map { img ->
+                                ImageContentDto(
+                                    type = "base64",
+                                    mediaType = img.mediaType,
+                                    data = Base64.encode(img.data)
+                                )
+                            }
+                            unifiedWebSocketClient.sendChatWithImages(msg.content, imageDtos)
+                        }
+                        DebugLogger.d(TAG, "Successfully retried queued message (id=${msg.id}), waiting for dequeue event")
+                        // Don't remove from queue here - wait for CLI's dequeue event
+                    } catch (e: Exception) {
+                        val isConnectionError = e is kotlinx.coroutines.CancellationException ||
+                            (e is IllegalStateException && e.message?.contains("not connected") == true)
+
+                        if (isConnectionError) {
+                            DebugLogger.d(TAG, "Connection error while retrying message (id=${msg.id}), will retry again: ${e.message}")
+                        } else {
+                            DebugLogger.e(TAG, "Failed to retry queued message (id=${msg.id}): ${e.message}", e)
+                            // Keep failed messages in queue so users can see, copy, or manually delete them
+                            errorsMutex.withLock {
+                                errors.add("Failed to send '${msg.content.take(30)}...': ${e.message}")
+                            }
+                        }
                     }
                 }
+            }.joinAll()
+
+            // Report all errors at once after all retries complete
+            if (errors.isNotEmpty()) {
+                onError(errors.joinToString("\n"))
             }
         }
     }
