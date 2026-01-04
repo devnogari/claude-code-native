@@ -25,7 +25,7 @@ actual object ServerStorage {
                 null
             }
         } catch (e: Exception) {
-            console.error("ServerStorage: Failed to read servers: ${e.message}")
+            println("ServerStorage: Failed to read servers: ${e.message}")
             null
         }
     }
@@ -34,7 +34,7 @@ actual object ServerStorage {
         try {
             localStorage.setItem(SERVERS_KEY, json.encodeToString(ServerListState.serializer(), state))
         } catch (e: Exception) {
-            console.error("ServerStorage: Failed to save servers: ${e.message}")
+            println("ServerStorage: Failed to save servers: ${e.message}")
         }
     }
 

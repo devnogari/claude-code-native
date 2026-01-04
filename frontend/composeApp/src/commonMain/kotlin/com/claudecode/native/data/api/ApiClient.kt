@@ -9,15 +9,17 @@ import io.ktor.client.plugins.logging.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 /**
  * Base API client for HTTP communication with the backend server.
  * Provides common HTTP methods with automatic JSON serialization and authentication.
  *
- * Thread-safety: Auth token access is protected by a mutex for safe concurrent access.
+ * Thread-safety: Uses MutableStateFlow for thread-safe access to host and token across
+ * different dispatchers (Dispatchers.Default for ViewModels, Main for Compose).
  * Token persistence: Uses TokenStorage for platform-specific persistence (localStorage on WASM).
  * Server host persistence: Uses TokenStorage for saving/loading server host across sessions.
  */
@@ -29,17 +31,22 @@ class ApiClient(
         private const val DEFAULT_PROTOCOL = "http"
     }
 
+    // Thread-safe storage using StateFlow for cross-dispatcher visibility
     // Load server host from storage, or use default
-    private var _serverHost: String = TokenStorage.getServerHost() ?: defaultHost
+    private val _serverHost = MutableStateFlow(TokenStorage.getServerHost() ?: defaultHost)
 
     /** Current server host (e.g., "localhost:8083" or "192.168.1.100:8080") */
-    val serverHost: String get() = _serverHost
+    val serverHost: String get() = _serverHost.value
 
-    /** Constructed base URL from server host */
-    @PublishedApi internal val baseUrl: String get() = "$DEFAULT_PROTOCOL://$_serverHost$API_PATH"
-    private val tokenMutex = Mutex()
+    /** Constructed base URL from server host - reads from StateFlow for thread-safety */
+    @PublishedApi internal val baseUrl: String get() = "$DEFAULT_PROTOCOL://${_serverHost.value}$API_PATH"
+
+    // Thread-safe token storage using StateFlow
     // Load token from storage on initialization
-    @PublishedApi internal var currentAuthToken: String? = TokenStorage.getToken()
+    private val _authToken = MutableStateFlow(TokenStorage.getToken())
+
+    /** Current auth token - exposed for inline functions */
+    @PublishedApi internal val currentAuthToken: String? get() = _authToken.value
 
     @PublishedApi internal val httpClient = HttpClient {
         install(ContentNegotiation) {
@@ -86,47 +93,48 @@ class ApiClient(
 
     /**
      * Sets the authentication token for subsequent API requests.
-     * Thread-safe: Uses mutex for safe concurrent access.
+     * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
      * Also persists to TokenStorage for WASM page refresh support.
+     * Persists first, then updates in-memory state to ensure consistency.
      */
     suspend fun setAuthToken(token: String?) {
-        tokenMutex.withLock {
-            currentAuthToken = token
+        withContext(Dispatchers.Default) {
             if (token != null) {
                 TokenStorage.saveToken(token)
             } else {
                 TokenStorage.clearToken()
             }
         }
+        _authToken.value = token
     }
 
     /**
      * Returns the current authentication token.
-     * Thread-safe: Uses mutex for safe concurrent access.
+     * Thread-safe: Reads from StateFlow which provides proper memory visibility.
      */
-    suspend fun getAuthToken(): String? = tokenMutex.withLock { currentAuthToken }
+    fun getAuthToken(): String? = _authToken.value
 
     /**
      * Clears the authentication token (for logout).
-     * Thread-safe: Uses mutex for safe concurrent access.
-     * Also clears from TokenStorage.
+     * Delegates to setAuthToken(null) to avoid code duplication.
      */
     suspend fun clearAuthToken() {
-        tokenMutex.withLock {
-            currentAuthToken = null
-            TokenStorage.clearToken()
-        }
+        setAuthToken(null)
     }
 
     /**
      * Updates the server host for API requests.
+     * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
      * Note: This affects all subsequent requests and persists across sessions.
+     * Persists first, then updates in-memory state to ensure consistency.
      *
      * @param host The new server host (e.g., "localhost:8083" or "192.168.1.100:8080")
      */
-    fun updateServerHost(host: String) {
-        _serverHost = host
-        TokenStorage.saveServerHost(host)
+    suspend fun updateServerHost(host: String) {
+        withContext(Dispatchers.Default) {
+            TokenStorage.saveServerHost(host)
+        }
+        _serverHost.value = host
     }
 
     /**
