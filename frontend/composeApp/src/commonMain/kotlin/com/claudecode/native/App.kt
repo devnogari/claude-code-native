@@ -34,7 +34,7 @@ import com.claudecode.native.ui.screen.ProjectListScreenContent
 import com.claudecode.native.ui.screen.SettingsScreen
 import com.claudecode.native.ui.theme.AppTheme
 import com.claudecode.native.ui.viewmodel.ServerViewModel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.compose.KoinApplication
 import org.koin.compose.koinInject
@@ -196,10 +196,8 @@ fun AppNavigation() {
                     // Note: addServer() is async (launches coroutine internally), so we need to wait
                     // for the server to be available before initializing ApiClient
                     scope.launch {
-                        // Wait until server is added to repository (addServer is async)
-                        while (serverRepository.currentServer == null) {
-                            delay(10)
-                        }
+                        // Wait until server is added to repository using Flow's first operator
+                        serverRepository.state.first { it.currentServer != null }
                         serverViewModel.initializeWithCurrentServer()
                         currentScreen = Screen.Login
                     }
