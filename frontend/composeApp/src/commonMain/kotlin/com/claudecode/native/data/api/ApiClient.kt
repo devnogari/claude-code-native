@@ -95,10 +95,9 @@ class ApiClient(
      * Sets the authentication token for subsequent API requests.
      * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
      * Also persists to TokenStorage for WASM page refresh support.
-     * Uses Dispatchers.Default to avoid blocking the calling thread during I/O.
+     * Persists first, then updates in-memory state to ensure consistency.
      */
     suspend fun setAuthToken(token: String?) {
-        _authToken.value = token
         withContext(Dispatchers.Default) {
             if (token != null) {
                 TokenStorage.saveToken(token)
@@ -106,6 +105,7 @@ class ApiClient(
                 TokenStorage.clearToken()
             }
         }
+        _authToken.value = token
     }
 
     /**
@@ -126,15 +126,15 @@ class ApiClient(
      * Updates the server host for API requests.
      * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
      * Note: This affects all subsequent requests and persists across sessions.
-     * Uses Dispatchers.Default to avoid blocking the calling thread during I/O.
+     * Persists first, then updates in-memory state to ensure consistency.
      *
      * @param host The new server host (e.g., "localhost:8083" or "192.168.1.100:8080")
      */
     suspend fun updateServerHost(host: String) {
-        _serverHost.value = host
         withContext(Dispatchers.Default) {
             TokenStorage.saveServerHost(host)
         }
+        _serverHost.value = host
     }
 
     /**
