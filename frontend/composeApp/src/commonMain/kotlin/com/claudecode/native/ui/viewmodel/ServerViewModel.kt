@@ -218,9 +218,14 @@ class ServerViewModel(
 
     /**
      * Clears the auth token for the current server (logout).
+     * Also clears the in-memory token from ApiClient to ensure consistency.
      */
     fun clearCurrentToken() {
         serverRepository.clearCurrentToken()
+        // Clear ApiClient's in-memory token to prevent stale token issues
+        scope.launch {
+            apiClient.clearAuthToken()
+        }
     }
 
     /**
