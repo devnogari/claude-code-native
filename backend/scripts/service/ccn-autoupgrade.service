@@ -1,0 +1,15 @@
+[Unit]
+Description=CCN Backend Auto-upgrade Check
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=__INSTALL_PATH__/scripts/service/ctl.sh auto-upgrade
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__INSTALL_PATH__
+Environment="PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=__HOME__"
+
+[Install]
+WantedBy=multi-user.target
