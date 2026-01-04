@@ -9,7 +9,9 @@ import io.ktor.client.plugins.logging.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 /**
@@ -93,13 +95,16 @@ class ApiClient(
      * Sets the authentication token for subsequent API requests.
      * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
      * Also persists to TokenStorage for WASM page refresh support.
+     * Uses Dispatchers.Default to avoid blocking the calling thread during I/O.
      */
-    fun setAuthToken(token: String?) {
+    suspend fun setAuthToken(token: String?) {
         _authToken.value = token
-        if (token != null) {
-            TokenStorage.saveToken(token)
-        } else {
-            TokenStorage.clearToken()
+        withContext(Dispatchers.Default) {
+            if (token != null) {
+                TokenStorage.saveToken(token)
+            } else {
+                TokenStorage.clearToken()
+            }
         }
     }
 
@@ -113,7 +118,7 @@ class ApiClient(
      * Clears the authentication token (for logout).
      * Delegates to setAuthToken(null) to avoid code duplication.
      */
-    fun clearAuthToken() {
+    suspend fun clearAuthToken() {
         setAuthToken(null)
     }
 
@@ -121,12 +126,15 @@ class ApiClient(
      * Updates the server host for API requests.
      * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
      * Note: This affects all subsequent requests and persists across sessions.
+     * Uses Dispatchers.Default to avoid blocking the calling thread during I/O.
      *
      * @param host The new server host (e.g., "localhost:8083" or "192.168.1.100:8080")
      */
-    fun updateServerHost(host: String) {
+    suspend fun updateServerHost(host: String) {
         _serverHost.value = host
-        TokenStorage.saveServerHost(host)
+        withContext(Dispatchers.Default) {
+            TokenStorage.saveServerHost(host)
+        }
     }
 
     /**
