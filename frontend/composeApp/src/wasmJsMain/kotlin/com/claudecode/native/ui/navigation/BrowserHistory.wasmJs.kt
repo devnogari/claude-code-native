@@ -5,6 +5,7 @@ import kotlinx.browser.window
 /**
  * WASM implementation using browser History API.
  */
+@OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
 actual object BrowserHistory {
     private var onPopStateCallback: ((String) -> Unit)? = null
 
