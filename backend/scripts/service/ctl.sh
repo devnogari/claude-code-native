@@ -86,12 +86,21 @@ macos_install() {
         (cd "$BACKEND_DIR" && go build -o ccn-backend ./cmd/server)
     fi
 
+    # Get claude CLI path and build minimal PATH
+    local claude_path=$(which claude 2>/dev/null)
+    local claude_dir=""
+    if [[ -n "$claude_path" ]]; then
+        claude_dir="$(dirname "$claude_path"):"
+    fi
+    local service_path="${claude_dir}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
     # Process template
     log_info "Installing launchd service..."
     sed -e "s|__INSTALL_PATH__|$BACKEND_DIR|g" \
         -e "s|__HOME__|$HOME|g" \
         -e "s|__DATABASE_URL__|${DATABASE_URL:-postgres://ccn:localdev123@localhost:5438/claude_code_native?sslmode=disable}|g" \
         -e "s|__JWT_SECRET__|${JWT_SECRET:-your-super-secure-jwt-secret-key-minimum-32-chars}|g" \
+        -e "s|__PATH__|$service_path|g" \
         "$plist_src" > "$plist_dst"
 
     log_success "Service installed at $plist_dst"
