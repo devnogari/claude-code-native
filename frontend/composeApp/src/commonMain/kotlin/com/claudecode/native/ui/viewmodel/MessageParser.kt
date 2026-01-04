@@ -223,6 +223,17 @@ object MessageParser {
             "Task" -> input["description"]?.jsonPrimitive?.content ?: ""
             "WebFetch" -> input["url"]?.jsonPrimitive?.content ?: ""
             "WebSearch" -> input["query"]?.jsonPrimitive?.content ?: ""
+            "TodoWrite" -> {
+                // Fallback for TodoWrite - try to extract todos from JsonObject
+                val todos = input["todos"]
+                when (todos) {
+                    is JsonArray -> extractTodoWriteSummary(todos)
+                    else -> {
+                        val count = (todos as? JsonArray)?.size ?: 0
+                        if (count > 0) "Todo list ($count items)" else "Updating todos"
+                    }
+                }
+            }
             else -> {
                 input.entries.firstOrNull()?.let { (key, value) ->
                     try {
@@ -332,6 +343,17 @@ object MessageParser {
             "Task" -> (input["description"] as? String) ?: ""
             "WebFetch" -> (input["url"] as? String) ?: ""
             "WebSearch" -> (input["query"] as? String) ?: ""
+            "TodoWrite" -> {
+                // Fallback for TodoWrite - try to extract todos from various formats
+                val todos = input["todos"]
+                when (todos) {
+                    is List<*> -> extractTodoWriteSummaryFromList(todos)
+                    else -> {
+                        val count = (todos as? Collection<*>)?.size ?: 0
+                        if (count > 0) "Todo list ($count items)" else "Updating todos"
+                    }
+                }
+            }
             else -> {
                 input.entries.firstOrNull()?.let { (_, value) ->
                     val v = value?.toString() ?: ""
