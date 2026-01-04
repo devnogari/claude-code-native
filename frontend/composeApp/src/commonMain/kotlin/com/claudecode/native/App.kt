@@ -89,12 +89,8 @@ private suspend fun validateTokenOrClearOnUnauthorized(
         true
     } catch (e: CancellationException) {
         // Rethrow cancellation to allow proper coroutine cancellation
-        DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: CancellationException (kotlin), rethrowing" }
+        DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: CancellationException, rethrowing" }
         throw e
-    } catch (e: java.util.concurrent.CancellationException) {
-        // Also handle Java CancellationException (from Ktor/composition scope)
-        DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: CancellationException (java), rethrowing" }
-        throw CancellationException("Composition scope cancelled", e)
     } catch (e: ApiException) {
         // Only clear token on 401 (Unauthorized) - token is actually invalid
         if (e.isUnauthorized()) {
@@ -106,7 +102,7 @@ private suspend fun validateTokenOrClearOnUnauthorized(
         // Catch-all for network errors (connection refused, timeout, DNS failures)
         // and any other pre-request exceptions that aren't wrapped in ApiException.
         // These are transient errors - preserve the token so user can retry.
-        DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: unexpected exception: ${e.javaClass.name}: ${e.message}" }
+        DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: unexpected exception: ${e::class.simpleName}: ${e.message}" }
         false
     }
 }
