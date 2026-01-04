@@ -57,10 +57,15 @@ class ServerRepository {
                 servers = listOf(server),
                 currentServerId = server.id
             )
-            ServerStorage.saveServerList(state)
-            // Clean up legacy storage after successful migration
-            TokenStorage.clearToken()
-            TokenStorage.clearServerHost()
+            try {
+                ServerStorage.saveServerList(state)
+                // Clean up legacy storage only after successful save to prevent data loss
+                TokenStorage.clearToken()
+                TokenStorage.clearServerHost()
+            } catch (e: Exception) {
+                // If save fails, keep legacy storage as fallback
+                // The migration will be retried on next app launch
+            }
             state
         } else {
             ServerListState()

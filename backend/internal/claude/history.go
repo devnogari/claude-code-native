@@ -14,6 +14,10 @@ import (
 // uuidRegex matches UUID format (session IDs)
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// maxMetadataScanLines is the number of lines to parse for metadata in parseSessionMetadataFast.
+// Metadata (cwd, timestamp, first message) typically appears in the first few lines.
+const maxMetadataScanLines = 5
+
 // ClaudeProject represents a discovered Claude Code project
 type ClaudeProject struct {
 	ID           string          `json:"id"`
@@ -576,7 +580,7 @@ func parseSessionMetadataFast(filePath string) (*SessionMetadata, error) {
 		}
 
 		// Only parse JSON for first few lines to get metadata
-		if lineCount <= 5 && (meta.Cwd == "" || meta.FirstMessage == "" || meta.CreatedAt.IsZero()) {
+		if lineCount <= maxMetadataScanLines && (meta.Cwd == "" || meta.FirstMessage == "" || meta.CreatedAt.IsZero()) {
 			var msg ClaudeMessage
 			if err := json.Unmarshal([]byte(line), &msg); err == nil {
 				if meta.Cwd == "" && msg.Cwd != "" {
