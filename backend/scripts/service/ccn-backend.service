@@ -1,0 +1,32 @@
+[Unit]
+Description=Claude Code Native Backend Server
+Documentation=https://github.com/devnogari/claude-code-native
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__INSTALL_PATH__
+ExecStart=__INSTALL_PATH__/ccn-backend
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=PORT=8083
+Environment=LOG_LEVEL=info
+Environment=CLAUDE_PROJECTS_PATH=__HOME__/.claude
+EnvironmentFile=-__INSTALL_PATH__/.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=__INSTALL_PATH__/uploads __HOME__/.claude
+
+[Install]
+WantedBy=multi-user.target
