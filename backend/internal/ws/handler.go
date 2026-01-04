@@ -171,6 +171,15 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 		// Decode project path (replace - with /)
 		projectPath = decodeProjectPath(encodedPath)
 
+		// Validate decoded path exists
+		if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+			h.logger.Error("decoded project path does not exist",
+				zap.String("encodedPath", encodedPath),
+				zap.String("decodedPath", projectPath))
+			h.sendError(c, "project path does not exist: "+projectPath)
+			return
+		}
+
 		// Use session ID for both conversation and claude session
 		convID = sessionID
 		claudeSessionID = sessionID
@@ -218,6 +227,15 @@ func (h *Handler) HandleConnection(c *websocket.Conn) {
 		}
 
 		projectPath = proj.Path
+
+		// Validate project path exists
+		if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+			h.logger.Error("project path does not exist",
+				zap.String("projectID", proj.ID.String()),
+				zap.String("projectPath", projectPath))
+			h.sendError(c, "project path does not exist: "+projectPath)
+			return
+		}
 
 		// Determine the Claude session ID to use
 		// If conversation was synced from Claude history, use the original session ID
@@ -459,6 +477,15 @@ func (h *Handler) handleChatMessage(client *Client, content string, images []Ima
 			h.sendErrorToClient(client, "failed to save message")
 			return
 		}
+	}
+
+	// Validate project path exists before starting Claude process
+	if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+		h.logger.Error("project path does not exist",
+			zap.String("projectPath", projectPath),
+			zap.String("conversationID", convID.String()))
+		h.sendErrorToClient(client, "project path does not exist: "+projectPath)
+		return
 	}
 
 	// Send status update
