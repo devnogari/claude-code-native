@@ -111,8 +111,7 @@ fun MessageBubble(
                 onInspectClick = { showInspectDialog = true },
                 onCopyClick = if (isDesktop) {
                     { copyMessageContent(message) }
-                } else null,
-                showCopyButton = isDesktop && isHovered
+                } else null
             )
         }
 
@@ -249,8 +248,7 @@ fun MessageBubble(
                 onInspectClick = { showInspectDialog = true },
                 onCopyClick = if (isDesktop) {
                     { copyMessageContent(message) }
-                } else null,
-                showCopyButton = isDesktop && isHovered
+                } else null
             )
         }
     }
@@ -278,8 +276,7 @@ private fun copyMessageContent(message: ChatMessage) {
  * @param showMenu Whether the dropdown menu is currently shown
  * @param onShowMenuChange Callback when menu visibility changes
  * @param onInspectClick Callback when "Inspect Payload" is clicked
- * @param onCopyClick Optional callback when "Copy" is clicked
- * @param showCopyButton Whether to show the copy button (for desktop hover)
+ * @param onCopyClick Optional callback when "Copy" is clicked (shown in dropdown menu)
  * @param compact If true, uses smaller sizing suitable for tool items
  */
 @Composable
@@ -288,76 +285,53 @@ private fun InspectMenuButton(
     onShowMenuChange: (Boolean) -> Unit,
     onInspectClick: () -> Unit,
     onCopyClick: (() -> Unit)? = null,
-    showCopyButton: Boolean = false,
     compact: Boolean = false
 ) {
     val iconSize = if (compact) 18.dp else 20.dp
     val buttonSize = if (compact) 28.dp else 40.dp
 
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Copy button (visible on hover for desktop, with fade animation)
-        if (onCopyClick != null) {
-            AnimatedVisibility(visible = showCopyButton) {
-                IconButton(
-                    onClick = onCopyClick,
-                    modifier = Modifier.size(buttonSize)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Copy message",
-                        modifier = Modifier.size(iconSize),
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                }
-            }
+    // Menu button
+    Box {
+        IconButton(
+            onClick = { onShowMenuChange(true) },
+            modifier = Modifier.size(buttonSize)
+        ) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More options",
+                modifier = Modifier.size(iconSize),
+                tint = MaterialTheme.colorScheme.outline
+            )
         }
 
-        // Menu button
-        Box {
-            IconButton(
-                onClick = { onShowMenuChange(true) },
-                modifier = Modifier.size(buttonSize)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.MoreVert,
-                    contentDescription = "More options",
-                    modifier = Modifier.size(iconSize),
-                    tint = MaterialTheme.colorScheme.outline
-                )
-            }
-
-            DropdownMenu(
-                expanded = showMenu,
-                onDismissRequest = { onShowMenuChange(false) }
-            ) {
-                // Copy option in dropdown (always available)
-                if (onCopyClick != null) {
-                    DropdownMenuItem(
-                        text = { Text("Copy") },
-                        onClick = {
-                            onShowMenuChange(false)
-                            onCopyClick()
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.ContentCopy,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    )
-                }
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { onShowMenuChange(false) }
+        ) {
+            // Copy option in dropdown
+            if (onCopyClick != null) {
                 DropdownMenuItem(
-                    text = { Text("Inspect Payload") },
+                    text = { Text("Copy") },
                     onClick = {
                         onShowMenuChange(false)
-                        onInspectClick()
+                        onCopyClick()
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 )
             }
+            DropdownMenuItem(
+                text = { Text("Inspect Payload") },
+                onClick = {
+                    onShowMenuChange(false)
+                    onInspectClick()
+                }
+            )
         }
     }
 }
@@ -368,9 +342,8 @@ private fun MessageMenuButton(
     showMenu: Boolean,
     onShowMenuChange: (Boolean) -> Unit,
     onInspectClick: () -> Unit,
-    onCopyClick: (() -> Unit)? = null,
-    showCopyButton: Boolean = false
-) = InspectMenuButton(showMenu, onShowMenuChange, onInspectClick, onCopyClick, showCopyButton, compact = false)
+    onCopyClick: (() -> Unit)? = null
+) = InspectMenuButton(showMenu, onShowMenuChange, onInspectClick, onCopyClick, compact = false)
 
 /**
  * Dialog to inspect message payload details.
