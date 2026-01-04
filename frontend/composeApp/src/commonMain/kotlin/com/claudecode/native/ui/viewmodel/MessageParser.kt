@@ -190,6 +190,14 @@ object MessageParser {
             return extractTodoWriteSummary(input)
         }
 
+        // Handle TodoWrite with JsonObject wrapper {"todos": [...]}
+        if (toolName == "TodoWrite" && input is JsonObject) {
+            val todosArray = input["todos"] as? JsonArray
+            if (todosArray != null) {
+                return extractTodoWriteSummary(todosArray)
+            }
+        }
+
         if (input !is JsonObject) return input.toString().take(100)
 
         return when (toolName) {
@@ -289,6 +297,14 @@ object MessageParser {
         // Handle TodoWrite which receives a List of todo items
         if (toolName == "TodoWrite" && input is List<*>) {
             return extractTodoWriteSummaryFromList(input)
+        }
+
+        // Handle TodoWrite with Map wrapper {"todos": [...]}
+        if (toolName == "TodoWrite" && input is Map<*, *>) {
+            val todosList = input["todos"] as? List<*>
+            if (todosList != null) {
+                return extractTodoWriteSummaryFromList(todosList)
+            }
         }
 
         if (input !is Map<*, *>) return input.toString().take(100)
