@@ -2416,6 +2416,11 @@ class ChatViewModel(
                     pendingSessionCreatedEmit = null
                 }
             }
+
+            is HistoryWatchEvent.Unsubscribed -> {
+                DebugLogger.d(TAG, "ChatViewModel: History watch unsubscribed")
+                // Unsubscribed from session, but connection is still alive
+            }
         }
     }
 
