@@ -180,14 +180,14 @@ func (h *HistoryWatchHandler) HandleConnection(c *websocket.Conn) {
 	// Register client
 	h.registerClient(client)
 
-	h.logger.Info("watch client connected",
+	h.logger.Debug("watch client connected",
 		zap.String("encodedPath", encodedPath),
 		zap.String("sessionID", sessionID))
 
 	// Unregister on disconnect
 	defer func() {
 		h.unregisterClient(client)
-		h.logger.Info("watch client disconnected",
+		h.logger.Debug("watch client disconnected",
 			zap.String("encodedPath", encodedPath),
 			zap.String("sessionID", sessionID))
 	}()
@@ -213,7 +213,7 @@ func (h *HistoryWatchHandler) HandleUnifiedConnection(c *websocket.Conn) {
 		handler: h,
 	}
 
-	h.logger.Info("unified watch client connected")
+	h.logger.Debug("unified watch client connected")
 
 	// Cleanup on disconnect
 	defer func() {
@@ -231,7 +231,7 @@ func (h *HistoryWatchHandler) HandleUnifiedConnection(c *websocket.Conn) {
 				close(client.send)
 			})
 		}
-		h.logger.Info("unified watch client disconnected")
+		h.logger.Debug("unified watch client disconnected")
 	}()
 
 	// Start write pump
@@ -410,9 +410,7 @@ func (h *HistoryWatchHandler) switchSubscription(client *WatchClient, newEncoded
 	h.clients[newKey] = append(h.clients[newKey], client)
 	h.mu.Unlock()
 
-	h.logger.Info("watch client switched subscription",
-		zap.String("oldPath", oldEncodedPath),
-		zap.String("oldSession", oldSessionID),
+	h.logger.Debug("watch client switched subscription",
 		zap.String("newPath", newEncodedPath),
 		zap.String("newSession", newSessionID))
 
@@ -487,7 +485,7 @@ func (h *HistoryWatchHandler) readPumpUnified(client *WatchClient) {
 				}
 				h.mu.Unlock()
 
-				h.logger.Info("watch client unsubscribed",
+				h.logger.Debug("watch client unsubscribed",
 					zap.String("encodedPath", oldEncodedPath),
 					zap.String("sessionID", oldSessionID))
 			}
