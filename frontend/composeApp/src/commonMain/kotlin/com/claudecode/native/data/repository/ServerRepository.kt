@@ -4,6 +4,7 @@ import com.claudecode.native.data.model.ServerConfig
 import com.claudecode.native.data.model.ServerListState
 import com.claudecode.native.data.storage.ServerStorage
 import com.claudecode.native.data.storage.TokenStorage
+import com.claudecode.native.util.DebugLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,6 +12,8 @@ import kotlinx.coroutines.flow.update
 import kotlin.time.Clock
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+
+private const val TAG = "ServerRepository"
 
 /**
  * Repository for managing server configurations.
@@ -153,6 +156,8 @@ class ServerRepository {
      * Updates the auth token for a specific server.
      */
     fun updateToken(serverId: String, token: String?) {
+        DebugLogger.d(TAG) { "updateToken: serverId=$serverId, tokenExists=${token != null}" }
+
         _state.update { current ->
             current.copy(
                 servers = current.servers.map { s ->
@@ -163,7 +168,9 @@ class ServerRepository {
                 }
             )
         }
+
         persistState()
+        DebugLogger.d(TAG) { "updateToken: completed for serverId=$serverId" }
     }
 
     /**

@@ -34,12 +34,18 @@ import com.claudecode.native.ui.screen.ProjectListScreenContent
 import com.claudecode.native.ui.screen.SettingsScreen
 import com.claudecode.native.ui.theme.AppTheme
 import com.claudecode.native.ui.viewmodel.ServerViewModel
+import com.claudecode.native.util.DebugLogger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.compose.KoinApplication
 import org.koin.compose.koinInject
+
+/** Log tag for App navigation. */
+private const val TAG = "App"
 
 /** Timeout for waiting for server configuration to complete. */
 private const val SERVER_SETUP_TIMEOUT_MS = 5000L
@@ -70,6 +76,7 @@ fun App() {
  * Validates the auth token by making an API call.
  * Only clears the token on 401 (Unauthorized) errors.
  * Network errors and other exceptions preserve the token for retry.
+ * Cancellation exceptions are rethrown to allow proper coroutine cancellation.
  *
  * @return true if token is valid, false otherwise
  */
@@ -82,10 +89,16 @@ private suspend fun validateTokenOrClearOnUnauthorized(
         true
     } catch (e: CancellationException) {
         // Rethrow cancellation to allow proper coroutine cancellation
+        DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: CancellationException (kotlin), rethrowing" }
         throw e
+    } catch (e: java.util.concurrent.CancellationException) {
+        // Also handle Java CancellationException (from Ktor/composition scope)
+        DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: CancellationException (java), rethrowing" }
+        throw CancellationException("Composition scope cancelled", e)
     } catch (e: ApiException) {
         // Only clear token on 401 (Unauthorized) - token is actually invalid
         if (e.isUnauthorized()) {
+            DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: 401 Unauthorized, clearing token" }
             serverViewModel.clearCurrentToken()
         }
         false
@@ -93,7 +106,7 @@ private suspend fun validateTokenOrClearOnUnauthorized(
         // Catch-all for network errors (connection refused, timeout, DNS failures)
         // and any other pre-request exceptions that aren't wrapped in ApiException.
         // These are transient errors - preserve the token so user can retry.
-        println("Token validation failed with unexpected exception: ${e.message}")
+        DebugLogger.d(TAG) { "validateTokenOrClearOnUnauthorized: unexpected exception: ${e.javaClass.name}: ${e.message}" }
         false
     }
 }
@@ -118,16 +131,26 @@ private suspend fun determineAuthScreen(
     val currentServer = serverRepository.currentServer
     val savedToken = currentServer?.authToken
 
+    DebugLogger.d(TAG) { "=== determineAuthScreen ===" }
+    DebugLogger.d(TAG) { "  currentServer: ${currentServer?.name} (${currentServer?.host})" }
+    DebugLogger.d(TAG) { "  savedToken exists: ${savedToken != null}" }
+
     return if (savedToken != null) {
         // CRITICAL: Sync token from ServerRepository to ApiClient before API call
         // This prevents race conditions during server switching where ApiClient
         // might have a stale token from the previous server
+        DebugLogger.d(TAG) { "  Syncing token to ApiClient..." }
         apiClient.setAuthToken(savedToken)
 
         val isValid = validateTokenOrClearOnUnauthorized(claudeHistoryApi, serverViewModel)
-        if (isValid) Screen.ProjectList else Screen.Login
+        DebugLogger.d(TAG) { "  Token validation result: isValid=$isValid" }
+
+        val result = if (isValid) Screen.ProjectList else Screen.Login
+        DebugLogger.d(TAG) { "  Returning: $result" }
+        result
     } else {
         // No saved token - clear ApiClient token to ensure clean state
+        DebugLogger.d(TAG) { "  No saved token, clearing ApiClient and returning Login" }
         apiClient.clearAuthToken()
         Screen.Login
     }
@@ -178,9 +201,11 @@ fun AppNavigation() {
         if (serverSwitched) {
             serverViewModel.resetServerSwitchedState()
             // Check if new server has valid token and navigate accordingly
-            // determineAuthScreen syncs the token from ServerRepository to ApiClient
-            // before making the API call, ensuring correct token is used
-            currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel, apiClient)
+            // Use NonCancellable to ensure the API validation completes even if
+            // the composition scope is cancelled during navigation/recomposition
+            currentScreen = withContext(NonCancellable) {
+                determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel, apiClient)
+            }
         }
     }
 
@@ -199,8 +224,10 @@ fun AppNavigation() {
         serverViewModel.initializeWithCurrentServer()
 
         // Check for saved token and navigate accordingly
-        // determineAuthScreen syncs the token from ServerRepository to ApiClient
-        currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel, apiClient)
+        // Use NonCancellable to ensure the API validation completes
+        currentScreen = withContext(NonCancellable) {
+            determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel, apiClient)
+        }
         isInitializing = false
     }
 
@@ -295,7 +322,7 @@ fun AppNavigation() {
                         if (encodedPath.isNotEmpty()) {
                             currentScreen = Screen.Chat("draft?project=$encodedPath")
                         } else {
-                            println("App: Cannot create new session - no project path in conversationId: $convId")
+                            DebugLogger.w(TAG) { "Cannot create new session - no project path in conversationId: $convId" }
                         }
                     }
                 },

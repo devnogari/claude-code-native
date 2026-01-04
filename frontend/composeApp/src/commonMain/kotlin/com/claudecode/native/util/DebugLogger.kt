@@ -39,10 +39,29 @@ object DebugLogger {
     }
 
     /**
+     * Log a debug message with lazy evaluation.
+     * The message lambda is only invoked if logging is enabled and level is met.
+     */
+    inline fun d(tag: String, message: () -> String) {
+        if (shouldLog(Level.DEBUG, tag)) {
+            log(Level.DEBUG, tag, message())
+        }
+    }
+
+    /**
      * Log an info message.
      */
     fun i(tag: String, message: String) {
         log(Level.INFO, tag, message)
+    }
+
+    /**
+     * Log an info message with lazy evaluation.
+     */
+    inline fun i(tag: String, message: () -> String) {
+        if (shouldLog(Level.INFO, tag)) {
+            log(Level.INFO, tag, message())
+        }
     }
 
     /**
@@ -53,6 +72,15 @@ object DebugLogger {
     }
 
     /**
+     * Log a warning message with lazy evaluation.
+     */
+    inline fun w(tag: String, message: () -> String) {
+        if (shouldLog(Level.WARN, tag)) {
+            log(Level.WARN, tag, message())
+        }
+    }
+
+    /**
      * Log an error message.
      */
     fun e(tag: String, message: String, throwable: Throwable? = null) {
@@ -60,7 +88,29 @@ object DebugLogger {
         throwable?.printStackTrace()
     }
 
-    private fun log(level: Level, tag: String, message: String) {
+    /**
+     * Log an error message with lazy evaluation.
+     */
+    inline fun e(tag: String, throwable: Throwable? = null, message: () -> String) {
+        if (shouldLog(Level.ERROR, tag)) {
+            log(Level.ERROR, tag, message())
+            throwable?.printStackTrace()
+        }
+    }
+
+    /**
+     * Check if a message should be logged based on current settings.
+     */
+    @PublishedApi
+    internal fun shouldLog(level: Level, tag: String): Boolean {
+        if (!enabled) return false
+        if (level.ordinal < minLevel.ordinal) return false
+        if (tagFilter != null && !tag.contains(tagFilter!!)) return false
+        return true
+    }
+
+    @PublishedApi
+    internal fun log(level: Level, tag: String, message: String) {
         if (!enabled) return
         if (level.ordinal < minLevel.ordinal) return
         if (tagFilter != null && !tag.contains(tagFilter!!)) return
