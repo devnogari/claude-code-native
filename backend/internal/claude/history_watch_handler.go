@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -34,11 +35,14 @@ const (
 
 // WatchMessageType constants for WebSocket communication
 const (
-	WatchMessageTypeNewMessages = "new_messages"
-	WatchMessageTypeError       = "error"
-	WatchMessageTypePing        = "ping"
-	WatchMessageTypePong        = "pong"
-	WatchMessageTypeSubscribed  = "subscribed"
+	WatchMessageTypeNewMessages  = "new_messages"
+	WatchMessageTypeError        = "error"
+	WatchMessageTypePing         = "ping"
+	WatchMessageTypePong         = "pong"
+	WatchMessageTypeSubscribed   = "subscribed"
+	WatchMessageTypeSubscribe    = "subscribe"
+	WatchMessageTypeUnsubscribe  = "unsubscribe"
+	WatchMessageTypeUnsubscribed = "unsubscribed"
 )
 
 // WatchOutgoingMessage represents a message sent to the WebSocket client
@@ -52,6 +56,13 @@ type WatchOutgoingMessage struct {
 	Error        string          `json:"error,omitempty"`
 }
 
+// WatchIncomingMessage represents a message received from the WebSocket client
+type WatchIncomingMessage struct {
+	Type        string `json:"type"`
+	EncodedPath string `json:"encoded_path,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+}
+
 // WatchClient represents a WebSocket client watching a session
 type WatchClient struct {
 	conn        *websocket.Conn
@@ -59,7 +70,9 @@ type WatchClient struct {
 	done        chan struct{}
 	encodedPath string
 	sessionID   string
-	closeOnce   sync.Once // Ensures channels are closed only once
+	closeOnce   sync.Once      // Ensures channels are closed only once
+	mu          sync.RWMutex   // Protects encodedPath and sessionID for unified mode
+	handler     *HistoryWatchHandler // Reference to handler for subscription changes
 }
 
 // HistoryWatchHandler handles WebSocket connections for watching session file changes
@@ -189,6 +202,45 @@ func (h *HistoryWatchHandler) HandleConnection(c *websocket.Conn) {
 	h.readPump(client)
 }
 
+// HandleUnifiedConnection is the WebSocket handler for unified history watching.
+// Clients connect once and switch sessions via subscribe/unsubscribe messages.
+func (h *HistoryWatchHandler) HandleUnifiedConnection(c *websocket.Conn) {
+	// Create client without initial subscription
+	client := &WatchClient{
+		conn:    c,
+		send:    make(chan []byte, 256),
+		done:    make(chan struct{}),
+		handler: h,
+	}
+
+	h.logger.Info("unified watch client connected")
+
+	// Cleanup on disconnect
+	defer func() {
+		// Unsubscribe from current session if any
+		client.mu.RLock()
+		hasSubscription := client.encodedPath != "" && client.sessionID != ""
+		client.mu.RUnlock()
+
+		if hasSubscription {
+			h.unregisterClient(client)
+		} else {
+			// Just close channels if no subscription
+			client.closeOnce.Do(func() {
+				close(client.done)
+				close(client.send)
+			})
+		}
+		h.logger.Info("unified watch client disconnected")
+	}()
+
+	// Start write pump
+	go h.writePump(client)
+
+	// Read pump (blocking) - handles subscribe/unsubscribe messages
+	h.readPumpUnified(client)
+}
+
 // registerClient registers a client and subscribes to session changes if needed
 func (h *HistoryWatchHandler) registerClient(client *WatchClient) {
 	key := client.encodedPath + "/" + client.sessionID
@@ -299,6 +351,151 @@ func (h *HistoryWatchHandler) handleSessionChange(encodedPath, sessionID string,
 	}
 }
 
+// switchSubscription handles switching a client from one session to another
+func (h *HistoryWatchHandler) switchSubscription(client *WatchClient, newEncodedPath, newSessionID string) error {
+	// Validate new path and session
+	if !validateEncodedPath(newEncodedPath) {
+		return fmt.Errorf("invalid encoded path format")
+	}
+	if !validateSessionID(newSessionID) {
+		return fmt.Errorf("invalid session ID format")
+	}
+
+	client.mu.Lock()
+	oldEncodedPath := client.encodedPath
+	oldSessionID := client.sessionID
+	client.mu.Unlock()
+
+	// If already subscribed to the same session, just send confirmation
+	if oldEncodedPath == newEncodedPath && oldSessionID == newSessionID {
+		h.sendSubscribed(client)
+		return nil
+	}
+
+	// Unsubscribe from old session if any
+	if oldEncodedPath != "" && oldSessionID != "" {
+		oldKey := oldEncodedPath + "/" + oldSessionID
+
+		h.mu.Lock()
+		// Remove client from old session
+		clients := h.clients[oldKey]
+		for i, c := range clients {
+			if c == client {
+				h.clients[oldKey] = append(clients[:i], clients[i+1:]...)
+				break
+			}
+		}
+		// Unsubscribe from cache if no more clients
+		if len(h.clients[oldKey]) == 0 {
+			delete(h.clients, oldKey)
+			h.cache.Unsubscribe(oldEncodedPath, oldSessionID)
+		}
+		h.mu.Unlock()
+	}
+
+	// Update client's subscription
+	client.mu.Lock()
+	client.encodedPath = newEncodedPath
+	client.sessionID = newSessionID
+	client.mu.Unlock()
+
+	// Subscribe to new session
+	newKey := newEncodedPath + "/" + newSessionID
+
+	h.mu.Lock()
+	// If no clients for this session yet, subscribe to cache
+	if len(h.clients[newKey]) == 0 {
+		h.cache.Subscribe(newEncodedPath, newSessionID, h.handleSessionChange)
+	}
+	h.clients[newKey] = append(h.clients[newKey], client)
+	h.mu.Unlock()
+
+	h.logger.Info("watch client switched subscription",
+		zap.String("oldPath", oldEncodedPath),
+		zap.String("oldSession", oldSessionID),
+		zap.String("newPath", newEncodedPath),
+		zap.String("newSession", newSessionID))
+
+	// Send subscribed confirmation
+	h.sendSubscribed(client)
+	return nil
+}
+
+// readPumpUnified reads messages from the unified WebSocket connection
+// and handles subscribe/unsubscribe messages
+func (h *HistoryWatchHandler) readPumpUnified(client *WatchClient) {
+	client.conn.SetReadLimit(1024) // Larger limit for subscribe messages
+	_ = client.conn.SetReadDeadline(time.Now().Add(watchPongWait))
+	client.conn.SetPongHandler(func(string) error {
+		_ = client.conn.SetReadDeadline(time.Now().Add(watchPongWait))
+		return nil
+	})
+
+	for {
+		_, data, err := client.conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				h.logger.Error("websocket read error", zap.Error(err))
+			}
+			break
+		}
+
+		// Parse incoming message
+		var msg WatchIncomingMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			h.logger.Debug("failed to parse message", zap.Error(err))
+			continue
+		}
+
+		switch msg.Type {
+		case WatchMessageTypePing:
+			h.sendPong(client)
+
+		case WatchMessageTypeSubscribe:
+			if msg.EncodedPath == "" || msg.SessionID == "" {
+				h.sendErrorToClient(client, "encoded_path and session_id are required for subscribe")
+				continue
+			}
+			if err := h.switchSubscription(client, msg.EncodedPath, msg.SessionID); err != nil {
+				h.sendErrorToClient(client, err.Error())
+			}
+
+		case WatchMessageTypeUnsubscribe:
+			client.mu.Lock()
+			oldEncodedPath := client.encodedPath
+			oldSessionID := client.sessionID
+			client.encodedPath = ""
+			client.sessionID = ""
+			client.mu.Unlock()
+
+			if oldEncodedPath != "" && oldSessionID != "" {
+				oldKey := oldEncodedPath + "/" + oldSessionID
+
+				h.mu.Lock()
+				// Remove client from session
+				clients := h.clients[oldKey]
+				for i, c := range clients {
+					if c == client {
+						h.clients[oldKey] = append(clients[:i], clients[i+1:]...)
+						break
+					}
+				}
+				// Unsubscribe from cache if no more clients
+				if len(h.clients[oldKey]) == 0 {
+					delete(h.clients, oldKey)
+					h.cache.Unsubscribe(oldEncodedPath, oldSessionID)
+				}
+				h.mu.Unlock()
+
+				h.logger.Info("watch client unsubscribed",
+					zap.String("encodedPath", oldEncodedPath),
+					zap.String("sessionID", oldSessionID))
+			}
+			h.sendUnsubscribed(client)
+		}
+	}
+}
+
 // readPump reads messages from the WebSocket connection
 func (h *HistoryWatchHandler) readPump(client *WatchClient) {
 	client.conn.SetReadLimit(512)
@@ -393,6 +590,29 @@ func (h *HistoryWatchHandler) sendSubscribed(client *WatchClient) {
 func (h *HistoryWatchHandler) sendPong(client *WatchClient) {
 	msg := &WatchOutgoingMessage{
 		Type: WatchMessageTypePong,
+	}
+	data, _ := json.Marshal(msg)
+	select {
+	case client.send <- data:
+	default:
+	}
+}
+
+func (h *HistoryWatchHandler) sendErrorToClient(client *WatchClient, errMsg string) {
+	msg := &WatchOutgoingMessage{
+		Type:  WatchMessageTypeError,
+		Error: errMsg,
+	}
+	data, _ := json.Marshal(msg)
+	select {
+	case client.send <- data:
+	default:
+	}
+}
+
+func (h *HistoryWatchHandler) sendUnsubscribed(client *WatchClient) {
+	msg := &WatchOutgoingMessage{
+		Type: WatchMessageTypeUnsubscribed,
 	}
 	data, _ := json.Marshal(msg)
 	select {

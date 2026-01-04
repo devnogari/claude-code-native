@@ -81,8 +81,11 @@ func (s *Server) setupRoutes() {
 	historyGroup.Post("/sessions/:sessionId/favorite", s.historyHandler.ToggleSessionFavorite)
 	historyGroup.Post("/refresh", s.historyHandler.Refresh)
 
-	// WebSocket route for watching session file changes in real-time
+	// WebSocket route for watching session file changes in real-time (legacy, per-session)
 	historyGroup.Get("/ws/:encodedPath/:sessionId", s.historyWatchHandler.Upgrade, websocket.New(s.historyWatchHandler.HandleConnection))
+
+	// Unified WebSocket route for watching session file changes (single connection, subscribe/unsubscribe)
+	historyGroup.Get("/ws/user", s.historyWatchHandler.Upgrade, websocket.New(s.historyWatchHandler.HandleUnifiedConnection))
 
 	// Sync route - imports Claude CLI history to database
 	protected.Post("/sync", s.syncHandler.Sync)
