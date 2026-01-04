@@ -26,6 +26,8 @@
         <string>__PATH__</string>
         <key>HOME</key>
         <string>__HOME__</string>
+        <key>GITHUB_TOKEN</key>
+        <string>__GITHUB_TOKEN__</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

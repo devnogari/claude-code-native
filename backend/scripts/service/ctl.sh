@@ -101,6 +101,7 @@ macos_install() {
         -e "s|__DATABASE_URL__|${DATABASE_URL:-postgres://ccn:localdev123@localhost:5438/claude_code_native?sslmode=disable}|g" \
         -e "s|__JWT_SECRET__|${JWT_SECRET:-your-super-secure-jwt-secret-key-minimum-32-chars}|g" \
         -e "s|__PATH__|$service_path|g" \
+        -e "s|__GITHUB_TOKEN__|${GITHUB_TOKEN:-}|g" \
         "$plist_src" > "$plist_dst"
 
     log_success "Service installed at $plist_dst"
