@@ -12,10 +12,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.claudecode.native.data.api.ApiClient
+import com.claudecode.native.data.api.ApiException
 import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.repository.ServerRepository
 import com.claudecode.native.data.repository.ThemeRepository
@@ -32,8 +34,18 @@ import com.claudecode.native.ui.screen.ProjectListScreenContent
 import com.claudecode.native.ui.screen.SettingsScreen
 import com.claudecode.native.ui.theme.AppTheme
 import com.claudecode.native.ui.viewmodel.ServerViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.compose.KoinApplication
 import org.koin.compose.koinInject
+
+/** Timeout for waiting for server configuration to complete. */
+private const val SERVER_SETUP_TIMEOUT_MS = 5000L
+
+/** Error message shown when server configuration times out. */
+private const val SERVER_SETUP_TIMEOUT_ERROR = "Server configuration timed out. Please try again."
 
 @Composable
 fun App() {
@@ -51,6 +63,59 @@ fun App() {
                 AppNavigation()
             }
         }
+    }
+}
+
+/**
+ * Validates the auth token by making an API call.
+ * Only clears the token on 401 (Unauthorized) errors.
+ * Network errors and other exceptions preserve the token for retry.
+ *
+ * @return true if token is valid, false otherwise
+ */
+private suspend fun validateTokenOrClearOnUnauthorized(
+    claudeHistoryApi: ClaudeHistoryApi,
+    serverViewModel: ServerViewModel
+): Boolean {
+    return try {
+        claudeHistoryApi.getProjects()
+        true
+    } catch (e: CancellationException) {
+        // Rethrow cancellation to allow proper coroutine cancellation
+        throw e
+    } catch (e: ApiException) {
+        // Only clear token on 401 (Unauthorized) - token is actually invalid
+        if (e.isUnauthorized()) {
+            serverViewModel.clearCurrentToken()
+        }
+        false
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        // Catch-all for network errors (connection refused, timeout, DNS failures)
+        // and any other pre-request exceptions that aren't wrapped in ApiException.
+        // These are transient errors - preserve the token so user can retry.
+        println("Token validation failed with unexpected exception: ${e.message}")
+        false
+    }
+}
+
+/**
+ * Determines the appropriate starting screen based on token validity.
+ * If there's a saved token, validates it and returns ProjectList or Login accordingly.
+ * If no token exists, returns Login screen.
+ *
+ * @return The appropriate screen to navigate to
+ */
+private suspend fun determineAuthScreen(
+    serverRepository: ServerRepository,
+    claudeHistoryApi: ClaudeHistoryApi,
+    serverViewModel: ServerViewModel
+): Screen {
+    val currentServer = serverRepository.currentServer
+    return if (currentServer?.authToken != null) {
+        val isValid = validateTokenOrClearOnUnauthorized(claudeHistoryApi, serverViewModel)
+        if (isValid) Screen.ProjectList else Screen.Login
+    } else {
+        Screen.Login
     }
 }
 
@@ -84,6 +149,7 @@ fun AppNavigation() {
     val claudeHistoryApi: ClaudeHistoryApi = koinInject()
     val serverRepository: ServerRepository = koinInject()
     val serverViewModel: ServerViewModel = koinInject()
+    val scope = rememberCoroutineScope()
 
     // Track if we've completed initial checks
     var isInitializing by remember { mutableStateOf(true) }
@@ -97,19 +163,8 @@ fun AppNavigation() {
     LaunchedEffect(serverSwitched) {
         if (serverSwitched) {
             serverViewModel.resetServerSwitchedState()
-            // Check if new server has valid token
-            val currentServer = serverRepository.currentServer
-            if (currentServer?.authToken != null) {
-                try {
-                    claudeHistoryApi.getProjects()
-                    currentScreen = Screen.ProjectList
-                } catch (e: Exception) {
-                    serverViewModel.clearCurrentToken()
-                    currentScreen = Screen.Login
-                }
-            } else {
-                currentScreen = Screen.Login
-            }
+            // Check if new server has valid token and navigate accordingly
+            currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel)
         }
     }
 
@@ -127,22 +182,8 @@ fun AppNavigation() {
         // Initialize ApiClient with current server
         serverViewModel.initializeWithCurrentServer()
 
-        // Check for saved token on current server
-        val savedToken = currentServer.authToken
-        if (savedToken != null) {
-            // Try to validate the token by making an API call
-            try {
-                claudeHistoryApi.getProjects()
-                // Token is valid, navigate to ProjectList
-                currentScreen = Screen.ProjectList
-            } catch (e: Exception) {
-                // Token is invalid, clear it and stay on login
-                serverViewModel.clearCurrentToken()
-                currentScreen = Screen.Login
-            }
-        } else {
-            currentScreen = Screen.Login
-        }
+        // Check for saved token and navigate accordingly
+        currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel)
         isInitializing = false
     }
 
@@ -174,9 +215,23 @@ fun AppNavigation() {
         is Screen.HostSetup -> {
             HostSetupScreen(
                 onHostConfigured = {
-                    // After host is configured, initialize with current server and go to login
-                    serverViewModel.initializeWithCurrentServer()
-                    currentScreen = Screen.Login
+                    // After host is configured, wait for server to be added and go to login
+                    // Note: addServer() is async and also initializes API clients for first server,
+                    // so we only need to wait for state update, no separate initialization needed
+                    scope.launch {
+                        // Wait for server to be added, with timeout to prevent hanging on errors
+                        val serverState = withTimeoutOrNull(SERVER_SETUP_TIMEOUT_MS) {
+                            serverRepository.state.first { it.currentServer != null }
+                        }
+
+                        if (serverState != null) {
+                            currentScreen = Screen.Login
+                        } else {
+                            // Server setup timed out - atomically set error only if none already set
+                            // (addServer might have set a more specific error)
+                            serverViewModel.setErrorIfNull(SERVER_SETUP_TIMEOUT_ERROR)
+                        }
+                    }
                 }
             )
         }
