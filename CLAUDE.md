@@ -73,23 +73,30 @@ docker-compose down              # Stop services
 
 **Required env vars**: `DB_PASSWORD`, `JWT_SECRET` (32+ chars) - see `.env.example`
 
-### Backend Daemon (Native)
-For local development, run backend as a daemon process:
+### Backend Daemon (ctl.sh)
+Use the service control script for daemon management:
 ```bash
-# Start daemon (logs to /tmp/backend.log)
-cd backend && nohup go run ./cmd/server > /tmp/backend.log 2>&1 &
+cd backend/scripts/service
 
-# View logs
-tail -f /tmp/backend.log
+./ctl.sh install      # Install as system service (launchd/systemd)
+./ctl.sh start        # Start backend
+./ctl.sh stop         # Stop backend
+./ctl.sh restart      # Restart backend
+./ctl.sh update       # Build and restart (use after code changes)
+./ctl.sh status       # Show status
+./ctl.sh logs [-f]    # View logs (-f to follow)
 
-# Stop daemon
-pkill -f "claude-code-native.*server"
+# Full stack (PostgreSQL + Backend)
+./ctl.sh up           # Start all
+./ctl.sh down         # Stop all
+
+# Database only
+./ctl.sh db start|stop|status|logs|shell
 ```
 
-**Log paths:**
-- Development: `/tmp/backend.log`
-- Docker: `docker-compose logs -f backend`
-- Native process stdout: Check terminal where `go run` was executed
+**Log paths (macOS):**
+- stdout: `~/Library/Logs/ccn-backend.log`
+- stderr: `~/Library/Logs/ccn-backend.error.log`
 
 ## Architecture
 
