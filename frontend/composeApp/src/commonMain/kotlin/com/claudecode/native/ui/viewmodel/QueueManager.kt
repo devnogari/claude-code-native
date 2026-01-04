@@ -294,6 +294,9 @@ class QueueManager(
                         DebugLogger.d(TAG, "Connection error while retrying message (id=${msg.id}), will retry again: ${e.message}")
                     } else {
                         DebugLogger.e(TAG, "Failed to retry queued message (id=${msg.id}): ${e.message}", e)
+                        // Note: Currently removes failed messages from queue. Future improvement:
+                        // Add status field to QueuedMessage (QUEUED, SENDING, FAILED) to allow
+                        // users to retry, edit, or copy failed messages instead of losing them.
                         updateCurrentQueue(conversationId) { q -> q.filter { it.id != msg.id } }
                         onError("Failed to send message: ${e.message}")
                     }

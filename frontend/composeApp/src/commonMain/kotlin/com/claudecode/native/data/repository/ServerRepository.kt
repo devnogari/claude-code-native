@@ -188,7 +188,6 @@ class ServerRepository {
         return host.trim()
             .removePrefix("http://")
             .removePrefix("https://")
-            .removeSuffix("/")
-            .removeSuffix("/api/v1")
+            .substringBefore("/")  // Remove any path component
     }
 }

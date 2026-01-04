@@ -359,18 +359,57 @@ func (c *HistoryCache) loadProject(encodedPath string) (*ClaudeProject, error) {
 // This handles the case where Claude CLI stores sessions in git root, not subdirectories
 // Returns sessions, lastAccessed time, and projectPath extracted from session cwd
 func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSession, time.Time, string) {
-	// Try removing path segments from the end to find parent project
-	parts := strings.Split(encodedPath, "-")
+	// Try using DecodeProjectPath for accurate path resolution (handles dashes in directory names)
+	// Falls back to encoded path segment removal for test environments
+	decodedPath := DecodeProjectPath(encodedPath)
 
 	c.logger.Debug("looking for parent sessions",
 		zap.String("encodedPath", encodedPath),
+		zap.String("decodedPath", decodedPath))
+
+	// Check if decoded path exists (won't exist in test environments with synthetic paths)
+	if _, err := os.Stat(decodedPath); err == nil {
+		// Use filepath.Dir approach for real paths - more reliable for paths with dashes
+		currentPath := decodedPath
+		for {
+			parentPath := filepath.Dir(currentPath)
+			if parentPath == currentPath || parentPath == "/" || parentPath == "." {
+				break // Reached root
+			}
+			currentPath = parentPath
+			parentEncodedPath := EncodeProjectPath(parentPath)
+
+			if isHomeDirectory(parentEncodedPath) {
+				c.logger.Debug("skipping home directory",
+					zap.String("parentEncodedPath", parentEncodedPath))
+				continue
+			}
+
+			parentDir := filepath.Join(c.basePath, parentEncodedPath)
+			c.logger.Debug("checking parent dir (decoded)",
+				zap.String("parentEncodedPath", parentEncodedPath),
+				zap.String("parentDir", parentDir))
+
+			if info, err := os.Stat(parentDir); err == nil && info.IsDir() {
+				if sessions, lastAccessed, projectPath, err := c.loadSessions(parentDir, parentEncodedPath); err == nil && len(sessions) > 0 {
+					c.logger.Info("found parent sessions",
+						zap.String("parentDir", parentDir),
+						zap.Int("sessions", len(sessions)),
+						zap.String("projectPath", projectPath))
+					return sessions, lastAccessed, projectPath
+				}
+			}
+		}
+	}
+
+	// Fallback: Split by "-" for synthetic/test paths where decoded path doesn't exist
+	parts := strings.Split(encodedPath, "-")
+	c.logger.Debug("using fallback segment-based parent search",
 		zap.Int("parts", len(parts)))
 
 	for i := len(parts) - 1; i > 1; i-- {
 		parentEncodedPath := strings.Join(parts[:i], "-")
 
-		// Skip home directory - it contains unrelated sessions from ad-hoc CLI usage
-		// Home directories look like: -Users-username, -home-username, -root
 		if isHomeDirectory(parentEncodedPath) {
 			c.logger.Debug("skipping home directory",
 				zap.String("parentEncodedPath", parentEncodedPath))
@@ -378,14 +417,11 @@ func (c *HistoryCache) findParentProjectSessions(encodedPath string) ([]ClaudeSe
 		}
 
 		parentDir := filepath.Join(c.basePath, parentEncodedPath)
-
-		c.logger.Debug("checking parent dir",
+		c.logger.Debug("checking parent dir (fallback)",
 			zap.String("parentEncodedPath", parentEncodedPath),
 			zap.String("parentDir", parentDir))
 
-		// Check if parent project directory exists
 		if info, err := os.Stat(parentDir); err == nil && info.IsDir() {
-			// Pass parentEncodedPath so sessions know their actual source location
 			if sessions, lastAccessed, projectPath, err := c.loadSessions(parentDir, parentEncodedPath); err == nil && len(sessions) > 0 {
 				c.logger.Info("found parent sessions",
 					zap.String("parentDir", parentDir),
