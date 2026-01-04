@@ -35,6 +35,10 @@ node_modules/
 
 # Build binaries
 backend/bin/
+backend/ccn-backend
+
+# Runtime version tracking
+backend/.current-version
 
 # Kotlin compiler artifacts
 .kotlin/
