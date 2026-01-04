@@ -28,11 +28,14 @@ actual object ServerStorage {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
-    actual fun getServerList(): ServerListState? {
+    private fun checkInitialized() {
         if (!::prefs.isInitialized) {
-            Log.w(TAG, "ServerStorage not initialized")
-            return null
+            throw IllegalStateException("ServerStorage not initialized. Call init() from your Application class.")
         }
+    }
+
+    actual fun getServerList(): ServerListState? {
+        checkInitialized()
         return try {
             val content = prefs.getString(SERVERS_KEY, null)
             if (content != null && content.isNotBlank()) {
@@ -47,10 +50,7 @@ actual object ServerStorage {
     }
 
     actual fun saveServerList(state: ServerListState) {
-        if (!::prefs.isInitialized) {
-            Log.w(TAG, "ServerStorage not initialized")
-            return
-        }
+        checkInitialized()
         try {
             val content = json.encodeToString(ServerListState.serializer(), state)
             prefs.edit().putString(SERVERS_KEY, content).apply()
@@ -60,7 +60,7 @@ actual object ServerStorage {
     }
 
     actual fun clear() {
-        if (!::prefs.isInitialized) return
+        checkInitialized()
         prefs.edit().remove(SERVERS_KEY).apply()
     }
 }

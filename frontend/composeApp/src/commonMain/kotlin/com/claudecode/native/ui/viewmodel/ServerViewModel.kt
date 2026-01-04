@@ -253,6 +253,15 @@ class ServerViewModel(
         _error.value = message
     }
 
+    /**
+     * Atomically sets the error message only if there isn't one already set.
+     * Uses compareAndSet to prevent race conditions when multiple coroutines
+     * might try to set an error concurrently.
+     */
+    fun setErrorIfNull(message: String) {
+        _error.compareAndSet(null, message)
+    }
+
     fun clearError() {
         _error.value = null
     }

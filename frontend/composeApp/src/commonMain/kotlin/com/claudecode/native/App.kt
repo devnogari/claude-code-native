@@ -96,6 +96,27 @@ private suspend fun validateTokenOrClearOnUnauthorized(
 }
 
 /**
+ * Determines the appropriate starting screen based on token validity.
+ * If there's a saved token, validates it and returns ProjectList or Login accordingly.
+ * If no token exists, returns Login screen.
+ *
+ * @return The appropriate screen to navigate to
+ */
+private suspend fun determineAuthScreen(
+    serverRepository: ServerRepository,
+    claudeHistoryApi: ClaudeHistoryApi,
+    serverViewModel: ServerViewModel
+): Screen {
+    val currentServer = serverRepository.currentServer
+    return if (currentServer?.authToken != null) {
+        val isValid = validateTokenOrClearOnUnauthorized(claudeHistoryApi, serverViewModel)
+        if (isValid) Screen.ProjectList else Screen.Login
+    } else {
+        Screen.Login
+    }
+}
+
+/**
  * Parse URL path to Screen.
  */
 private fun parsePathToScreen(path: String): Screen {
@@ -139,14 +160,8 @@ fun AppNavigation() {
     LaunchedEffect(serverSwitched) {
         if (serverSwitched) {
             serverViewModel.resetServerSwitchedState()
-            // Check if new server has valid token
-            val currentServer = serverRepository.currentServer
-            if (currentServer?.authToken != null) {
-                val isValid = validateTokenOrClearOnUnauthorized(claudeHistoryApi, serverViewModel)
-                currentScreen = if (isValid) Screen.ProjectList else Screen.Login
-            } else {
-                currentScreen = Screen.Login
-            }
+            // Check if new server has valid token and navigate accordingly
+            currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel)
         }
     }
 
@@ -164,14 +179,8 @@ fun AppNavigation() {
         // Initialize ApiClient with current server
         serverViewModel.initializeWithCurrentServer()
 
-        // Check for saved token on current server
-        val savedToken = currentServer.authToken
-        if (savedToken != null) {
-            val isValid = validateTokenOrClearOnUnauthorized(claudeHistoryApi, serverViewModel)
-            currentScreen = if (isValid) Screen.ProjectList else Screen.Login
-        } else {
-            currentScreen = Screen.Login
-        }
+        // Check for saved token and navigate accordingly
+        currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel)
         isInitializing = false
     }
 
@@ -215,11 +224,9 @@ fun AppNavigation() {
                         if (serverState != null) {
                             currentScreen = Screen.Login
                         } else {
-                            // Server setup timed out - show error only if no other error already set
+                            // Server setup timed out - atomically set error only if none already set
                             // (addServer might have set a more specific error)
-                            if (serverViewModel.error.value == null) {
-                                serverViewModel.setError(SERVER_SETUP_TIMEOUT_ERROR)
-                            }
+                            serverViewModel.setErrorIfNull(SERVER_SETUP_TIMEOUT_ERROR)
                         }
                     }
                 }
