@@ -94,7 +94,7 @@ class ApiClient(
      * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
      * Also persists to TokenStorage for WASM page refresh support.
      */
-    suspend fun setAuthToken(token: String?) {
+    fun setAuthToken(token: String?) {
         _authToken.value = token
         if (token != null) {
             TokenStorage.saveToken(token)
@@ -107,14 +107,14 @@ class ApiClient(
      * Returns the current authentication token.
      * Thread-safe: Reads from StateFlow which provides proper memory visibility.
      */
-    suspend fun getAuthToken(): String? = _authToken.value
+    fun getAuthToken(): String? = _authToken.value
 
     /**
      * Clears the authentication token (for logout).
      * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
      * Also clears from TokenStorage.
      */
-    suspend fun clearAuthToken() {
+    fun clearAuthToken() {
         _authToken.value = null
         TokenStorage.clearToken()
     }
