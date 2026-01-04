@@ -652,4 +652,97 @@ class ChatViewModelTest {
 
         assertTrue(newConvQueue.isEmpty())
     }
+
+    // =====================================
+    // isFilesystemSessionId Tests
+    // =====================================
+
+    @Test
+    fun `isFilesystemSessionId should return false for standard conversation ID`() {
+        val conversationId = "abc123"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertFalse(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return false for UUID-style conversation ID`() {
+        val conversationId = "550e8400-e29b-41d4-a716-446655440000"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertFalse(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return true for filesystem session ID`() {
+        val conversationId = "session123?project=encodedPath"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertTrue(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return true for filesystem session with complex encoded path`() {
+        val conversationId = "abc123?project=%2FUsers%2Ftest%2Fmy-project"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertTrue(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return false for empty string`() {
+        val conversationId = ""
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertFalse(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return true for just project marker`() {
+        // Edge case: just the marker without session ID (unlikely but possible)
+        val conversationId = "?project="
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertTrue(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return false for similar but different pattern`() {
+        // Should not match "project=" without the "?"
+        val conversationId = "session123project=encodedPath"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertFalse(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return false for project in middle without question mark`() {
+        val conversationId = "session123&project=encodedPath"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertFalse(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return true for project marker anywhere in string`() {
+        // The contains check should find it anywhere
+        val conversationId = "prefix?project=path/suffix"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertTrue(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should be case sensitive`() {
+        // Should not match uppercase PROJECT
+        val conversationId = "session123?PROJECT=encodedPath"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertFalse(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return true for multiple query parameters`() {
+        // Real-world case with additional query params
+        val conversationId = "session123?project=path&other=value"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertTrue(result)
+    }
+
+    @Test
+    fun `isFilesystemSessionId should return false for question mark without project`() {
+        val conversationId = "session123?other=value"
+        val result = ChatViewModel.isFilesystemSessionId(conversationId)
+        assertFalse(result)
+    }
 }

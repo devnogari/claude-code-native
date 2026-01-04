@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 
+	"github.com/devnogari/claude-code-native/backend/internal/config"
 	"github.com/devnogari/claude-code-native/backend/internal/project"
 	"github.com/uptrace/bun"
 	"go.uber.org/fx"
@@ -33,8 +34,8 @@ type HistoryHandlerParams struct {
 }
 
 // provideHistoryCache creates a new history cache for fx
-func provideHistoryCache(logger *zap.Logger) (*HistoryCache, error) {
-	return NewHistoryCache(logger)
+func provideHistoryCache(cfg *config.Config, logger *zap.Logger) (*HistoryCache, error) {
+	return NewHistoryCache(logger, cfg.Claude.ProjectsPath)
 }
 
 // registerShutdownHook registers a lifecycle hook to stop all processes on shutdown

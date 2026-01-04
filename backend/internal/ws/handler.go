@@ -1282,7 +1282,7 @@ func (h *Handler) handleFilesystemSubscribe(client *Client, msg *IncomingMessage
 	// This uses smart decoding that verifies paths exist on the filesystem
 	projectPath := decodeProjectPath(msg.EncodedPath)
 
-	// Validate the project path exists and is a directory
+	// Validate the project path format
 	cleanPath := filepath.Clean(projectPath)
 	if !filepath.IsAbs(cleanPath) {
 		h.logger.Warn("Project path is not absolute", zap.String("path", projectPath))
@@ -1290,13 +1290,13 @@ func (h *Handler) handleFilesystemSubscribe(client *Client, msg *IncomingMessage
 		return
 	}
 
+	// Check if path exists - but don't fail if it doesn't (Docker environment may not have source mounted)
 	info, err := os.Stat(cleanPath)
 	if err != nil {
-		h.logger.Warn("Project path does not exist", zap.String("path", cleanPath), zap.Error(err))
-		h.sendErrorToClient(client, "Project path not found")
-		return
-	}
-	if !info.IsDir() {
+		h.logger.Warn("Project path does not exist on this host (may be running in Docker)",
+			zap.String("path", cleanPath))
+		// Continue anyway - the session files are what matter, not the source directory
+	} else if !info.IsDir() {
 		h.logger.Warn("Project path is not a directory", zap.String("path", cleanPath))
 		h.sendErrorToClient(client, "Invalid project path: not a directory")
 		return

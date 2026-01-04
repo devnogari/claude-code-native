@@ -10,12 +10,14 @@ import com.claudecode.native.data.api.ProjectApi
 import com.claudecode.native.data.api.QueueApi
 import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.data.repository.PreferencesRepository
+import com.claudecode.native.data.repository.ServerRepository
 import com.claudecode.native.data.repository.ThemeRepository
 import com.claudecode.native.data.websocket.HistoryWatchClient
 import com.claudecode.native.data.websocket.UnifiedWebSocketClient
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.LoginViewModel
 import com.claudecode.native.ui.viewmodel.ProjectListViewModel
+import com.claudecode.native.ui.viewmodel.ServerViewModel
 import com.claudecode.native.ui.viewmodel.SettingsViewModel
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -81,12 +83,14 @@ val appModule = module {
     single { PreferencesRepository() }
     single { FavoriteRepository() }
     single { ThemeRepository(get()) }  // PreferencesRepository
+    single { ServerRepository() }
 
     // ViewModels - use single to maintain state across recomposition (e.g., theme changes)
     single { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
     single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }  // UnifiedWebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, HistoryWatchClient, CommandApi, QueueApi, CoroutineScope
     single { ProjectListViewModel(get(), get(), get()) }  // ClaudeHistoryApi, FavoriteRepository, CoroutineScope
     single { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
+    single { ServerViewModel(get(), get(), get(), get()) }  // ServerRepository, ApiClient, UnifiedWebSocketClient, CoroutineScope
 
     // History Watch WebSocket Client for real-time session file changes
     single {
