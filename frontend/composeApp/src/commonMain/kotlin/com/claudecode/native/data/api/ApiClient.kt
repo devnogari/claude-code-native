@@ -111,12 +111,10 @@ class ApiClient(
 
     /**
      * Clears the authentication token (for logout).
-     * Thread-safe: Uses StateFlow for cross-dispatcher visibility.
-     * Also clears from TokenStorage.
+     * Delegates to setAuthToken(null) to avoid code duplication.
      */
     fun clearAuthToken() {
-        _authToken.value = null
-        TokenStorage.clearToken()
+        setAuthToken(null)
     }
 
     /**
