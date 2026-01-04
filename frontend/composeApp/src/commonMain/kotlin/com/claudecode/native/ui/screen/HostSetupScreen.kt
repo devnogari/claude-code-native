@@ -32,26 +32,42 @@ fun HostSetupScreen(
 ) {
     var host by remember { mutableStateOf(initialHost ?: "localhost:8083") }
     var isValidating by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var localError by remember { mutableStateOf<String?>(null) }
+    val viewModelError by serverViewModel.error.collectAsState()
     val focusManager = LocalFocusManager.current
 
+    // Combine local validation errors with ViewModel errors (e.g., timeout)
+    val error = localError ?: viewModelError
+
+    // Clear ViewModel error when user starts typing
+    LaunchedEffect(host) {
+        if (viewModelError != null) {
+            serverViewModel.clearError()
+        }
+    }
+
     fun saveAndProceed() {
-        val trimmedHost = host.trim()
-        if (trimmedHost.isEmpty()) {
-            error = "Server host is required"
+        // Clean the input: remove protocol prefix and trailing path
+        val cleanedHost = host.trim()
+            .removePrefix("http://")
+            .removePrefix("https://")
+            .substringBefore("/")  // Remove any path component
+
+        if (cleanedHost.isEmpty()) {
+            localError = "Server host is required"
             return
         }
 
-        // Basic validation - should contain host:port or just host
-        if (!trimmedHost.matches(Regex("^[a-zA-Z0-9.-]+(:\\d+)?$"))) {
-            error = "Invalid host format. Use 'hostname:port' or 'hostname'"
+        // Validate the cleaned host format - should contain host:port or just host
+        if (!cleanedHost.matches(Regex("^[a-zA-Z0-9.-]+(:\\d+)?$"))) {
+            localError = "Invalid host format. Use 'hostname:port' or 'hostname'"
             return
         }
 
         // Add server to the list and proceed
         serverViewModel.addServer(
             name = "Default Server",
-            host = trimmedHost,
+            host = cleanedHost,
             description = "Initial server configuration"
         )
         onHostConfigured()
@@ -102,18 +118,16 @@ fun HostSetupScreen(
                 value = host,
                 onValueChange = {
                     host = it
-                    error = null
+                    localError = null
                 },
                 label = { Text("Server Host") },
                 placeholder = { Text("localhost:8083") },
                 singleLine = true,
                 isError = error != null,
                 supportingText = {
-                    if (error != null) {
-                        Text(error!!, color = MaterialTheme.colorScheme.error)
-                    } else {
-                        Text("Format: hostname:port (e.g., localhost:8083)")
-                    }
+                    error?.let { errorMessage ->
+                        Text(errorMessage, color = MaterialTheme.colorScheme.error)
+                    } ?: Text("Format: hostname:port (e.g., localhost:8083)")
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(

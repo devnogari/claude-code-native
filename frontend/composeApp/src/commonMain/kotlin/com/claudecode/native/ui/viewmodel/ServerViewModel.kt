@@ -218,9 +218,14 @@ class ServerViewModel(
 
     /**
      * Clears the auth token for the current server (logout).
+     * Also clears the in-memory token from ApiClient to ensure consistency.
      */
     fun clearCurrentToken() {
         serverRepository.clearCurrentToken()
+        // Clear ApiClient's in-memory token to prevent stale token issues
+        scope.launch {
+            apiClient.clearAuthToken()
+        }
     }
 
     /**
@@ -233,12 +238,13 @@ class ServerViewModel(
     /**
      * Initializes the clients with the current server configuration.
      * Should be called on app startup.
+     *
+     * Note: This is a suspend function that waits for initialization to complete.
+     * This ensures the token is set in ApiClient before any API calls are made.
      */
-    fun initializeWithCurrentServer() {
+    suspend fun initializeWithCurrentServer() {
         val server = serverRepository.currentServer ?: return
-        scope.launch {
-            applyServerToClients(server)
-        }
+        applyServerToClients(server)
     }
 
     /**
@@ -246,6 +252,19 @@ class ServerViewModel(
      */
     fun resetServerSwitchedState() {
         _serverSwitched.value = false
+    }
+
+    fun setError(message: String) {
+        _error.value = message
+    }
+
+    /**
+     * Atomically sets the error message only if there isn't one already set.
+     * Uses compareAndSet to prevent race conditions when multiple coroutines
+     * might try to set an error concurrently.
+     */
+    fun setErrorIfNull(message: String) {
+        _error.compareAndSet(null, message)
     }
 
     fun clearError() {
