@@ -413,24 +413,32 @@ fun ChatScreenContent(
                     }
                 }
             )
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { swipeOffset = 0f },
-                    onDragEnd = {
-                        if (swipeOffset > swipeThreshold) {
-                            onBack()
-                        }
-                        swipeOffset = 0f
-                    },
-                    onDragCancel = { swipeOffset = 0f },
-                    onHorizontalDrag = { _, dragAmount ->
-                        // Only track right swipes (positive drag from left edge)
-                        if (dragAmount > 0 || swipeOffset > 0) {
-                            swipeOffset = (swipeOffset + dragAmount).coerceAtLeast(0f)
-                        }
+            .then(
+                // Only enable swipe-to-go-back on mobile platforms, not desktop
+                // This prevents interference with text selection on desktop
+                if (!Platform.isDesktop) {
+                    Modifier.pointerInput(Unit) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { swipeOffset = 0f },
+                            onDragEnd = {
+                                if (swipeOffset > swipeThreshold) {
+                                    onBack()
+                                }
+                                swipeOffset = 0f
+                            },
+                            onDragCancel = { swipeOffset = 0f },
+                            onHorizontalDrag = { _, dragAmount ->
+                                // Only track right swipes (positive drag from left edge)
+                                if (dragAmount > 0 || swipeOffset > 0) {
+                                    swipeOffset = (swipeOffset + dragAmount).coerceAtLeast(0f)
+                                }
+                            }
+                        )
                     }
-                )
-            },
+                } else {
+                    Modifier
+                }
+            ),
         topBar = {
             TopAppBar(
                 title = {

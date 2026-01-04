@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
@@ -46,11 +47,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.ui.viewmodel.ChatMessage
 import com.claudecode.native.ui.viewmodel.ContentBlock
 import com.claudecode.native.ui.viewmodel.ImageSource
 import com.claudecode.native.ui.viewmodel.ToolUseInfo
+import com.claudecode.native.util.ClipboardManager
+import com.claudecode.native.util.Platform
 
 /**
  * Displays a chat message bubble with appropriate styling based on the sender.
@@ -63,6 +68,7 @@ import com.claudecode.native.ui.viewmodel.ToolUseInfo
  * @param message The chat message to display
  * @param modifier Optional modifier for the component
  */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun MessageBubble(
     message: ChatMessage,
@@ -74,6 +80,8 @@ fun MessageBubble(
     val isUser = message.role == MessageRole.USER
     var showInspectDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+    var isHovered by remember { mutableStateOf(false) }
+    val isDesktop = Platform.isDesktop
 
     // Inspect Payload Dialog
     if (showInspectDialog) {
@@ -88,7 +96,16 @@ fun MessageBubble(
     val userMaxWidth = 500.dp
 
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (isDesktop) {
+                    Modifier.onPointerEvent(PointerEventType.Enter) { isHovered = true }
+                        .onPointerEvent(PointerEventType.Exit) { isHovered = false }
+                } else {
+                    Modifier
+                }
+            ),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
@@ -97,7 +114,11 @@ fun MessageBubble(
             MessageMenuButton(
                 showMenu = showMenu,
                 onShowMenuChange = { showMenu = it },
-                onInspectClick = { showInspectDialog = true }
+                onInspectClick = { showInspectDialog = true },
+                onCopyClick = if (isDesktop) {
+                    { copyMessageContent(message) }
+                } else null,
+                showCopyButton = isDesktop && isHovered
             )
         }
 
@@ -231,9 +252,26 @@ fun MessageBubble(
             MessageMenuButton(
                 showMenu = showMenu,
                 onShowMenuChange = { showMenu = it },
-                onInspectClick = { showInspectDialog = true }
+                onInspectClick = { showInspectDialog = true },
+                onCopyClick = if (isDesktop) {
+                    { copyMessageContent(message) }
+                } else null,
+                showCopyButton = isDesktop && isHovered
             )
         }
+    }
+}
+
+/**
+ * Helper function to extract text content from a message and copy to clipboard.
+ */
+private fun copyMessageContent(message: ChatMessage) {
+    val textContent = message.blocks
+        .filterIsInstance<ContentBlock.Text>()
+        .joinToString("\n\n") { it.content }
+
+    if (textContent.isNotBlank()) {
+        ClipboardManager.copyToClipboard(textContent)
     }
 }
 
@@ -246,6 +284,8 @@ fun MessageBubble(
  * @param showMenu Whether the dropdown menu is currently shown
  * @param onShowMenuChange Callback when menu visibility changes
  * @param onInspectClick Callback when "Inspect Payload" is clicked
+ * @param onCopyClick Optional callback when "Copy" is clicked
+ * @param showCopyButton Whether to show the copy button (for desktop hover)
  * @param compact If true, uses smaller sizing suitable for tool items
  */
 @Composable
@@ -253,35 +293,77 @@ private fun InspectMenuButton(
     showMenu: Boolean,
     onShowMenuChange: (Boolean) -> Unit,
     onInspectClick: () -> Unit,
+    onCopyClick: (() -> Unit)? = null,
+    showCopyButton: Boolean = false,
     compact: Boolean = false
 ) {
     val iconSize = if (compact) 18.dp else 20.dp
     val buttonSize = if (compact) 28.dp else 40.dp
 
-    Box {
-        IconButton(
-            onClick = { onShowMenuChange(true) },
-            modifier = Modifier.size(buttonSize)
-        ) {
-            Icon(
-                imageVector = Icons.Default.MoreVert,
-                contentDescription = "More options",
-                modifier = Modifier.size(iconSize),
-                tint = MaterialTheme.colorScheme.outline
-            )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Copy button (visible on hover for desktop, with fade animation)
+        if (onCopyClick != null) {
+            AnimatedVisibility(visible = showCopyButton) {
+                IconButton(
+                    onClick = onCopyClick,
+                    modifier = Modifier.size(buttonSize)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copy message",
+                        modifier = Modifier.size(iconSize),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
         }
 
-        DropdownMenu(
-            expanded = showMenu,
-            onDismissRequest = { onShowMenuChange(false) }
-        ) {
-            DropdownMenuItem(
-                text = { Text("Inspect Payload") },
-                onClick = {
-                    onShowMenuChange(false)
-                    onInspectClick()
+        // Menu button
+        Box {
+            IconButton(
+                onClick = { onShowMenuChange(true) },
+                modifier = Modifier.size(buttonSize)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "More options",
+                    modifier = Modifier.size(iconSize),
+                    tint = MaterialTheme.colorScheme.outline
+                )
+            }
+
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { onShowMenuChange(false) }
+            ) {
+                // Copy option in dropdown (always available)
+                if (onCopyClick != null) {
+                    DropdownMenuItem(
+                        text = { Text("Copy") },
+                        onClick = {
+                            onShowMenuChange(false)
+                            onCopyClick()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    )
                 }
-            )
+                DropdownMenuItem(
+                    text = { Text("Inspect Payload") },
+                    onClick = {
+                        onShowMenuChange(false)
+                        onInspectClick()
+                    }
+                )
+            }
         }
     }
 }
@@ -291,8 +373,10 @@ private fun InspectMenuButton(
 private fun MessageMenuButton(
     showMenu: Boolean,
     onShowMenuChange: (Boolean) -> Unit,
-    onInspectClick: () -> Unit
-) = InspectMenuButton(showMenu, onShowMenuChange, onInspectClick, compact = false)
+    onInspectClick: () -> Unit,
+    onCopyClick: (() -> Unit)? = null,
+    showCopyButton: Boolean = false
+) = InspectMenuButton(showMenu, onShowMenuChange, onInspectClick, onCopyClick, showCopyButton, compact = false)
 
 /**
  * Dialog to inspect message payload details.
