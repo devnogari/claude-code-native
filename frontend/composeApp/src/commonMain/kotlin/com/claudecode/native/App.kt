@@ -17,12 +17,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.claudecode.native.data.api.ApiClient
 import com.claudecode.native.data.api.ClaudeHistoryApi
+import com.claudecode.native.data.repository.ServerRepository
 import com.claudecode.native.data.repository.ThemeRepository
 import com.claudecode.native.di.appModule
 import com.claudecode.native.ui.layout.AdaptiveProjectLayout
 import com.claudecode.native.ui.navigation.BrowserHistory
 import com.claudecode.native.ui.navigation.Screen
-import com.claudecode.native.data.storage.TokenStorage
 import com.claudecode.native.ui.screen.ChatScreen
 import com.claudecode.native.ui.screen.ChatScreenContent
 import com.claudecode.native.ui.screen.HostSetupScreen
@@ -31,6 +31,7 @@ import com.claudecode.native.ui.screen.ProjectListScreen
 import com.claudecode.native.ui.screen.ProjectListScreenContent
 import com.claudecode.native.ui.screen.SettingsScreen
 import com.claudecode.native.ui.theme.AppTheme
+import com.claudecode.native.ui.viewmodel.ServerViewModel
 import org.koin.compose.KoinApplication
 import org.koin.compose.koinInject
 
@@ -81,6 +82,8 @@ private fun parsePathToScreen(path: String): Screen {
 fun AppNavigation() {
     val apiClient: ApiClient = koinInject()
     val claudeHistoryApi: ClaudeHistoryApi = koinInject()
+    val serverRepository: ServerRepository = koinInject()
+    val serverViewModel: ServerViewModel = koinInject()
 
     // Track if we've completed initial checks
     var isInitializing by remember { mutableStateOf(true) }
@@ -89,22 +92,43 @@ fun AppNavigation() {
     val initialPath = BrowserHistory.getCurrentPath()
     var currentScreen: Screen by remember { mutableStateOf(parsePathToScreen(initialPath)) }
 
-    // Check for host configuration and saved token on startup
+    // Handle server switching - refresh screen when server changes
+    val serverSwitched by serverViewModel.serverSwitched.collectAsState()
+    LaunchedEffect(serverSwitched) {
+        if (serverSwitched) {
+            serverViewModel.resetServerSwitchedState()
+            // Check if new server has valid token
+            val currentServer = serverRepository.currentServer
+            if (currentServer?.authToken != null) {
+                try {
+                    claudeHistoryApi.getProjects()
+                    currentScreen = Screen.ProjectList
+                } catch (e: Exception) {
+                    serverViewModel.clearCurrentToken()
+                    currentScreen = Screen.Login
+                }
+            } else {
+                currentScreen = Screen.Login
+            }
+        }
+    }
+
+    // Check for server configuration and saved token on startup
     LaunchedEffect(Unit) {
-        // First check if server host is configured
-        val serverHost = TokenStorage.getServerHost()
-        if (serverHost == null) {
-            // No host configured, show host setup screen
+        // Check if any server is configured (migration happens automatically in ServerRepository)
+        val currentServer = serverRepository.currentServer
+        if (currentServer == null) {
+            // No server configured, show host setup screen
             currentScreen = Screen.HostSetup
             isInitializing = false
             return@LaunchedEffect
         }
 
-        // Host is configured, update ApiClient server host
-        apiClient.updateServerHost(serverHost)
+        // Initialize ApiClient with current server
+        serverViewModel.initializeWithCurrentServer()
 
-        // Now check for saved token
-        val savedToken = apiClient.getAuthToken()
+        // Check for saved token on current server
+        val savedToken = currentServer.authToken
         if (savedToken != null) {
             // Try to validate the token by making an API call
             try {
@@ -113,7 +137,7 @@ fun AppNavigation() {
                 currentScreen = Screen.ProjectList
             } catch (e: Exception) {
                 // Token is invalid, clear it and stay on login
-                apiClient.clearAuthToken()
+                serverViewModel.clearCurrentToken()
                 currentScreen = Screen.Login
             }
         } else {
@@ -150,11 +174,8 @@ fun AppNavigation() {
         is Screen.HostSetup -> {
             HostSetupScreen(
                 onHostConfigured = {
-                    // After host is configured, update ApiClient and go to login
-                    val configuredHost = TokenStorage.getServerHost()
-                    if (configuredHost != null) {
-                        apiClient.updateServerHost(configuredHost)
-                    }
+                    // After host is configured, initialize with current server and go to login
+                    serverViewModel.initializeWithCurrentServer()
                     currentScreen = Screen.Login
                 }
             )

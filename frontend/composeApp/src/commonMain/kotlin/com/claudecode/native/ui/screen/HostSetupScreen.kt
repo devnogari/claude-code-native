@@ -14,7 +14,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.claudecode.native.data.storage.TokenStorage
+import com.claudecode.native.ui.viewmodel.ServerViewModel
+import org.koin.compose.koinInject
 
 /**
  * Host setup screen for configuring the server host before login.
@@ -25,6 +26,7 @@ import com.claudecode.native.data.storage.TokenStorage
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HostSetupScreen(
+    serverViewModel: ServerViewModel = koinInject(),
     onHostConfigured: () -> Unit,
     initialHost: String? = null
 ) {
@@ -46,8 +48,12 @@ fun HostSetupScreen(
             return
         }
 
-        // Save the host and proceed
-        TokenStorage.saveServerHost(trimmedHost)
+        // Add server to the list and proceed
+        serverViewModel.addServer(
+            name = "Default Server",
+            host = trimmedHost,
+            description = "Initial server configuration"
+        )
         onHostConfigured()
     }
 

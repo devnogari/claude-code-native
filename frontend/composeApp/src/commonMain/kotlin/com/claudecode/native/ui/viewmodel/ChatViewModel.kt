@@ -84,6 +84,20 @@ class ChatViewModel(
 ) {
     /** JSON parser for queue WebSocket payloads */
     private val json = Json { ignoreUnknownKeys = true }
+
+    /** Queue manager for message queue operations */
+    private val queueManager = QueueManager(
+        json = json,
+        queueApi = queueApi,
+        unifiedWebSocketClient = unifiedWebSocketClient,
+        scope = scope,
+        onError = { error -> _error.value = error },
+        isFilesystemSession = ::isFilesystemSession,
+        generateMessageId = ::generateMessageId
+    )
+
+    /** Progress tracker for per-conversation streaming progress */
+    private val progressTracker = ProgressTracker()
     /**
      * LOCK ORDERING (always acquire in this order to prevent deadlocks):
      * 1. streamingMutex - protects streaming state (_isStreaming, isStreamingFromHistoryWatch)
@@ -107,19 +121,15 @@ class ChatViewModel(
     /** True when the assistant is actively streaming a response. */
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
-
-    /** Messages queued per conversation (Map<ConversationId, List<QueuedMessage>>). */
-    private val _queuedMessagesMap = MutableStateFlow<Map<String, List<QueuedMessage>>>(emptyMap())
+    /** Flow for current conversation ID to enable reactive queue filtering. */
+    private val _currentConversationIdFlow = MutableStateFlow<String?>(null)
 
     /** Current conversation's queued messages (exposes only active conversation's queue). */
     val queuedMessages: StateFlow<List<QueuedMessage>> by lazy {
-        combine(_queuedMessagesMap, _currentConversationIdFlow) { map, convId ->
+        combine(queueManager.queuedMessagesMap, _currentConversationIdFlow) { map, convId ->
             convId?.let { map[it] } ?: emptyList()
         }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
     }
-
-    /** Flow for current conversation ID to enable reactive queue filtering. */
-    private val _currentConversationIdFlow = MutableStateFlow<String?>(null)
 
     private val _error = MutableStateFlow<String?>(null)
     /** Current error message, if any. */
@@ -224,18 +234,6 @@ class ChatViewModel(
      */
     val scrollToBottomSignal: StateFlow<Int> = _scrollToBottomSignal.asStateFlow()
 
-    // Per-conversation progress tracking (Map: conversationId -> ProgressStatus)
-    // Note: Map access is safe because all operations occur on the main coroutine dispatcher
-    // via viewModelScope, which is single-threaded. No mutex needed.
-    private val _progressStatusMap = mutableMapOf<String, MutableStateFlow<ProgressStatus>>()
-
-    // Per-conversation elapsed time tracking jobs (Map: conversationId -> Job)
-    private val elapsedTimeJobs = mutableMapOf<String, Job>()
-
-
-    // Per-conversation streaming start times (Map: conversationId -> timestamp)
-    private val streamingStartTimes = mutableMapOf<String, Long>()
-
     /**
      * Progress status for the current conversation's status line UI (Claude Code style).
      * Tracks elapsed time, status text, tokens, and thinking time during streaming.
@@ -245,7 +243,7 @@ class ChatViewModel(
     val progressStatus: StateFlow<ProgressStatus> by lazy {
         _currentConversationIdFlow.flatMapLatest { convId ->
             convId?.let {
-                _progressStatusMap.getOrPut(it) { MutableStateFlow(ProgressStatus()) }
+                progressTracker.getProgressStatus(it)
             } ?: flowOf(ProgressStatus())
         }.stateIn(scope, SharingStarted.WhileSubscribed(5000), ProgressStatus())
     }
@@ -299,203 +297,22 @@ class ChatViewModel(
             val withoutMentions = content.replace(AT_MENTION_REGEX, "")
             return withoutMentions.trim().replace(WHITESPACE_REGEX, " ")
         }
+
+        /**
+         * Checks if the given conversation ID represents a filesystem-based session.
+         * Filesystem sessions use "sessionId?project=encodedPath" format.
+         *
+         * @param conversationId The conversation ID to check
+         * @return true if this is a filesystem-based session ID, false otherwise
+         */
+        fun isFilesystemSessionId(conversationId: String): Boolean {
+            return conversationId.contains("?project=")
+        }
     }
 
     private val mapsMutex = Mutex()  // Lock #3: protects sessionToolUses, sessionToolResults
 
     private val streamingMutex = Mutex()  // Lock #1: protects streaming state (see lock ordering above)
-
-    // Maximum number of queued messages to prevent memory pressure
-    private val maxQueuedMessages = 10
-
-    /**
-     * Updates the queue for the current conversation.
-     * If conversationId is null, the update is silently ignored.
-     * Uses _currentConversationIdFlow for consistency with queuedMessages StateFlow.
-     *
-     * @param transform Function to transform the current queue to a new queue
-     */
-    private fun updateCurrentQueue(transform: (List<QueuedMessage>) -> List<QueuedMessage>) {
-        val convId = _currentConversationIdFlow.value ?: return
-        _queuedMessagesMap.update { map ->
-            map + (convId to transform(map[convId] ?: emptyList()))
-        }
-    }
-
-    /**
-     * Updates the queue for a specific conversation.
-     *
-     * @param conversationId The conversation ID to update
-     * @param transform Function to transform the current queue to a new queue
-     */
-    private fun updateQueueForConversation(conversationId: String, transform: (List<QueuedMessage>) -> List<QueuedMessage>) {
-        _queuedMessagesMap.update { map ->
-            map + (conversationId to transform(map[conversationId] ?: emptyList()))
-        }
-    }
-
-    /**
-     * Gets the current queue for the active conversation.
-     * Uses _currentConversationIdFlow for consistency with queuedMessages StateFlow.
-     */
-    private fun getCurrentQueue(): List<QueuedMessage> {
-        val convId = _currentConversationIdFlow.value ?: return emptyList()
-        return _queuedMessagesMap.value[convId] ?: emptyList()
-    }
-
-    // Note: Queue synchronization is handled by WebSocket "queue_sync" messages
-    // which are received on connection and provide real-time queue state
-
-    /**
-     * Adds a message to the server queue, falling back to local-only on failure.
-     *
-     * For filesystem-based sessions (new format: "sessionId?project=encodedPath"),
-     * uses local queue only since these sessions don't have database conversation IDs.
-     *
-     * @return true if successfully added to server, false if stored locally
-     */
-    private suspend fun addToServerQueue(content: String, images: List<AttachedImage>): QueuedMessage {
-        val convId = _currentConversationIdFlow.value
-
-        // If no conversation or offline, store locally
-        if (convId == null) {
-            return createLocalQueuedMessage(content, images)
-        }
-
-        // Filesystem-based sessions don't have database conversation IDs, so use local queue only.
-        if (isFilesystemSession(convId)) {
-            DebugLogger.d(TAG, "Filesystem-based session detected, using local queue")
-            return createLocalQueuedMessage(content, images)
-        }
-
-        return try {
-            val response = queueApi.addToQueue(convId, content)
-            val serverMsg = response.message
-            // Map server-returned images to ServerImage objects
-            val serverImages = serverMsg.images.map { imgDto ->
-                ServerImage(
-                    id = imgDto.id,
-                    url = imgDto.url,
-                    mediaType = imgDto.mediaType,
-                    fileName = imgDto.fileName,
-                    width = imgDto.width,
-                    height = imgDto.height
-                )
-            }
-            QueuedMessage(
-                id = serverMsg.id,
-                content = serverMsg.content,
-                queuedAt = serverMsg.queuedAt,
-                source = QueuedMessageSource.SERVER,
-                images = images, // Keep local images for immediate display (before server upload)
-                serverImages = serverImages // Server-persisted images (currently empty until upload is implemented)
-            )
-        } catch (e: Exception) {
-            DebugLogger.e(TAG, "Failed to add to server queue, storing locally: ${e.message}", e)
-            createLocalQueuedMessage(content, images)
-        }
-    }
-
-    /**
-     * Creates a local-only queued message (offline fallback).
-     */
-    private fun createLocalQueuedMessage(content: String, images: List<AttachedImage>): QueuedMessage {
-        return QueuedMessage(
-            id = generateMessageId(),
-            content = content,
-            queuedAt = Clock.System.now().toEpochMilliseconds(),
-            source = QueuedMessageSource.LOCAL,
-            images = images
-        )
-    }
-
-    /**
-     * Handles queue-related WebSocket messages (queue_add, queue_remove, queue_sync).
-     */
-    private fun handleQueueWebSocketMessage(message: IncomingMessage) {
-        val payload = message.payload ?: return
-
-        when (message.type) {
-            MessageType.QUEUE_ADD -> {
-                try {
-                    val addPayload = json.decodeFromJsonElement<QueueAddPayload>(payload)
-                    val serverImages = addPayload.images.map { img ->
-                        ServerImage(
-                            id = img.id,
-                            url = img.url,
-                            mediaType = img.mediaType,
-                            fileName = img.fileName,
-                            width = img.width,
-                            height = img.height
-                        )
-                    }
-                    val queuedMsg = QueuedMessage(
-                        id = addPayload.id,
-                        content = addPayload.content,
-                        queuedAt = addPayload.queuedAt,
-                        source = QueuedMessageSource.SERVER,
-                        serverImages = serverImages
-                    )
-                    updateCurrentQueue { queue ->
-                        // Avoid duplicates
-                        if (queue.none { it.id == addPayload.id }) {
-                            queue + queuedMsg
-                        } else {
-                            queue
-                        }
-                    }
-                    DebugLogger.d(TAG, "Queue add from WebSocket: id=${addPayload.id}, images=${serverImages.size}")
-                } catch (e: Exception) {
-                    DebugLogger.e(TAG, "Failed to parse queue_add payload: ${e.message}", e)
-                }
-            }
-
-            MessageType.QUEUE_REMOVE -> {
-                try {
-                    val removePayload = json.decodeFromJsonElement<QueueRemovePayload>(payload)
-                    updateCurrentQueue { queue ->
-                        queue.filter { it.id != removePayload.id }
-                    }
-                    DebugLogger.d(TAG, "Queue remove from WebSocket: id=${removePayload.id}")
-                } catch (e: Exception) {
-                    DebugLogger.e(TAG, "Failed to parse queue_remove payload: ${e.message}", e)
-                }
-            }
-
-            MessageType.QUEUE_SYNC -> {
-                try {
-                    val syncPayload = json.decodeFromJsonElement<QueueSyncPayload>(payload)
-                    val serverMessages = syncPayload.messages.map { msg ->
-                        val serverImages = msg.images.map { img ->
-                            ServerImage(
-                                id = img.id,
-                                url = img.url,
-                                mediaType = img.mediaType,
-                                fileName = img.fileName,
-                                width = img.width,
-                                height = img.height
-                            )
-                        }
-                        QueuedMessage(
-                            id = msg.id,
-                            content = msg.content,
-                            queuedAt = msg.queuedAt,
-                            source = QueuedMessageSource.SERVER,
-                            serverImages = serverImages
-                        )
-                    }
-                    // Keep local-only messages
-                    val currentQueue = getCurrentQueue()
-                    val localOnlyMessages = currentQueue.filter { it.source == QueuedMessageSource.LOCAL }
-
-                    updateCurrentQueue { serverMessages + localOnlyMessages }
-                    DebugLogger.d(TAG, "Queue sync from WebSocket: ${serverMessages.size} server + ${localOnlyMessages.size} local")
-                } catch (e: Exception) {
-                    DebugLogger.e(TAG, "Failed to parse queue_sync payload: ${e.message}", e)
-                }
-            }
-        }
-    }
 
     /**
      * Clears all session state for switching conversations or starting fresh.
@@ -701,8 +518,8 @@ class ChatViewModel(
                 // Check if we just reconnected (transition to Connected from non-Connected state)
                 if (newState == ConnectionState.Connected && previousState != ConnectionState.Connected) {
                     // Server will send queue_sync via WebSocket, but also sync local messages
-                    syncLocalMessagesToServer()
-                    retryQueuedMessages()
+                    queueManager.syncLocalMessagesToServer(_currentConversationIdFlow.value)
+                    queueManager.retryQueuedMessages(_currentConversationIdFlow.value)
                 }
                 previousState = newState
             }
@@ -747,10 +564,9 @@ class ChatViewModel(
                 // FIX: Atomic read-modify-write to prevent race condition
                 // Reading currentQueue INSIDE the update lambda ensures we get
                 // the latest value and don't lose concurrent updates
-                _queuedMessagesMap.update { map ->
-                    val currentQueue = map[convId] ?: emptyList()
-                    val localOnly = currentQueue.filter { it.source == QueuedMessageSource.LOCAL }
-                    map + (convId to (serverQueue + localOnly))
+                queueManager.updateCurrentQueue(convId) { queue ->
+                    val localOnly = queue.filter { it.source == QueuedMessageSource.LOCAL }
+                    serverQueue + localOnly
                 }
             }
         }
@@ -761,22 +577,28 @@ class ChatViewModel(
      */
     private fun updateProgressFromTodos(todos: List<TodoItemPayload>) {
         val convId = currentConversationId ?: return
-        val progressFlow = _progressStatusMap.getOrPut(convId) { MutableStateFlow(ProgressStatus()) }
 
-        // Find the current in-progress todo
-        val currentTodo = todos.find { todo -> todo.status == "in_progress" }
+        // Convert TodoItemPayload to TodoItem
+        val todoItems = todos.map { payload ->
+            com.claudecode.native.data.model.TodoItem(
+                content = payload.content,
+                status = payload.status,
+                activeForm = payload.activeForm,
+                priority = payload.priority,
+                id = payload.id
+            )
+        }
 
-        if (currentTodo != null) {
-            progressFlow.value = progressFlow.value.copy(
-                statusText = currentTodo.content,
-                isActive = true
-            )
-        } else if (todos.isNotEmpty()) {
-            // No in-progress todo, but todos exist - show processing
-            progressFlow.value = progressFlow.value.copy(
-                statusText = "Processing...",
-                isActive = true
-            )
+        scope.launch {
+            progressTracker.updateTodos(convId, todoItems)
+
+            // Update status text based on in-progress todo
+            val currentTodo = todos.find { it.status == "in_progress" }
+            if (currentTodo?.activeForm != null) {
+                progressTracker.updateStatusText(convId, currentTodo.activeForm)
+            } else if (todos.isNotEmpty()) {
+                progressTracker.updateStatusText(convId, "Processing...")
+            }
         }
     }
 
@@ -786,94 +608,6 @@ class ChatViewModel(
      *
      * Note: Skipped for filesystem-based sessions which don't have database conversation IDs.
      */
-    private fun syncLocalMessagesToServer() {
-        val queue = getCurrentQueue()
-        val localMessages = queue.filter { it.source == QueuedMessageSource.LOCAL }
-        if (localMessages.isEmpty()) return
-
-        DebugLogger.d(TAG, "Syncing ${localMessages.size} local messages to server")
-
-        // Process sequentially in a single coroutine to avoid race conditions
-        scope.launch {
-            val convId = _currentConversationIdFlow.value ?: return@launch
-
-            // Skip sync for filesystem-based sessions (no database conversation ID)
-            if (isFilesystemSession(convId)) {
-                DebugLogger.d(TAG, "Skipping queue sync for filesystem-based session")
-                return@launch
-            }
-
-            for (msg in localMessages) {
-                try {
-                    val response = queueApi.addToQueue(convId, msg.content)
-                    // Replace local message with server message
-                    updateCurrentQueue { q ->
-                        q.map { existing ->
-                            if (existing.id == msg.id) {
-                                QueuedMessage(
-                                    id = response.message.id,
-                                    content = response.message.content,
-                                    queuedAt = response.message.queuedAt,
-                                    source = QueuedMessageSource.SERVER,
-                                    images = msg.images // Keep local images
-                                )
-                            } else {
-                                existing
-                            }
-                        }
-                    }
-                    DebugLogger.d(TAG, "Synced local message to server: ${msg.id} -> ${response.message.id}")
-                } catch (e: Exception) {
-                    DebugLogger.e(TAG, "Failed to sync local message to server: ${e.message}", e)
-                    // Keep as local, will retry on next connection
-                }
-            }
-        }
-    }
-
-    /**
-     * Retries sending all queued messages after reconnection.
-     * Messages with images are sent with images, text-only messages are sent as text.
-     */
-    private fun retryQueuedMessages() {
-        val queue = getCurrentQueue()
-        if (queue.isEmpty()) return
-
-        DebugLogger.d(TAG, "Retrying ${queue.size} queued messages after reconnection")
-
-        queue.forEach { msg ->
-            scope.launch {
-                try {
-                    DebugLogger.d(TAG, "Retrying queued message (id=${msg.id})")
-                    if (msg.images.isEmpty()) {
-                        unifiedWebSocketClient.sendChat(msg.content)
-                    } else {
-                        val imageDtos = msg.images.map { img ->
-                            ImageContentDto(
-                                type = "base64",
-                                mediaType = img.mediaType,
-                                data = Base64.encode(img.data)
-                            )
-                        }
-                        unifiedWebSocketClient.sendChatWithImages(msg.content, imageDtos)
-                    }
-                    DebugLogger.d(TAG, "Successfully retried queued message (id=${msg.id}), waiting for dequeue event")
-                    // Don't remove from queue here - wait for CLI's dequeue event
-                } catch (e: Exception) {
-                    val isConnectionError = e is kotlinx.coroutines.CancellationException ||
-                        (e is IllegalStateException && e.message?.contains("not connected") == true)
-
-                    if (isConnectionError) {
-                        DebugLogger.d(TAG, "Connection error while retrying message (id=${msg.id}), will retry again: ${e.message}")
-                    } else {
-                        DebugLogger.e(TAG, "Failed to retry queued message (id=${msg.id}): ${e.message}", e)
-                        updateCurrentQueue { q -> q.filter { it.id != msg.id } }
-                        _error.value = "Failed to send message: ${e.message}"
-                    }
-                }
-            }
-        }
-    }
 
     /**
      * Connects to the WebSocket for the given conversation.
@@ -1035,13 +769,8 @@ class ChatViewModel(
         }
     }
 
-    /**
-     * Checks if the conversation ID represents a filesystem-based session.
-     * Filesystem sessions use "sessionId?project=encodedPath" format and
-     * don't have database conversation IDs.
-     */
     private fun isFilesystemSession(conversationId: String): Boolean {
-        return conversationId.contains("?project=")
+        return isFilesystemSessionId(conversationId)
     }
 
     /**
@@ -1533,25 +1262,34 @@ class ChatViewModel(
                         // Update progress tracking based on REST state
                         // This is separate from streaming state to ensure progress is always synced
                         if (stateResponse.isStreaming) {
-                            if (!streamingStartTimes.containsKey(convId)) {
+                            if (!progressTracker.isActive(convId)) {
                                 startProgressTracking("Processing")
                             }
                         } else {
                             // Server says idle - always stop progress if it's running
-                            if (streamingStartTimes.containsKey(convId)) {
+                            if (progressTracker.isActive(convId)) {
                                 DebugLogger.d(TAG, "ChatViewModel: Foreground sync - stopping progress (server confirmed idle)")
                                 stopProgressTracking()
-                                clearSentQueueMessages()
+                                queueManager.clearSentQueueMessages(_currentConversationIdFlow.value)
                             }
                         }
 
                         // Update todos
-                        val progressFlow = _progressStatusMap[convId]
-                        if (progressFlow != null && stateResponse.todos.isNotEmpty()) {
-                            val currentStatus = progressFlow.value
-                            if (currentStatus.todos != stateResponse.todos) {
-                                DebugLogger.d(TAG, "ChatViewModel: Foreground sync - updating todos: ${stateResponse.todos.size} items")
-                                progressFlow.value = currentStatus.copy(todos = stateResponse.todos)
+                        if (stateResponse.todos.isNotEmpty()) {
+                            val todoItems = stateResponse.todos.map { payload ->
+                                com.claudecode.native.data.model.TodoItem(
+                                    content = payload.content,
+                                    status = payload.status,
+                                    activeForm = payload.activeForm,
+                                    priority = payload.priority,
+                                    id = payload.id
+                                )
+                            }
+                            scope.launch {
+                                val updated = progressTracker.updateTodos(convId, todoItems)
+                                if (updated) {
+                                    DebugLogger.d(TAG, "ChatViewModel: Foreground sync - updating todos: ${todoItems.size} items")
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -1618,25 +1356,34 @@ class ChatViewModel(
                 // Update progress tracking based on REST state
                 if (stateResponse.isStreaming) {
                     // Server says streaming, start progress if not already
-                    if (!streamingStartTimes.containsKey(convId)) {
+                    if (!progressTracker.isActive(convId)) {
                         startProgressTracking("Processing")
                     }
                 } else {
                     // Server says not streaming (has stop_reason), stop progress
-                    if (streamingStartTimes.containsKey(convId)) {
+                    if (progressTracker.isActive(convId)) {
                         DebugLogger.d(TAG, "ChatViewModel: REST sync - stopping progress (server confirmed idle)")
                         stopProgressTracking()
-                        clearSentQueueMessages()
+                        queueManager.clearSentQueueMessages(_currentConversationIdFlow.value)
                     }
                 }
 
                 // Update todos in progress status (always update, todos are additive/safe)
-                val progressFlow = _progressStatusMap[convId]
-                if (progressFlow != null && stateResponse.todos.isNotEmpty()) {
-                    val currentStatus = progressFlow.value
-                    if (currentStatus.todos != stateResponse.todos) {
-                        DebugLogger.d(TAG, "ChatViewModel: REST sync - updating todos: ${stateResponse.todos.size} items")
-                        progressFlow.value = currentStatus.copy(todos = stateResponse.todos)
+                if (stateResponse.todos.isNotEmpty()) {
+                    val todoItems = stateResponse.todos.map { payload ->
+                        com.claudecode.native.data.model.TodoItem(
+                            content = payload.content,
+                            status = payload.status,
+                            activeForm = payload.activeForm,
+                            priority = payload.priority,
+                            id = payload.id
+                        )
+                    }
+                    scope.launch {
+                        val updated = progressTracker.updateTodos(convId, todoItems)
+                        if (updated) {
+                            DebugLogger.d(TAG, "ChatViewModel: REST sync - updating todos: ${todoItems.size} items")
+                        }
                     }
                 }
 
@@ -1735,16 +1482,15 @@ class ChatViewModel(
         // Both text and image messages can be queued
         if (_isStreaming.value) {
             DebugLogger.d(TAG, "sendMessage(): Streaming in progress - queueing message")
-            val currentQueue = getCurrentQueue()
-            if (currentQueue.size >= maxQueuedMessages) {
-                _error.value = "Message queue is full ($maxQueuedMessages messages). Please wait for current response to complete."
+            if (queueManager.isQueueFull(_currentConversationIdFlow.value)) {
+                _error.value = "Message queue is full (${QueueManager.MAX_QUEUED_MESSAGES} messages). Please wait for current response to complete."
                 return
             }
 
             // Add to server queue (falls back to local on error)
             scope.launch {
-                val queuedMessage = addToServerQueue(content, images)
-                updateCurrentQueue { queue -> queue + queuedMessage }
+                val queuedMessage = queueManager.addToServerQueue(_currentConversationIdFlow.value, content, images)
+                queueManager.updateCurrentQueue(_currentConversationIdFlow.value) { queue -> queue + queuedMessage }
                 DebugLogger.d(TAG, "Queued message (source=${queuedMessage.source}, id=${queuedMessage.id}, images=${images.size}): ${content.take(50)}...")
 
                 // Clear attached images after queuing
@@ -1955,7 +1701,7 @@ class ChatViewModel(
                 _isStreaming.value = false
             }
             stopProgressTracking()
-            clearSentQueueMessages()
+            queueManager.clearSentQueueMessages(_currentConversationIdFlow.value)
         }
     }
 
@@ -1965,7 +1711,7 @@ class ChatViewModel(
      * logs the queue state for debugging. Queue is cleared via dequeue events from CLI.
      */
     private suspend fun logQueueStatusOnStreamingComplete() {
-        val queue = getCurrentQueue()
+        val queue = queueManager.getCurrentQueue(_currentConversationIdFlow.value)
         if (queue.isNotEmpty()) {
             DebugLogger.d(TAG, "ChatViewModel: Streaming complete, ${queue.size} messages in queue (already sent to CLI)")
         }
@@ -1978,72 +1724,20 @@ class ChatViewModel(
      *
      * @param messageId The ID of the queued message to cancel
      */
+    /**
+     * Cancels a specific queued message by its ID.
+     * Delegates to QueueManager.
+     */
     fun cancelQueuedMessage(messageId: String) {
-        val queue = getCurrentQueue()
-        val message = queue.find { it.id == messageId }
-        when {
-            message == null -> {
-                DebugLogger.d(TAG, "ChatViewModel: Cannot cancel - message not found: $messageId")
-            }
-            message.source == QueuedMessageSource.CLI -> {
-                DebugLogger.d(TAG, "ChatViewModel: Cannot cancel CLI message from app: $messageId")
-                _error.value = "Cannot cancel messages queued from terminal"
-            }
-            else -> {
-                DebugLogger.d(TAG, "Cancelling queued message: $messageId (source=${message.source})")
-                // Remove from local state immediately
-                updateCurrentQueue { q -> q.filter { it.id != messageId } }
-
-                // If it's a server message, also remove from server
-                // (Skip for filesystem-based sessions which don't have database conversation IDs)
-                if (message.source == QueuedMessageSource.SERVER) {
-                    scope.launch {
-                        try {
-                            val convId = _currentConversationIdFlow.value ?: return@launch
-                            if (isFilesystemSession(convId)) return@launch // Skip filesystem sessions
-                            queueApi.removeFromQueue(convId, messageId)
-                            DebugLogger.d(TAG, "Removed message from server queue: $messageId")
-                        } catch (e: Exception) {
-                            DebugLogger.e(TAG, "Failed to remove message from server queue: ${e.message}", e)
-                            // Already removed from local state, server will eventually sync
-                        }
-                    }
-                }
-            }
-        }
+        queueManager.cancelQueuedMessage(_currentConversationIdFlow.value, messageId)
     }
 
     /**
-     * Clears all queued messages for the current conversation (both local and server).
-     * CLI-originated messages cannot be cleared from this app.
-     * Server messages are also cleared from the server via API call.
-     * Uses atomic update to prevent race conditions.
+     * Clears all queued messages for the current conversation.
+     * Delegates to QueueManager.
      */
     fun clearQueuedMessages() {
-        val queue = getCurrentQueue()
-        val cliMessages = queue.filter { it.source == QueuedMessageSource.CLI }
-        val clearableMessages = queue.filter { it.source != QueuedMessageSource.CLI }
-
-        if (clearableMessages.isNotEmpty()) {
-            DebugLogger.d(TAG, "Clearing ${clearableMessages.size} queued messages")
-            updateCurrentQueue { cliMessages }
-
-            // Clear server queue if any server messages
-            // (Skip for filesystem-based sessions which don't have database conversation IDs)
-            val hasServerMessages = clearableMessages.any { it.source == QueuedMessageSource.SERVER }
-            if (hasServerMessages) {
-                scope.launch {
-                    try {
-                        val convId = _currentConversationIdFlow.value ?: return@launch
-                        if (isFilesystemSession(convId)) return@launch // Skip filesystem sessions
-                        queueApi.clearQueue(convId)
-                        DebugLogger.d(TAG, "Cleared server queue")
-                    } catch (e: Exception) {
-                        DebugLogger.e(TAG, "Failed to clear server queue: ${e.message}", e)
-                    }
-                }
-            }
-        }
+        queueManager.clearQueuedMessages(_currentConversationIdFlow.value)
     }
 
     /**
@@ -2310,10 +2004,10 @@ class ChatViewModel(
                 }
                 // Remove the first queued message if any - it's likely the one that failed
                 // (FIFO queue: first message is the one being processed)
-                val queue = getCurrentQueue()
+                val queue = queueManager.getCurrentQueue(_currentConversationIdFlow.value)
                 if (queue.isNotEmpty()) {
                     DebugLogger.d(TAG, "ChatViewModel: Removing first queued message due to error")
-                    updateCurrentQueue { q -> q.drop(1) }
+                    queueManager.updateCurrentQueue(_currentConversationIdFlow.value) { q -> q.drop(1) }
                 }
             }
 
@@ -2328,7 +2022,7 @@ class ChatViewModel(
 
             MessageType.QUEUE_ADD, MessageType.QUEUE_REMOVE, MessageType.QUEUE_SYNC -> {
                 // Handle queue updates from server
-                handleQueueWebSocketMessage(message)
+                queueManager.handleQueueWebSocketMessage(message, _currentConversationIdFlow.value)
             }
         }
     }
@@ -2390,15 +2084,15 @@ class ChatViewModel(
                                     queuedAt = Clock.System.now().toEpochMilliseconds(),
                                     source = QueuedMessageSource.CLI
                                 )
-                                updateCurrentQueue { queue -> queue + cliQueuedMessage }
+                                queueManager.updateCurrentQueue(_currentConversationIdFlow.value) { queue -> queue + cliQueuedMessage }
                                 DebugLogger.d(TAG, "ChatViewModel: Queued message from CLI (id=${cliQueuedMessage.id}): ${queueContent.take(50)}...")
                             }
                             "dequeue", "clear" -> {
                                 // Remove first message from queue (FIFO)
-                                val queue = getCurrentQueue()
+                                val queue = queueManager.getCurrentQueue(_currentConversationIdFlow.value)
                                 if (queue.isNotEmpty()) {
                                     DebugLogger.d(TAG, "ChatViewModel: Dequeued message from CLI (operation=$operation)")
-                                    updateCurrentQueue { q -> q.drop(1) }
+                                    queueManager.updateCurrentQueue(_currentConversationIdFlow.value) { q -> q.drop(1) }
                                 }
                             }
                             "remove" -> {
@@ -2407,12 +2101,12 @@ class ChatViewModel(
                                 val removeTimestamp = claudeMsg.timestamp?.toEpochMilliseconds()
                                     ?: Clock.System.now().toEpochMilliseconds()
 
-                                val queue = getCurrentQueue()
+                                val queue = queueManager.getCurrentQueue(_currentConversationIdFlow.value)
                                 val messagesToRemove = queue.filter { it.queuedAt <= removeTimestamp }
 
                                 if (messagesToRemove.isNotEmpty()) {
                                     DebugLogger.d(TAG, "ChatViewModel: Remove operation - removing ${messagesToRemove.size} queued message(s) before timestamp $removeTimestamp")
-                                    updateCurrentQueue { q -> q.filter { it.queuedAt > removeTimestamp } }
+                                    queueManager.updateCurrentQueue(_currentConversationIdFlow.value) { q -> q.filter { it.queuedAt > removeTimestamp } }
                                 }
 
                                 // Add removed messages as pending user messages
@@ -2501,12 +2195,18 @@ class ChatViewModel(
                 // Update todos in progress status if available and changed
                 if (event.todos.isNotEmpty()) {
                     currentConversationId?.let { convId ->
-                        val progressFlow = _progressStatusMap[convId]
-                        if (progressFlow != null) {
-                            val current = progressFlow.value
-                            // Only update if todos actually changed to avoid unnecessary recomposition
-                            if (current.todos != event.todos) {
-                                progressFlow.value = current.copy(todos = event.todos)
+                        val todoItems = event.todos.map { payload ->
+                            com.claudecode.native.data.model.TodoItem(
+                                content = payload.content,
+                                status = payload.status,
+                                activeForm = payload.activeForm,
+                                priority = payload.priority,
+                                id = payload.id
+                            )
+                        }
+                        scope.launch {
+                            val updated = progressTracker.updateTodos(convId, todoItems)
+                            if (updated) {
                                 DebugLogger.d(TAG, "ChatViewModel: Updated todos (${event.todos.size} items, ${event.todos.count { it.isCompleted }} completed)")
                             }
                         }
@@ -2638,7 +2338,7 @@ class ChatViewModel(
                             // Also remove matching queued messages when user message is confirmed
                             if (newMsg.role == MessageRole.USER) {
                                 val normalizedContent = normalizeForComparison(newMsg.content)
-                                updateCurrentQueue { queue ->
+                                queueManager.updateCurrentQueue(_currentConversationIdFlow.value) { queue ->
                                     val matchingIndex = queue.indexOfFirst {
                                         normalizeForComparison(it.content) == normalizedContent
                                     }
@@ -2700,7 +2400,7 @@ class ChatViewModel(
                     // Stop progress tracking when session becomes idle
                     stopProgressTracking()
                     // Clear queued messages that were sent to CLI (fallback for missed dequeue events)
-                    clearSentQueueMessages()
+                    queueManager.clearSentQueueMessages(_currentConversationIdFlow.value)
                 }
             }
 
@@ -2771,36 +2471,9 @@ class ChatViewModel(
         // CLI should have processed them by now; if no dequeue event came, it's because
         // CLI finished processing all queued messages. This is a fallback to prevent
         // stuck queue state when dequeue events are missed.
-        clearSentQueueMessages()
+        queueManager.clearSentQueueMessages(_currentConversationIdFlow.value)
     }
 
-    /**
-     * Clears queued messages that were sent to CLI (LOCAL/SERVER sources).
-     * Called when streaming completes as a fallback when CLI's dequeue events are missed.
-     * CLI-sourced messages are NOT cleared as they're managed by CLI terminal.
-     *
-     * Uses atomic update pattern to ensure thread safety when multiple completion
-     * paths (WebSocket COMPLETE, HistoryWatch IDLE, REST sync) trigger simultaneously.
-     */
-    private fun clearSentQueueMessages() {
-        val convId = _currentConversationIdFlow.value ?: return
-
-        // Perform filtering inside update lambda for thread safety
-        _queuedMessagesMap.update { map ->
-            val queue = map[convId] ?: return@update map
-
-            // Keep only CLI messages, clear LOCAL and SERVER (which were sent to CLI)
-            val cliMessages = queue.filter { it.source == QueuedMessageSource.CLI }
-            val clearedCount = queue.size - cliMessages.size
-
-            if (clearedCount > 0) {
-                DebugLogger.d(TAG, "ChatViewModel: Cleared $clearedCount sent queue messages for conv=${convId.take(30)} (CLI messages kept: ${cliMessages.size})")
-                map + (convId to cliMessages)
-            } else {
-                map // Nothing to clear
-            }
-        }
-    }
 
     @OptIn(ExperimentalUuidApi::class)
     private fun generateMessageId(): String {
@@ -2820,36 +2493,8 @@ class ChatViewModel(
      */
     private fun startProgressTracking(statusText: String = "") {
         val convId = currentConversationId ?: return
-
-        streamingStartTimes[convId] = Clock.System.now().toEpochMilliseconds()
-
-        // Get or create progress status flow for this conversation
-        val progressFlow = _progressStatusMap.getOrPut(convId) { MutableStateFlow(ProgressStatus()) }
-
-        // Initialize progress status while preserving existing todos
-        val existingTodos = progressFlow.value.todos
-        progressFlow.value = ProgressStatus(
-            statusText = statusText,
-            elapsedSeconds = 0,
-            tokenCount = null,
-            thinkingSeconds = null,
-            isActive = true,
-            todos = existingTodos  // Preserve existing todos
-        )
-
-        // Cancel existing job for this conversation if any
-        elapsedTimeJobs[convId]?.cancel()
-
-        // Start elapsed time counter job for this conversation
-        elapsedTimeJobs[convId] = scope.launch {
-            while (true) {
-                delay(1000)
-                val startTime = streamingStartTimes[convId] ?: break
-                val elapsed = ((Clock.System.now().toEpochMilliseconds() - startTime) / 1000).toInt()
-                progressFlow.update { current ->
-                    current.copy(elapsedSeconds = elapsed)
-                }
-            }
+        scope.launch {
+            progressTracker.startProgressTracking(convId, statusText, scope)
         }
     }
 
@@ -2859,23 +2504,9 @@ class ChatViewModel(
      * Stops tracking for the current conversation only.
      */
     private fun stopProgressTracking() {
-        val convId = currentConversationId
-        DebugLogger.d(TAG, "ChatViewModel: stopProgressTracking() called, convId=$convId")
-        if (convId == null) {
-            DebugLogger.d(TAG, "ChatViewModel: stopProgressTracking() - convId is null, returning early")
-            return
-        }
-
-        elapsedTimeJobs[convId]?.cancel()
-        elapsedTimeJobs.remove(convId)
-        streamingStartTimes.remove(convId)
-
-        val progressFlow = _progressStatusMap[convId]
-        DebugLogger.d(TAG, "ChatViewModel: stopProgressTracking() - progressFlow exists: ${progressFlow != null}, setting isActive=false")
-        // Preserve existing todos when stopping progress tracking
-        progressFlow?.let { flow ->
-            val existingTodos = flow.value.todos
-            flow.value = ProgressStatus(isActive = false, todos = existingTodos)
+        val convId = currentConversationId ?: return
+        scope.launch {
+            progressTracker.stopProgressTracking(convId)
         }
     }
 
@@ -2885,10 +2516,9 @@ class ChatViewModel(
      * Unlike stopProgressTracking(), this completely removes the progress entry.
      */
     private fun clearProgressStateForConversation(convId: String) {
-        elapsedTimeJobs[convId]?.cancel()
-        elapsedTimeJobs.remove(convId)
-        streamingStartTimes.remove(convId)
-        _progressStatusMap.remove(convId)
+        scope.launch {
+            progressTracker.clearProgressState(convId)
+        }
     }
 
 }

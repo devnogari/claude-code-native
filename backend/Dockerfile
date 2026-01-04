@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
@@ -25,7 +25,10 @@ WORKDIR /app
 COPY --from=builder /ccn-server .
 COPY --from=builder /app/migrations ./migrations
 
-RUN adduser -D -g '' ccn
+# Create non-root user and directories with proper permissions
+RUN adduser -D -g '' ccn && \
+    mkdir -p /app/uploads && \
+    chown -R ccn:ccn /app
 USER ccn
 
 EXPOSE 8080

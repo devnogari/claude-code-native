@@ -14,7 +14,7 @@ import (
 func TestNewHistoryCache(t *testing.T) {
 	logger := zap.NewNop()
 
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, "~/.claude")
 
 	// Should not error even if ~/.claude/projects doesn't exist
 	require.NoError(t, err)
@@ -27,7 +27,7 @@ func TestNewHistoryCache(t *testing.T) {
 
 func TestHistoryCache_GetProjects(t *testing.T) {
 	logger := zap.NewNop()
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, "~/.claude")
 	require.NoError(t, err)
 	defer cache.Close()
 
@@ -38,7 +38,7 @@ func TestHistoryCache_GetProjects(t *testing.T) {
 
 func TestHistoryCache_GetProject_NotFound(t *testing.T) {
 	logger := zap.NewNop()
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, "~/.claude")
 	require.NoError(t, err)
 	defer cache.Close()
 
@@ -49,7 +49,7 @@ func TestHistoryCache_GetProject_NotFound(t *testing.T) {
 
 func TestHistoryCache_Subscribe(t *testing.T) {
 	logger := zap.NewNop()
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, "~/.claude")
 	require.NoError(t, err)
 	defer cache.Close()
 
@@ -81,7 +81,7 @@ func TestHistoryCache_Subscribe(t *testing.T) {
 
 func TestHistoryCache_Refresh(t *testing.T) {
 	logger := zap.NewNop()
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, "~/.claude")
 	require.NoError(t, err)
 	defer cache.Close()
 
@@ -95,7 +95,7 @@ func TestHistoryCache_Refresh(t *testing.T) {
 
 func TestHistoryCache_GetSessionMessages_NotFound(t *testing.T) {
 	logger := zap.NewNop()
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, "~/.claude")
 	require.NoError(t, err)
 	defer cache.Close()
 
@@ -107,7 +107,7 @@ func TestHistoryCache_GetSessionMessages_NotFound(t *testing.T) {
 
 func TestHistoryCache_GetSessionMessagesPaginated_NotFound(t *testing.T) {
 	logger := zap.NewNop()
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, "~/.claude")
 	require.NoError(t, err)
 	defer cache.Close()
 
@@ -119,7 +119,7 @@ func TestHistoryCache_GetSessionMessagesPaginated_NotFound(t *testing.T) {
 
 func TestHistoryCache_ThreadSafety(t *testing.T) {
 	logger := zap.NewNop()
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, "~/.claude")
 	require.NoError(t, err)
 	defer cache.Close()
 
@@ -168,7 +168,8 @@ func TestHistoryCache_ThreadSafety(t *testing.T) {
 func TestHistoryCache_WithTestDir(t *testing.T) {
 	// Create a temporary test directory structure
 	tmpDir := t.TempDir()
-	projectsDir := filepath.Join(tmpDir, ".claude", "projects")
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
 
 	// Create test project directory
 	testProjectPath := filepath.Join(projectsDir, "Users-test-myproject")
@@ -184,16 +185,132 @@ func TestHistoryCache_WithTestDir(t *testing.T) {
 	err = os.WriteFile(sessionFile, []byte(sessionContent), 0644)
 	require.NoError(t, err)
 
-	// Create HistoryCache with custom path
-	// Note: HistoryCache uses os.UserHomeDir() internally, so this test
-	// verifies the parsing logic by ensuring no panics occur
+	// Create HistoryCache with temp directory path
 	logger := zap.NewNop()
-	cache, err := NewHistoryCache(logger)
+	cache, err := NewHistoryCache(logger, claudeDir)
 	require.NoError(t, err)
 	defer cache.Close()
 
 	// Verify cache is ready
 	assert.True(t, cache.ready)
+
+	// Verify project was loaded from temp directory
+	projects := cache.GetProjects()
+	assert.Len(t, projects, 1)
+	assert.Equal(t, "Users-test-myproject", projects[0].ID)
+	assert.Len(t, projects[0].Sessions, 1)
+	assert.Equal(t, "test-session-123", projects[0].Sessions[0].ID)
+}
+
+func TestHistoryCache_GetSessionMessages_WithTestDir(t *testing.T) {
+	// Setup temp directory
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+	testProjectPath := filepath.Join(projectsDir, "test-project")
+	err := os.MkdirAll(testProjectPath, 0755)
+	require.NoError(t, err)
+
+	// Create session with multiple messages
+	sessionContent := `{"type":"summary","sessionId":"session-001","summary":"Test session"}
+{"type":"user","uuid":"uuid-1","message":{"role":"user","content":"Hello"}}
+{"type":"assistant","uuid":"uuid-2","message":{"role":"assistant","content":"Hi there!"}}
+{"type":"user","uuid":"uuid-3","message":{"role":"user","content":"How are you?"}}
+{"type":"assistant","uuid":"uuid-4","message":{"role":"assistant","content":"I'm doing well!"}}
+`
+	sessionFile := filepath.Join(testProjectPath, "session-001.jsonl")
+	err = os.WriteFile(sessionFile, []byte(sessionContent), 0644)
+	require.NoError(t, err)
+
+	logger := zap.NewNop()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	// Test GetSessionMessages
+	messages, err := cache.GetSessionMessages("test-project", "session-001")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(messages), 4)
+}
+
+func TestHistoryCache_GetSessionMessagesPaginated_WithTestDir(t *testing.T) {
+	// Setup temp directory
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+	testProjectPath := filepath.Join(projectsDir, "paginated-project")
+	err := os.MkdirAll(testProjectPath, 0755)
+	require.NoError(t, err)
+
+	// Create session with messages
+	sessionContent := `{"type":"summary","sessionId":"session-pag"}
+{"type":"user","uuid":"u1","message":{"role":"user","content":"Msg 1"}}
+{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":"Reply 1"}}
+{"type":"user","uuid":"u2","message":{"role":"user","content":"Msg 2"}}
+{"type":"assistant","uuid":"a2","message":{"role":"assistant","content":"Reply 2"}}
+`
+	sessionFile := filepath.Join(testProjectPath, "session-pag.jsonl")
+	err = os.WriteFile(sessionFile, []byte(sessionContent), 0644)
+	require.NoError(t, err)
+
+	logger := zap.NewNop()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	// Test pagination
+	result, err := cache.GetSessionMessagesPaginated("paginated-project", "session-pag", 2, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 4, result.Total)
+	assert.Equal(t, 2, result.Limit)
+	assert.True(t, result.HasMore)
+}
+
+func TestHistoryCache_DeleteProject_WithTestDir(t *testing.T) {
+	// Setup temp directory
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+
+	// Create two projects
+	project1 := filepath.Join(projectsDir, "project-one")
+	project2 := filepath.Join(projectsDir, "project-two")
+	err := os.MkdirAll(project1, 0755)
+	require.NoError(t, err)
+	err = os.MkdirAll(project2, 0755)
+	require.NoError(t, err)
+
+	// Create session files
+	sessionContent := `{"type":"summary","sessionId":"s1"}
+{"type":"user","message":{"role":"user","content":"Hello"}}
+`
+	err = os.WriteFile(filepath.Join(project1, "s1.jsonl"), []byte(sessionContent), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(project2, "s2.jsonl"), []byte(sessionContent), 0644)
+	require.NoError(t, err)
+
+	logger := zap.NewNop()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	// Verify both projects loaded
+	projects := cache.GetProjects()
+	assert.Len(t, projects, 2)
+
+	// Delete one project
+	cache.DeleteProject("project-one")
+
+	// Verify only one project remains
+	projects = cache.GetProjects()
+	assert.Len(t, projects, 1)
+	assert.Equal(t, "project-two", projects[0].ID)
+
+	// Verify excluded file was created
+	excludedFile := filepath.Join(projectsDir, ".excluded_projects")
+	content, err := os.ReadFile(excludedFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "project-one")
 }
 
 func TestPaginatedMessages_Struct(t *testing.T) {
@@ -210,4 +327,95 @@ func TestPaginatedMessages_Struct(t *testing.T) {
 	assert.Equal(t, 50, pm.Limit)
 	assert.Equal(t, 0, pm.Offset)
 	assert.True(t, pm.HasMore)
+}
+
+// TestHistoryCache_InheritedSession_GetMessages tests that GetSessionMessages
+// can retrieve messages from inherited sessions (sessions in parent project)
+func TestHistoryCache_InheritedSession_GetMessages(t *testing.T) {
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+
+	// Create parent project with a session
+	parentPath := filepath.Join(projectsDir, "Users-test-parent-project")
+	err := os.MkdirAll(parentPath, 0755)
+	require.NoError(t, err)
+
+	sessionContent := `{"type":"summary","sessionId":"inherited-session","summary":"Parent session"}
+{"type":"user","uuid":"u1","message":{"role":"user","content":"Hello from parent"}}
+{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":"Reply from parent"}}
+`
+	err = os.WriteFile(filepath.Join(parentPath, "inherited-session.jsonl"), []byte(sessionContent), 0644)
+	require.NoError(t, err)
+
+	// Create child project (no sessions - will inherit from parent)
+	childPath := filepath.Join(projectsDir, "Users-test-parent-project-subdir")
+	err = os.MkdirAll(childPath, 0755)
+	require.NoError(t, err)
+
+	logger := zap.NewNop()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	// Child project should have inherited sessions
+	project, found := cache.GetProject("Users-test-parent-project-subdir")
+	require.True(t, found, "child project should be found")
+	require.Len(t, project.Sessions, 1, "child should inherit 1 session from parent")
+	assert.Equal(t, "inherited-session", project.Sessions[0].ID)
+	assert.Equal(t, "Users-test-parent-project", project.Sessions[0].SourceEncodedPath)
+
+	// GetSessionMessages should work with child project path
+	messages, err := cache.GetSessionMessages("Users-test-parent-project-subdir", "inherited-session")
+	require.NoError(t, err, "GetSessionMessages should find inherited session")
+	assert.GreaterOrEqual(t, len(messages), 2, "should have at least 2 messages")
+
+	// Verify actual content from parent project
+	var foundParentContent bool
+	for _, msg := range messages {
+		if msg.Message != nil && msg.Message.Content == "Hello from parent" {
+			foundParentContent = true
+			break
+		}
+	}
+	assert.True(t, foundParentContent, "should contain message content from parent project")
+}
+
+// TestHistoryCache_InheritedSession_GetMessagesPaginated tests that GetSessionMessagesPaginated
+// can retrieve messages from inherited sessions
+func TestHistoryCache_InheritedSession_GetMessagesPaginated(t *testing.T) {
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+
+	// Create parent project with a session
+	parentPath := filepath.Join(projectsDir, "Users-dev-main-repo")
+	err := os.MkdirAll(parentPath, 0755)
+	require.NoError(t, err)
+
+	sessionContent := `{"type":"summary","sessionId":"paginated-inherited","summary":"Parent session"}
+{"type":"user","uuid":"u1","message":{"role":"user","content":"Msg 1"}}
+{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":"Reply 1"}}
+{"type":"user","uuid":"u2","message":{"role":"user","content":"Msg 2"}}
+{"type":"assistant","uuid":"a2","message":{"role":"assistant","content":"Reply 2"}}
+`
+	err = os.WriteFile(filepath.Join(parentPath, "paginated-inherited.jsonl"), []byte(sessionContent), 0644)
+	require.NoError(t, err)
+
+	// Create child project (worktree-like path)
+	childPath := filepath.Join(projectsDir, "Users-dev-main-repo--worktrees-feature")
+	err = os.MkdirAll(childPath, 0755)
+	require.NoError(t, err)
+
+	logger := zap.NewNop()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	// GetSessionMessagesPaginated should work with child project path
+	result, err := cache.GetSessionMessagesPaginated("Users-dev-main-repo--worktrees-feature", "paginated-inherited", 2, 0)
+	require.NoError(t, err, "GetSessionMessagesPaginated should find inherited session")
+	assert.Equal(t, 4, result.Total, "should have 4 total messages")
+	assert.Equal(t, 2, result.Limit)
+	assert.True(t, result.HasMore)
 }
