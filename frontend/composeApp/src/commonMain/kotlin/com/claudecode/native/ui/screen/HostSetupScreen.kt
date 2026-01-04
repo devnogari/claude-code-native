@@ -47,14 +47,19 @@ fun HostSetupScreen(
     }
 
     fun saveAndProceed() {
-        val trimmedHost = host.trim()
-        if (trimmedHost.isEmpty()) {
+        // Clean the input: remove protocol prefix and trailing path
+        val cleanedHost = host.trim()
+            .removePrefix("http://")
+            .removePrefix("https://")
+            .substringBefore("/")  // Remove any path component
+
+        if (cleanedHost.isEmpty()) {
             localError = "Server host is required"
             return
         }
 
-        // Basic validation - should contain host:port or just host
-        if (!trimmedHost.matches(Regex("^[a-zA-Z0-9.-]+(:\\d+)?$"))) {
+        // Validate the cleaned host format - should contain host:port or just host
+        if (!cleanedHost.matches(Regex("^[a-zA-Z0-9.-]+(:\\d+)?$"))) {
             localError = "Invalid host format. Use 'hostname:port' or 'hostname'"
             return
         }
@@ -62,7 +67,7 @@ fun HostSetupScreen(
         // Add server to the list and proceed
         serverViewModel.addServer(
             name = "Default Server",
-            host = trimmedHost,
+            host = cleanedHost,
             description = "Initial server configuration"
         )
         onHostConfigured()

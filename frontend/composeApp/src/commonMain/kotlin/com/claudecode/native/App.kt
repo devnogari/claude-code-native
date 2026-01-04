@@ -89,8 +89,10 @@ private suspend fun validateTokenOrClearOnUnauthorized(
             serverViewModel.clearCurrentToken()
         }
         false
-    } catch (e: Exception) {
-        // Network or other errors - don't clear token, user can retry
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        // Catch-all for network errors (connection refused, timeout, DNS failures)
+        // and any other pre-request exceptions that aren't wrapped in ApiException.
+        // These are transient errors - preserve the token so user can retry.
         false
     }
 }
