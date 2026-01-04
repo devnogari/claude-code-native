@@ -90,7 +90,6 @@ class HistoryWatchClient(
         private const val API_PATH = "/api/v1"
     }
 
-    /** Get the current WebSocket base URL from stored server host */
     private val baseUrl: String
         get() = "ws://${TokenStorage.getServerHost() ?: DEFAULT_HOST}$API_PATH"
 
@@ -103,7 +102,6 @@ class HistoryWatchClient(
     private var connectionJob: Job? = null
     private var currentToken: String? = null
 
-    // Track current subscription
     private var currentSessionId: String? = null
     private var currentEncodedPath: String? = null
 
@@ -113,22 +111,17 @@ class HistoryWatchClient(
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
-    /**
-     * Ensure connection to the unified WebSocket endpoint.
-     * If already connected, just sends a subscribe message.
-     */
     private suspend fun ensureConnected(token: String) {
         if (_isConnected.value && session != null && currentToken == token) {
-            return // Already connected
+            return
         }
 
-        // Disconnect if token changed
         if (currentToken != null && currentToken != token) {
             disconnectInternal()
         }
 
         if (connectionJob != null) {
-            return // Connection in progress
+            return
         }
 
         currentToken = token
@@ -136,40 +129,29 @@ class HistoryWatchClient(
         connectionJob = scope.launch {
             try {
                 val wsUrl = "$baseUrl/claude-history/ws/user"
-                println("HistoryWatchClient: Connecting to unified endpoint $wsUrl")
 
                 httpClient.webSocket(urlString = wsUrl, request = {
                     headers.append("Authorization", "Bearer $token")
                 }) {
                     session = this
                     _isConnected.value = true
-                    println("HistoryWatchClient: Connected to unified endpoint")
 
-                    // Listen for messages
                     for (frame in incoming) {
                         when (frame) {
-                            is Frame.Text -> {
-                                val text = frame.readText()
-                                handleMessage(text)
-                            }
+                            is Frame.Text -> handleMessage(frame.readText())
                             is Frame.Close -> {
-                                println("HistoryWatchClient: Received Close frame")
                                 _events.emit(HistoryWatchEvent.Disconnected)
                                 break
                             }
                             else -> {}
                         }
                     }
-                    println("HistoryWatchClient: Receive loop ended")
                 }
             } catch (e: CancellationException) {
-                // Normal cancellation - don't log as error
-                println("HistoryWatchClient: Connection cancelled")
+                // Normal cancellation
             } catch (e: Exception) {
-                println("HistoryWatchClient: Connection error: ${e.message}")
                 _events.emit(HistoryWatchEvent.Error(e.message ?: "Connection failed"))
             } finally {
-                println("HistoryWatchClient: Connection closed, cleaning up")
                 _isConnected.value = false
                 session = null
                 connectionJob = null
@@ -177,9 +159,9 @@ class HistoryWatchClient(
             }
         }
 
-        // Wait for connection to be established
+        // Wait for connection
         var attempts = 0
-        while (!_isConnected.value && attempts < 50) { // 5 seconds max
+        while (!_isConnected.value && attempts < 50) {
             delay(100)
             attempts++
         }
@@ -187,40 +169,27 @@ class HistoryWatchClient(
 
     /**
      * Subscribe to watch a specific session for file changes.
-     * Uses the unified connection - no need to reconnect.
-     *
-     * @param encodedPath The encoded project path
-     * @param sessionId The session ID to watch
-     * @param token JWT token for authentication
      */
     suspend fun subscribe(encodedPath: String, sessionId: String, token: String) {
-        // If already subscribed to the same session, skip
         if (currentSessionId == sessionId && currentEncodedPath == encodedPath && _isConnected.value) {
-            println("HistoryWatchClient: Already subscribed to $sessionId, skipping")
             return
         }
 
-        // Ensure we have a connection
         ensureConnected(token)
 
         if (!_isConnected.value) {
-            println("HistoryWatchClient: Failed to establish connection")
             _events.emit(HistoryWatchEvent.Error("Failed to establish connection"))
             return
         }
 
-        // Update tracking
         currentSessionId = sessionId
         currentEncodedPath = encodedPath
 
-        // Send subscribe message
         val subscribeMessage = HistoryWatchSubscribeMessage(
             encodedPath = encodedPath,
             sessionId = sessionId
         )
-        val messageJson = json.encodeToString(subscribeMessage)
-        println("HistoryWatchClient: Sending subscribe for $encodedPath/$sessionId")
-        session?.send(messageJson)
+        session?.send(json.encodeToString(subscribeMessage))
     }
 
     /**
@@ -228,40 +197,28 @@ class HistoryWatchClient(
      */
     suspend fun unsubscribe() {
         if (currentSessionId == null && currentEncodedPath == null) {
-            return // Not subscribed
+            return
         }
 
         currentSessionId = null
         currentEncodedPath = null
 
         if (_isConnected.value && session != null) {
-            val unsubscribeMessage = HistoryWatchUnsubscribeMessage()
-            val messageJson = json.encodeToString(unsubscribeMessage)
-            println("HistoryWatchClient: Sending unsubscribe")
-            session?.send(messageJson)
+            session?.send(json.encodeToString(HistoryWatchUnsubscribeMessage()))
         }
     }
 
-    /**
-     * Legacy connect method for backward compatibility.
-     * Internally calls subscribe.
-     */
+    /** Legacy connect method - calls subscribe internally */
     suspend fun connect(encodedPath: String, sessionId: String, token: String) {
         subscribe(encodedPath, sessionId, token)
     }
 
-    /**
-     * Legacy disconnect method for backward compatibility.
-     * Internally calls unsubscribe (doesn't close the connection).
-     */
+    /** Legacy disconnect method - calls unsubscribe internally */
     suspend fun disconnect() {
         unsubscribe()
     }
 
-    /**
-     * Actually close the WebSocket connection.
-     * Only call this when the app is closing or user logs out.
-     */
+    /** Close the WebSocket connection (for app shutdown or logout) */
     suspend fun close() {
         disconnectInternal()
     }
@@ -269,16 +226,12 @@ class HistoryWatchClient(
     private suspend fun disconnectInternal() {
         val job = connectionJob
         connectionJob = null
-
-        // Cancel and wait for the job to complete
         job?.cancelAndJoin()
 
-        // Close the session after job is cancelled
         try {
             session?.close()
-        } catch (e: Exception) {
-            // Ignore close errors
-        }
+        } catch (_: Exception) {}
+
         session = null
         _isConnected.value = false
         currentSessionId = null
@@ -286,9 +239,6 @@ class HistoryWatchClient(
         currentToken = null
     }
 
-    /**
-     * Send a ping message
-     */
     suspend fun sendPing() {
         session?.send("""{"type":"ping"}""")
     }
@@ -299,7 +249,6 @@ class HistoryWatchClient(
 
             when (message.type) {
                 HistoryWatchMessageType.SUBSCRIBED -> {
-                    println("HistoryWatchClient: Subscribed to ${message.sessionId}")
                     _events.emit(
                         HistoryWatchEvent.Connected(
                             sessionId = message.sessionId ?: currentSessionId ?: "",
@@ -308,16 +257,12 @@ class HistoryWatchClient(
                     )
                 }
                 HistoryWatchMessageType.UNSUBSCRIBED -> {
-                    println("HistoryWatchClient: Unsubscribed")
                     _events.emit(HistoryWatchEvent.Unsubscribed)
                 }
                 HistoryWatchMessageType.NEW_MESSAGES -> {
                     val sessionId = currentSessionId
                     val encodedPath = currentEncodedPath
                     if (sessionId != null && encodedPath != null) {
-                        // Always emit event when sessionState is present, even if messages is null/empty.
-                        // Backend uses `omitempty` which omits empty arrays, resulting in null here.
-                        // This is critical for detecting STREAMING -> IDLE state transitions.
                         _events.emit(HistoryWatchEvent.NewMessages(
                             sessionId = sessionId,
                             encodedPath = encodedPath,
@@ -328,16 +273,11 @@ class HistoryWatchClient(
                     }
                 }
                 HistoryWatchMessageType.ERROR -> {
-                    println("HistoryWatchClient: Server error: ${message.error}")
                     _events.emit(HistoryWatchEvent.Error(message.error ?: "Unknown error"))
                 }
-                HistoryWatchMessageType.PONG -> {
-                    // Pong received, connection is alive
-                }
+                HistoryWatchMessageType.PONG -> {}
             }
         } catch (e: Exception) {
-            println("HistoryWatchClient: Failed to parse message: ${e.message}")
-            e.printStackTrace()
             _events.emit(HistoryWatchEvent.Error("Failed to parse message: ${e.message}"))
         }
     }
