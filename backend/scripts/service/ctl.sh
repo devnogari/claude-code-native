@@ -317,6 +317,80 @@ windows_help() {
 }
 
 # ============================================
+# Version & Auto-upgrade functions
+# ============================================
+
+VERSION_FILE="$BACKEND_DIR/.current-version"
+
+get_current_version() {
+    if [[ -f "$VERSION_FILE" ]]; then
+        cat "$VERSION_FILE"
+    else
+        # Fallback to git describe
+        (cd "$PROJECT_DIR" && git describe --tags --abbrev=0 2>/dev/null) || echo "unknown"
+    fi
+}
+
+get_latest_version() {
+    (cd "$PROJECT_DIR" && git fetch --tags -q && git describe --tags --abbrev=0 origin/develop 2>/dev/null) || \
+    (cd "$PROJECT_DIR" && git tag --sort=-v:refname | head -1)
+}
+
+check_upgrade() {
+    log_info "Checking for updates..."
+
+    local current=$(get_current_version)
+    local latest=$(get_latest_version)
+
+    echo "  Current: $current"
+    echo "  Latest:  $latest"
+
+    if [[ "$current" == "$latest" ]]; then
+        log_success "Already up to date"
+        return 1
+    else
+        log_warn "Update available: $current → $latest"
+        return 0
+    fi
+}
+
+do_upgrade() {
+    local latest=$(get_latest_version)
+
+    if [[ -z "$latest" ]]; then
+        log_error "No tags found"
+        exit 1
+    fi
+
+    log_info "Upgrading to $latest..."
+
+    # Checkout the tag
+    (cd "$PROJECT_DIR" && git fetch --tags && git checkout "$latest")
+
+    # Build and restart
+    log_info "Building..."
+    (cd "$BACKEND_DIR" && go build -o ccn-backend ./cmd/server)
+
+    # Save version
+    echo "$latest" > "$VERSION_FILE"
+
+    # Restart service
+    case "$OS" in
+        macos) macos_restart ;;
+        linux) linux_restart ;;
+    esac
+
+    log_success "Upgraded to $latest"
+}
+
+auto_upgrade() {
+    # Check and upgrade if new version available
+    if check_upgrade; then
+        do_upgrade
+    fi
+}
+
+# ============================================
 # Usage
 # ============================================
 
@@ -337,6 +411,12 @@ show_usage() {
     echo "  status          Show backend + database status"
     echo "  logs [-f]       Show backend logs (-f to follow)"
     echo ""
+    echo "Version commands:"
+    echo "  version         Show current version"
+    echo "  check-upgrade   Check for new version"
+    echo "  upgrade         Upgrade to latest tag"
+    echo "  auto-upgrade    Check and upgrade if available (for cron)"
+    echo ""
     echo "Database commands:"
     echo "  db start        Start PostgreSQL container"
     echo "  db stop         Stop PostgreSQL container"
@@ -353,6 +433,12 @@ case "$1" in
     # Stack commands
     up)   stack_up ;;
     down) stack_down ;;
+
+    # Version commands
+    version)       echo "$(get_current_version)" ;;
+    check-upgrade) check_upgrade ;;
+    upgrade)       do_upgrade ;;
+    auto-upgrade)  auto_upgrade ;;
 
     # Database commands
     db)

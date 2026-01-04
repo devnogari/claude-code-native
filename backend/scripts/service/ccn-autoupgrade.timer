@@ -1,0 +1,11 @@
+[Unit]
+Description=CCN Backend Auto-upgrade Check Timer
+
+[Timer]
+# Check every hour
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
