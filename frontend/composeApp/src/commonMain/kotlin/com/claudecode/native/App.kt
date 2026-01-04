@@ -103,18 +103,32 @@ private suspend fun validateTokenOrClearOnUnauthorized(
  * If there's a saved token, validates it and returns ProjectList or Login accordingly.
  * If no token exists, returns Login screen.
  *
+ * IMPORTANT: This function syncs the token from ServerRepository to ApiClient before
+ * making any API calls. This ensures the correct token is used even when switching
+ * between servers, preventing race conditions where ApiClient might have a stale token.
+ *
  * @return The appropriate screen to navigate to
  */
 private suspend fun determineAuthScreen(
     serverRepository: ServerRepository,
     claudeHistoryApi: ClaudeHistoryApi,
-    serverViewModel: ServerViewModel
+    serverViewModel: ServerViewModel,
+    apiClient: ApiClient
 ): Screen {
     val currentServer = serverRepository.currentServer
-    return if (currentServer?.authToken != null) {
+    val savedToken = currentServer?.authToken
+
+    return if (savedToken != null) {
+        // CRITICAL: Sync token from ServerRepository to ApiClient before API call
+        // This prevents race conditions during server switching where ApiClient
+        // might have a stale token from the previous server
+        apiClient.setAuthToken(savedToken)
+
         val isValid = validateTokenOrClearOnUnauthorized(claudeHistoryApi, serverViewModel)
         if (isValid) Screen.ProjectList else Screen.Login
     } else {
+        // No saved token - clear ApiClient token to ensure clean state
+        apiClient.clearAuthToken()
         Screen.Login
     }
 }
@@ -164,7 +178,9 @@ fun AppNavigation() {
         if (serverSwitched) {
             serverViewModel.resetServerSwitchedState()
             // Check if new server has valid token and navigate accordingly
-            currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel)
+            // determineAuthScreen syncs the token from ServerRepository to ApiClient
+            // before making the API call, ensuring correct token is used
+            currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel, apiClient)
         }
     }
 
@@ -183,7 +199,8 @@ fun AppNavigation() {
         serverViewModel.initializeWithCurrentServer()
 
         // Check for saved token and navigate accordingly
-        currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel)
+        // determineAuthScreen syncs the token from ServerRepository to ApiClient
+        currentScreen = determineAuthScreen(serverRepository, claudeHistoryApi, serverViewModel, apiClient)
         isInitializing = false
     }
 
