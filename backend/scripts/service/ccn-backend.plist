@@ -22,6 +22,10 @@
         <string>__HOME__/.claude</string>
         <key>LOG_LEVEL</key>
         <string>info</string>
+        <key>PATH</key>
+        <string>__PATH__</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
