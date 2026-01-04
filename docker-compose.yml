@@ -1,28 +1,4 @@
 services:
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: ccn-backend
-    restart: unless-stopped
-    environment:
-      - PORT=8080
-      - DATABASE_URL=postgres://ccn:${DB_PASSWORD}@postgres:5432/claude_code_native?sslmode=disable
-      - JWT_SECRET=${JWT_SECRET}
-      - CLAUDE_PROJECTS_PATH=/claude-projects
-      - LOG_LEVEL=info
-    volumes:
-      - ~/.claude:/claude-projects:ro
-      - claude-sessions:/var/lib/ccn/sessions
-      - /Users/probe/git:/Users/probe/git
-    depends_on:
-      postgres:
-        condition: service_healthy
-    ports:
-      - "8083:8080"
-    networks:
-      - ccn-network
-
   postgres:
     image: postgres:18-alpine
     container_name: ccn-postgres
@@ -47,8 +23,6 @@ services:
 volumes:
   postgres-data:
     name: ccn-postgres-data
-  claude-sessions:
-    name: ccn-sessions
 
 networks:
   ccn-network:
