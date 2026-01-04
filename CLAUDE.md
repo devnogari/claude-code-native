@@ -73,6 +73,24 @@ docker-compose down              # Stop services
 
 **Required env vars**: `DB_PASSWORD`, `JWT_SECRET` (32+ chars) - see `.env.example`
 
+### Backend Daemon (Native)
+For local development, run backend as a daemon process:
+```bash
+# Start daemon (logs to /tmp/backend.log)
+cd backend && nohup go run ./cmd/server > /tmp/backend.log 2>&1 &
+
+# View logs
+tail -f /tmp/backend.log
+
+# Stop daemon
+pkill -f "claude-code-native.*server"
+```
+
+**Log paths:**
+- Development: `/tmp/backend.log`
+- Docker: `docker-compose logs -f backend`
+- Native process stdout: Check terminal where `go run` was executed
+
 ## Architecture
 
 ### Backend Module Pattern (Uber fx DI)

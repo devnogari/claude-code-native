@@ -177,6 +177,35 @@ func TestOutgoingMessage_JSONMarshaling(t *testing.T) {
 		assert.NotContains(t, jsonStr, `"error":""`)
 		assert.NotContains(t, jsonStr, `"status":""`)
 	})
+
+	t.Run("marshals subscribed message with conversation_id at top level", func(t *testing.T) {
+		// Subscribed messages must include conversation_id at top level for frontend compatibility
+		convID := uuid.Must(uuid.NewV7())
+		payload := SubscribedPayload{
+			ConversationID: convID.String(),
+		}
+		msg := OutgoingMessage{
+			Type:           MessageTypeSubscribed,
+			ConversationID: convID.String(),
+			Payload:        payload,
+		}
+
+		data, err := json.Marshal(msg)
+		require.NoError(t, err)
+
+		var parsed map[string]interface{}
+		err = json.Unmarshal(data, &parsed)
+		require.NoError(t, err)
+
+		// Verify conversation_id is at top level (critical for frontend subscription confirmation)
+		assert.Equal(t, "subscribed", parsed["type"])
+		assert.Equal(t, convID.String(), parsed["conversation_id"], "conversation_id must be at top level for frontend")
+
+		// Verify payload also contains it
+		payloadMap, ok := parsed["payload"].(map[string]interface{})
+		require.True(t, ok, "payload should be a map")
+		assert.Equal(t, convID.String(), payloadMap["conversation_id"])
+	})
 }
 
 // --- Mock Repositories ---
