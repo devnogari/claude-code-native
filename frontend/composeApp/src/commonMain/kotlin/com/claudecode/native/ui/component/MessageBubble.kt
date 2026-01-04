@@ -47,14 +47,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.onPointerEvent
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.ui.viewmodel.ChatMessage
 import com.claudecode.native.ui.viewmodel.ContentBlock
 import com.claudecode.native.ui.viewmodel.ImageSource
 import com.claudecode.native.ui.viewmodel.ToolUseInfo
 import com.claudecode.native.util.ClipboardManager
+import com.claudecode.native.util.onHover
 import com.claudecode.native.util.Platform
 
 /**
@@ -68,7 +67,6 @@ import com.claudecode.native.util.Platform
  * @param message The chat message to display
  * @param modifier Optional modifier for the component
  */
-@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun MessageBubble(
     message: ChatMessage,
@@ -98,13 +96,9 @@ fun MessageBubble(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .then(
-                if (isDesktop) {
-                    Modifier.onPointerEvent(PointerEventType.Enter) { isHovered = true }
-                        .onPointerEvent(PointerEventType.Exit) { isHovered = false }
-                } else {
-                    Modifier
-                }
+            .onHover(
+                onEnter = { isHovered = true },
+                onExit = { isHovered = false }
             ),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top

@@ -1,3 +1,5 @@
+@file:OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
+
 package com.claudecode.native.util
 
 import androidx.compose.runtime.*

@@ -1271,7 +1271,7 @@ class ChatViewModel(
                         }
 
                         // Update todos
-                        stateResponse.todos?.takeIf { it.isNotEmpty() }?.let { todos ->
+                        stateResponse.todos.takeIf { it.isNotEmpty() }?.let { todos ->
                             val todoItems = todos.map { payload ->
                                 com.claudecode.native.data.model.TodoItem(
                                     content = payload.content,
@@ -1384,7 +1384,7 @@ class ChatViewModel(
                     }
                 }
 
-                DebugLogger.d(TAG, "ChatViewModel: REST sync complete - state=${stateResponse.sessionState}, streaming=${stateResponse.isStreaming}, todos=${todos?.size ?: 0}")
+                DebugLogger.d(TAG, "ChatViewModel: REST sync complete - state=${stateResponse.sessionState}, streaming=${stateResponse.isStreaming}, todos=${todos.size}")
 
             } catch (e: CancellationException) {
                 throw e
