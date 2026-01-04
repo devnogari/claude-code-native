@@ -208,10 +208,11 @@ fun AppNavigation() {
                         if (serverState != null) {
                             currentScreen = Screen.Login
                         } else {
-                            // Server setup timed out - show error state
-                            // Navigate to HostSetup with an error indication
-                            // (the HostSetupScreen can display the error via serverViewModel.error)
-                            serverViewModel.setError("Server configuration timed out. Please try again.")
+                            // Server setup timed out - show error only if no other error already set
+                            // (addServer might have set a more specific error)
+                            if (serverViewModel.error.value == null) {
+                                serverViewModel.setError("Server configuration timed out. Please try again.")
+                            }
                         }
                     }
                 }
