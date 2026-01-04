@@ -197,14 +197,18 @@ data class SubscribePayload(
 /**
  * Payload for session_state WebSocket message (unified WebSocket).
  * Contains the current state of a conversation session.
+ *
+ * Note: todos and queue are nullable because the server may send null explicitly.
+ * kotlinx.serialization requires nullable types to handle explicit null values;
+ * default values only apply when the field is missing from JSON, not when it's null.
  */
 @Serializable
 data class SessionStatePayload(
     @SerialName("conversation_id") val conversationId: String,
     @SerialName("session_state") val sessionState: String,
     @SerialName("is_streaming") val isStreaming: Boolean,
-    val todos: List<TodoItemPayload> = emptyList(),
-    val queue: List<QueueMessagePayload> = emptyList()
+    val todos: List<TodoItemPayload>? = null,
+    val queue: List<QueueMessagePayload>? = null
 )
 
 /**

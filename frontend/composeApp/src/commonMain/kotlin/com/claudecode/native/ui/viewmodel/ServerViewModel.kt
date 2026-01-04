@@ -5,12 +5,15 @@ import com.claudecode.native.data.model.ServerConfig
 import com.claudecode.native.data.model.ServerListState
 import com.claudecode.native.data.repository.ServerRepository
 import com.claudecode.native.data.websocket.UnifiedWebSocketClient
+import com.claudecode.native.util.DebugLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+private const val TAG = "ServerViewModel"
 
 /**
  * ViewModel for managing server configurations and switching between servers.
@@ -159,7 +162,10 @@ class ServerViewModel(
      * flag signals the app to refresh and clear stale conversation state.
      */
     fun switchToServer(id: String) {
+        DebugLogger.d(TAG) { "switchToServer: targetId=$id, currentId=${serverRepository.currentServerId}" }
+
         if (serverRepository.currentServerId == id) {
+            DebugLogger.d(TAG) { "switchToServer: Already on this server, returning" }
             return // Already on this server
         }
 
@@ -175,14 +181,18 @@ class ServerViewModel(
 
                 // Apply new server to clients
                 val server = serverRepository.currentServer
+                DebugLogger.d(TAG) { "switchToServer: switched to ${server?.name}, tokenExists=${server?.authToken != null}" }
+
                 if (server != null) {
                     applyServerToClients(server)
                     _message.value = "Switched to '${server.name}'"
                     _serverSwitched.value = true
                 }
+                DebugLogger.d(TAG) { "switchToServer: completed" }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                DebugLogger.e(TAG) { "switchToServer: ERROR - ${e.message}" }
                 _error.value = e.message ?: "Failed to switch server"
             } finally {
                 _isLoading.value = false
@@ -212,8 +222,16 @@ class ServerViewModel(
      * Saves the auth token for the current server after login.
      */
     fun saveCurrentToken(token: String) {
-        val currentId = serverRepository.currentServerId ?: return
+        val currentId = serverRepository.currentServerId
+        DebugLogger.d(TAG) { "saveCurrentToken: currentServerId=$currentId" }
+
+        if (currentId == null) {
+            DebugLogger.e(TAG) { "saveCurrentToken: ERROR - currentServerId is null, cannot save token!" }
+            return
+        }
+
         serverRepository.updateToken(currentId, token)
+        DebugLogger.d(TAG) { "saveCurrentToken: completed" }
     }
 
     /**
