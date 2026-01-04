@@ -6,6 +6,8 @@
 *.dylib
 /ccn-server
 /server
+/ccn-backend
+/dist/
 
 # Test binary
 *.test
