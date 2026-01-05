@@ -3,7 +3,7 @@ package claude
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -456,7 +456,7 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 func DecodeProjectPath(encoded string) string {
 	// Try URL decoding first (new format with %XX encoding)
 	if strings.Contains(encoded, "%") {
-		if decoded, err := urlDecode(encoded); err == nil {
+		if decoded, err := url.PathUnescape(encoded); err == nil {
 			// Validate decoded path looks reasonable (starts with /)
 			if strings.HasPrefix(decoded, "/") {
 				return decoded
@@ -466,41 +466,6 @@ func DecodeProjectPath(encoded string) string {
 
 	// Fall back to legacy dash-based decoding
 	return decodeDashPath(encoded)
-}
-
-// urlDecode decodes a URL-encoded string
-func urlDecode(encoded string) (string, error) {
-	var result strings.Builder
-	i := 0
-	for i < len(encoded) {
-		if encoded[i] == '%' && i+2 < len(encoded) {
-			// Decode %XX
-			high, errH := hexCharToInt(encoded[i+1])
-			low, errL := hexCharToInt(encoded[i+2])
-			if errH == nil && errL == nil {
-				result.WriteByte(byte(high<<4 | low))
-				i += 3
-				continue
-			}
-		}
-		result.WriteByte(encoded[i])
-		i++
-	}
-	return result.String(), nil
-}
-
-// hexCharToInt converts a hex character to its integer value
-func hexCharToInt(c byte) (int, error) {
-	switch {
-	case c >= '0' && c <= '9':
-		return int(c - '0'), nil
-	case c >= 'a' && c <= 'f':
-		return int(c - 'a' + 10), nil
-	case c >= 'A' && c <= 'F':
-		return int(c - 'A' + 10), nil
-	default:
-		return 0, fmt.Errorf("invalid hex char: %c", c)
-	}
 }
 
 // decodeDashPath handles the legacy dash-based path encoding

@@ -60,7 +60,8 @@ class OperationModeTest {
     fun `fromString should parse bypassPermissions`() {
         assertEquals(OperationMode.BYPASS, fromString("bypassPermissions"))
         assertEquals(OperationMode.BYPASS, fromString("BYPASSPERMISSIONS"))
-        assertEquals(OperationMode.BYPASS, fromString("bypass"))
+        // Note: "bypass" alias was removed to match backend constants exactly
+        assertEquals(OperationMode.DEFAULT, fromString("bypass"))
     }
 
     @Test
@@ -87,7 +88,7 @@ class OperationModeTest {
 
     @Test
     fun `displayName should be human readable`() {
-        assertEquals("Default", OperationMode.DEFAULT.displayName)
+        assertEquals("Auto", OperationMode.DEFAULT.displayName)
         assertEquals("Plan", OperationMode.PLAN.displayName)
         assertEquals("Bypass", OperationMode.BYPASS.displayName)
     }

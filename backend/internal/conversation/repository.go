@@ -228,14 +228,10 @@ func (r *Repository) UpdatePermissionMode(ctx context.Context, id uuid.UUID, mod
 		return fmt.Errorf("database not initialized")
 	}
 
-	// Validate mode
-	validModes := map[string]bool{
-		"default":           true,
-		"plan":              true,
-		"bypassPermissions": true,
-	}
-	if !validModes[mode] {
-		return fmt.Errorf("invalid permission mode: %s", mode)
+	// Validate mode using centralized constants
+	if !IsValidPermissionMode(mode) {
+		return fmt.Errorf("invalid permission mode: %s (valid: %s, %s, %s)",
+			mode, PermissionModeDefault, PermissionModePlan, PermissionModeBypass)
 	}
 
 	result, err := r.db.NewUpdate().

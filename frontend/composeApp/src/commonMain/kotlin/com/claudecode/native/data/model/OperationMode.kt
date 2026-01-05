@@ -42,11 +42,12 @@ enum class OperationMode {
 
         /**
          * Converts a string to OperationMode, defaulting to DEFAULT if unknown.
+         * Only accepts exact mode values that match backend constants.
          */
         fun fromString(value: String): OperationMode = when (value.lowercase()) {
             "default" -> DEFAULT
             "plan" -> PLAN
-            "bypasspermissions", "bypass" -> BYPASS
+            "bypasspermissions" -> BYPASS
             else -> DEFAULT
         }
 
@@ -65,7 +66,7 @@ enum class OperationMode {
      */
     val displayName: String
         get() = when (this) {
-            DEFAULT -> "Default"
+            DEFAULT -> "Auto"
             PLAN -> "Plan"
             BYPASS -> "Bypass"
         }
@@ -75,7 +76,7 @@ enum class OperationMode {
      */
     val description: String
         get() = when (this) {
-            DEFAULT -> "Standard mode with convenience permissions"
+            DEFAULT -> "Skip all permission checks (auto-approve)"
             PLAN -> "Review plans before execution"
             BYPASS -> "Skip all permission checks"
         }

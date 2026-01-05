@@ -306,11 +306,15 @@ func (p *Process) StartInteractive() error {
 		// Bypass mode: Skip all permission prompts
 		args = append(args, "--dangerously-skip-permissions")
 		p.logger.Debug("starting in bypass mode")
-	default:
+	case "default":
 		// Default mode: Use bypass permissions for automated usage
-		// This maintains backwards compatibility with existing behavior
 		args = append(args, "--dangerously-skip-permissions")
 		p.logger.Debug("starting in default mode (bypass permissions)")
+	default:
+		// Unknown mode: log warning and fall back to default behavior
+		p.logger.Warn("unknown permission mode, falling back to default behavior (bypass permissions)",
+			zap.String("mode", p.PermissionMode))
+		args = append(args, "--dangerously-skip-permissions")
 	}
 
 	// Check if a Claude session file already exists for this conversation
