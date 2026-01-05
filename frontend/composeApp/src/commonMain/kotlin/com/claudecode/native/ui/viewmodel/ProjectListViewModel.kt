@@ -4,6 +4,7 @@ import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.model.ClaudeProject
 import com.claudecode.native.data.model.ClaudeSession
 import com.claudecode.native.data.repository.FavoriteRepository
+import com.claudecode.native.util.DebugLogger
 import com.claudecode.native.util.toUserMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +51,10 @@ class ProjectListViewModel(
     private val favoriteRepository: FavoriteRepository,
     private val scope: CoroutineScope
 ) {
+    companion object {
+        private const val TAG = "ProjectListViewModel"
+    }
+
     private val _uiState = MutableStateFlow(ProjectListUiState())
     val uiState: StateFlow<ProjectListUiState> = _uiState.asStateFlow()
 
@@ -163,7 +168,7 @@ class ProjectListViewModel(
      */
     fun refreshAfterSessionCreated(sessionId: String, encodedPath: String) {
         scope.launch {
-            println("ProjectListViewModel: Waiting for session $sessionId to appear in project $encodedPath")
+            DebugLogger.d(TAG, "Waiting for session $sessionId to appear in project $encodedPath")
 
             // Show loading indicator during polling
             _uiState.value = _uiState.value.copy(isRefreshing = true)
@@ -188,7 +193,7 @@ class ProjectListViewModel(
                     val sessionExists = project?.sessions?.any { it.id == sessionId } == true
 
                     if (sessionExists) {
-                        println("ProjectListViewModel: Session $sessionId found after $attempt attempts")
+                        DebugLogger.d(TAG, "Session $sessionId found after $attempt attempts")
                         found = true
 
                         // Update UI with the new projects list
@@ -203,17 +208,17 @@ class ProjectListViewModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    println("ProjectListViewModel: Error checking for session: ${e.message}")
+                    DebugLogger.d(TAG, "Error checking for session: ${e.message}")
                 }
 
                 // Wait before next attempt with exponential backoff
-                println("ProjectListViewModel: Session not found, attempt $attempt/$maxRetries, waiting ${currentDelay}ms")
+                DebugLogger.d(TAG, "Session not found, attempt $attempt/$maxRetries, waiting ${currentDelay}ms")
                 kotlinx.coroutines.delay(currentDelay)
                 currentDelay = (currentDelay * 1.5).toLong().coerceAtMost(2000L)
             }
 
             if (!found) {
-                println("ProjectListViewModel: Session $sessionId not found after $maxRetries attempts, doing final refresh")
+                DebugLogger.d(TAG, "Session $sessionId not found after $maxRetries attempts, doing final refresh")
                 // Fall back to regular refresh if session wasn't found
                 refresh()
             }

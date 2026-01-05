@@ -22,7 +22,7 @@ func TestManager_CreateProcess(t *testing.T) {
 	workDir := "/tmp/test"
 	env := []string{"TEST_VAR=1"}
 
-	process, err := manager.CreateProcess(convID, workDir, env)
+	process, err := manager.CreateProcess(convID, workDir, env, "default")
 
 	require.NoError(t, err)
 	require.NotNil(t, process)
@@ -37,11 +37,11 @@ func TestManager_CreateProcess_ReturnsExisting(t *testing.T) {
 	workDir := "/tmp/test"
 
 	// Create first process
-	process1, err := manager.CreateProcess(convID, workDir, nil)
+	process1, err := manager.CreateProcess(convID, workDir, nil, "default")
 	require.NoError(t, err)
 
 	// Create again with same conversation ID
-	process2, err := manager.CreateProcess(convID, "/different/dir", nil)
+	process2, err := manager.CreateProcess(convID, "/different/dir", nil, "default")
 	require.NoError(t, err)
 
 	// Should return same process
@@ -63,7 +63,7 @@ func TestManager_GetProcess_AfterCreation(t *testing.T) {
 	convID, _ := uuid.NewV7()
 	workDir := "/tmp/test"
 
-	created, err := manager.CreateProcess(convID, workDir, nil)
+	created, err := manager.CreateProcess(convID, workDir, nil, "default")
 	require.NoError(t, err)
 
 	retrieved := manager.GetProcess(convID)
@@ -77,7 +77,7 @@ func TestManager_StopProcess(t *testing.T) {
 	convID, _ := uuid.NewV7()
 
 	// Create a process
-	process, err := manager.CreateProcess(convID, "/tmp/test", nil)
+	process, err := manager.CreateProcess(convID, "/tmp/test", nil, "default")
 	require.NoError(t, err)
 
 	// Stop the process
@@ -114,7 +114,7 @@ func TestManager_StopAll(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		convIDs[i], _ = uuid.NewV7()
 		var err error
-		processes[i], err = manager.CreateProcess(convIDs[i], "/tmp/test", nil)
+		processes[i], err = manager.CreateProcess(convIDs[i], "/tmp/test", nil, "default")
 		require.NoError(t, err)
 	}
 
@@ -144,7 +144,7 @@ func TestManager_ListProcesses(t *testing.T) {
 	convIDs := make([]uuid.UUID, 3)
 	for i := 0; i < 3; i++ {
 		convIDs[i], _ = uuid.NewV7()
-		_, err := manager.CreateProcess(convIDs[i], "/tmp/test", nil)
+		_, err := manager.CreateProcess(convIDs[i], "/tmp/test", nil, "default")
 		require.NoError(t, err)
 	}
 
@@ -178,7 +178,7 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			_, err := manager.CreateProcess(convIDs[idx], "/tmp/test", nil)
+			_, err := manager.CreateProcess(convIDs[idx], "/tmp/test", nil, "default")
 			assert.NoError(t, err)
 		}(i)
 	}

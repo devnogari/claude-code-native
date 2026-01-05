@@ -15,6 +15,35 @@ import kotlin.uuid.Uuid
 @OptIn(ExperimentalUuidApi::class)
 object MessageParser {
 
+    /** Regex for normalizing whitespace in content comparison. */
+    private val WHITESPACE_REGEX = Regex("\\s+")
+
+    /**
+     * Regex to match @ file mentions at the start of content.
+     * Claude CLI adds these for images, format: @/path/to/file followed by space.
+     */
+    private val AT_MENTION_REGEX = Regex("""^(@\S+\s+)+""")
+
+    /**
+     * Normalizes content for hash comparison during message deduplication.
+     *
+     * This function:
+     * - Strips @ file mentions from the beginning (added by Claude CLI for images)
+     * - Trims whitespace and normalizes internal whitespace to single spaces
+     *
+     * This ensures hash comparison works even when content is modified
+     * during serialization/deserialization (e.g., trailing spaces removed,
+     * adjacent text blocks merged).
+     *
+     * @param content The content string to normalize
+     * @return Normalized content suitable for comparison
+     */
+    fun normalizeForComparison(content: String): String {
+        // Strip @ mentions from beginning (e.g., "@/tmp/claude-image-xxx.png message")
+        val withoutMentions = content.replace(AT_MENTION_REGEX, "")
+        return withoutMentions.trim().replace(WHITESPACE_REGEX, " ")
+    }
+
     /**
      * Extracts content blocks from message content, preserving the order of text and tool usages.
      * Returns an ordered list of ContentBlock items (Text and Tool interleaved as they appear).

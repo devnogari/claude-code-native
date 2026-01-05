@@ -173,4 +173,56 @@ class WebSocketClientTest {
         assertEquals("ping", MessageType.PING)
         assertEquals("pong", MessageType.PONG)
     }
+
+    @Test
+    fun `MessageType should have mode-related types`() {
+        assertEquals("mode_change", MessageType.MODE_CHANGE)
+        assertEquals("mode_changed", MessageType.MODE_CHANGED)
+        assertEquals("mode_state", MessageType.MODE_STATE)
+    }
+
+    @Test
+    fun `ModeChangeMessage should create correct message`() {
+        val message = ModeChangeMessage(mode = "plan")
+
+        assertEquals(MessageType.MODE_CHANGE, message.type)
+        assertEquals("plan", message.mode)
+    }
+
+    @Test
+    fun `ModeChangedPayload should parse all fields`() {
+        val payload = ModeChangedPayload(
+            conversationId = "conv123",
+            mode = "bypassPermissions",
+            changedBy = "user@example.com"
+        )
+
+        assertEquals("conv123", payload.conversationId)
+        assertEquals("bypassPermissions", payload.mode)
+        assertEquals("user@example.com", payload.changedBy)
+    }
+
+    @Test
+    fun `ModeChangedPayload should allow null changedBy`() {
+        val payload = ModeChangedPayload(
+            conversationId = "conv123",
+            mode = "default",
+            changedBy = null
+        )
+
+        assertEquals("conv123", payload.conversationId)
+        assertEquals("default", payload.mode)
+        assertEquals(null, payload.changedBy)
+    }
+
+    @Test
+    fun `ModeStatePayload should parse all fields`() {
+        val payload = ModeStatePayload(
+            conversationId = "conv456",
+            mode = "plan"
+        )
+
+        assertEquals("conv456", payload.conversationId)
+        assertEquals("plan", payload.mode)
+    }
 }

@@ -221,3 +221,34 @@ func (r *Repository) SetFavorite(ctx context.Context, id uuid.UUID, isFavorite b
 
 	return err
 }
+
+// UpdatePermissionMode updates the permission mode for a conversation
+func (r *Repository) UpdatePermissionMode(ctx context.Context, id uuid.UUID, mode string) error {
+	if r.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	// Validate mode using centralized constants
+	if !IsValidPermissionMode(mode) {
+		return fmt.Errorf("invalid permission mode: %s (valid: %s, %s, %s)",
+			mode, PermissionModeDefault, PermissionModePlan, PermissionModeBypass)
+	}
+
+	result, err := r.db.NewUpdate().
+		Model((*Conversation)(nil)).
+		Set("permission_mode = ?", mode).
+		Set("updated_at = NOW()").
+		Where("id = ?", id).
+		Exec(ctx)
+
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("conversation not found: %s", id)
+	}
+
+	return nil
+}
