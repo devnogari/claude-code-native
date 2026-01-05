@@ -51,6 +51,14 @@ const (
 	MessageTypeHistoryUnsubscribed = "history_unsubscribed"
 	// MessageTypeNewMessages is sent by server with new messages from history watch
 	MessageTypeNewMessages = "new_messages"
+
+	// Permission mode message types
+	// MessageTypeModeChange is sent by client to change the permission mode
+	MessageTypeModeChange = "mode_change"
+	// MessageTypeModeChanged is sent by server to confirm mode change to all clients
+	MessageTypeModeChanged = "mode_changed"
+	// MessageTypeModeState is sent by server with current mode state (on subscribe)
+	MessageTypeModeState = "mode_state"
 )
 
 // ImageContent represents an image attachment in a chat message
@@ -65,7 +73,7 @@ type ImageContent struct {
 
 // IncomingMessage represents a message received from the WebSocket client
 type IncomingMessage struct {
-	// Type is the message type (chat, stop, ping, subscribe, unsubscribe, auth)
+	// Type is the message type (chat, stop, ping, subscribe, unsubscribe, auth, mode_change)
 	Type string `json:"type"`
 	// Content is the message content (optional, used for chat messages)
 	Content string `json:"content,omitempty"`
@@ -78,6 +86,8 @@ type IncomingMessage struct {
 	SessionID string `json:"session_id,omitempty"`
 	// EncodedPath is the encoded project path (for filesystem sessions)
 	EncodedPath string `json:"encoded_path,omitempty"`
+	// Mode is the permission mode (for mode_change message type)
+	Mode string `json:"mode,omitempty"`
 }
 
 // OutgoingMessage represents a message sent to the WebSocket client
@@ -210,4 +220,36 @@ type TodoItem struct {
 	ActiveForm *string `json:"active_form,omitempty"`
 	Priority   *string `json:"priority,omitempty"`
 	ID         *string `json:"id,omitempty"`
+}
+
+// PermissionMode represents valid permission mode values
+type PermissionMode string
+
+const (
+	// PermissionModeDefault is the default permission mode
+	PermissionModeDefault PermissionMode = "default"
+	// PermissionModePlan enables plan mode (review before execution)
+	PermissionModePlan PermissionMode = "plan"
+	// PermissionModeBypass bypasses all permission checks
+	PermissionModeBypass PermissionMode = "bypassPermissions"
+)
+
+// ValidPermissionModes contains all valid permission mode values
+var ValidPermissionModes = map[PermissionMode]bool{
+	PermissionModeDefault: true,
+	PermissionModePlan:    true,
+	PermissionModeBypass:  true,
+}
+
+// ModeChangedPayload is the payload for mode_changed messages (server -> clients)
+type ModeChangedPayload struct {
+	ConversationID string `json:"conversation_id"`
+	Mode           string `json:"mode"`
+	ChangedBy      string `json:"changed_by,omitempty"`
+}
+
+// ModeStatePayload is the payload for mode_state messages (server -> client on subscribe)
+type ModeStatePayload struct {
+	ConversationID string `json:"conversation_id"`
+	Mode           string `json:"mode"`
 }

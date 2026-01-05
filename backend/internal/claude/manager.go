@@ -32,18 +32,28 @@ func NewManager(logger *zap.Logger) *Manager {
 }
 
 // CreateProcess creates a new process for a conversation or returns existing one
-func (m *Manager) CreateProcess(convID uuid.UUID, workDir string, env []string) (*Process, error) {
+// permissionMode can be "default", "plan", or "bypassPermissions"
+func (m *Manager) CreateProcess(convID uuid.UUID, workDir string, env []string, permissionMode string) (*Process, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Return existing process if one exists
 	if existing, exists := m.processes[convID]; exists {
+		// Update permission mode if changed (will apply on next StartInteractive)
+		if existing.PermissionMode != permissionMode {
+			m.logger.Info("permission mode changed for existing process",
+				zap.String("convID", convID.String()),
+				zap.String("oldMode", existing.PermissionMode),
+				zap.String("newMode", permissionMode))
+			existing.PermissionMode = permissionMode
+		}
 		return existing, nil
 	}
 
-	// Create new process
+	// Create new process with permission mode
 	process := NewProcess(convID, workDir, m.logger)
 	process.Env = env
+	process.PermissionMode = permissionMode
 	m.processes[convID] = process
 
 	return process, nil

@@ -29,6 +29,7 @@ fun SettingsScreen(
     onLogout: () -> Unit
 ) {
     val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val bypassDefault by viewModel.bypassDefault.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val message by viewModel.message.collectAsState()
@@ -88,6 +89,18 @@ fun SettingsScreen(
                             Text("Enable dark theme", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(checked = isDarkMode, onCheckedChange = { viewModel.setDarkMode(it) })
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Bypass Permissions", style = MaterialTheme.typography.bodyLarge)
+                            Text("Skip permission prompts for new conversations", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = bypassDefault, onCheckedChange = { viewModel.setBypassDefault(it) })
                     }
                 }
 

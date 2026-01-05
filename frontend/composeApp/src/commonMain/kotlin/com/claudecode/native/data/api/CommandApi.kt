@@ -7,20 +7,17 @@ import com.claudecode.native.data.model.ListCommandsRequest
 import com.claudecode.native.data.model.ListCommandsResponse
 
 /**
- * API client for slash command operations.
- * Handles command listing and execution.
+ * Interface for slash command operations.
+ * Enables testing with fake/mock implementations.
  */
-class CommandApi(private val client: ApiClient) {
-
+interface CommandApiInterface {
     /**
      * Lists all available commands (built-in and custom).
      *
      * @param projectPath Path to the current project for project-level commands
      * @return ListCommandsResponse with built-in and custom commands
      */
-    suspend fun listCommands(projectPath: String): ListCommandsResponse {
-        return client.post("/commands/list", ListCommandsRequest(projectPath))
-    }
+    suspend fun listCommands(projectPath: String): ListCommandsResponse
 
     /**
      * Executes a slash command.
@@ -36,6 +33,24 @@ class CommandApi(private val client: ApiClient) {
         commandPath: String? = null,
         args: List<String> = emptyList(),
         context: ExecuteContext = ExecuteContext()
+    ): ExecuteCommandResponse
+}
+
+/**
+ * API client for slash command operations.
+ * Handles command listing and execution.
+ */
+class CommandApi(private val client: ApiClient) : CommandApiInterface {
+
+    override suspend fun listCommands(projectPath: String): ListCommandsResponse {
+        return client.post("/commands/list", ListCommandsRequest(projectPath))
+    }
+
+    override suspend fun executeCommand(
+        commandName: String,
+        commandPath: String?,
+        args: List<String>,
+        context: ExecuteContext
     ): ExecuteCommandResponse {
         return client.post(
             "/commands/execute",

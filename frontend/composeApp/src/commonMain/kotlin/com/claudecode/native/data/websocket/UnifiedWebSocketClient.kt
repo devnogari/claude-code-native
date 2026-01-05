@@ -1,5 +1,7 @@
 package com.claudecode.native.data.websocket
 
+import com.claudecode.native.data.model.OperationMode
+import com.claudecode.native.data.model.OperationMode.Companion.toServerValue
 import com.claudecode.native.data.storage.TokenStorage
 import com.claudecode.native.util.DebugLogger
 import io.ktor.client.*
@@ -117,6 +119,11 @@ class UnifiedWebSocketClient(
     private val _historyWatchEvents = MutableSharedFlow<HistoryWatchEvent>()
     /** Flow of history watch events (new messages, errors, etc.) */
     val historyWatchEvents: SharedFlow<HistoryWatchEvent> = _historyWatchEvents.asSharedFlow()
+
+    // Permission mode state
+    private val _operationMode = MutableStateFlow(OperationMode.DEFAULT)
+    /** Current operation mode for the subscribed conversation */
+    val operationMode: StateFlow<OperationMode> = _operationMode.asStateFlow()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -303,6 +310,28 @@ class UnifiedWebSocketClient(
                     }
                 }
             }
+            MessageType.MODE_CHANGED -> {
+                message.payload?.let { payload ->
+                    try {
+                        val modeChangedPayload = json.decodeFromJsonElement(ModeChangedPayload.serializer(), payload)
+                        _operationMode.value = OperationMode.fromString(modeChangedPayload.mode)
+                        DebugLogger.d(TAG, "Mode changed: ${modeChangedPayload.mode} by ${modeChangedPayload.changedBy}")
+                    } catch (e: Exception) {
+                        DebugLogger.e(TAG, "Failed to parse mode_changed: ${e.message}")
+                    }
+                }
+            }
+            MessageType.MODE_STATE -> {
+                message.payload?.let { payload ->
+                    try {
+                        val modeStatePayload = json.decodeFromJsonElement(ModeStatePayload.serializer(), payload)
+                        _operationMode.value = OperationMode.fromString(modeStatePayload.mode)
+                        DebugLogger.d(TAG, "Mode state received: ${modeStatePayload.mode}")
+                    } catch (e: Exception) {
+                        DebugLogger.e(TAG, "Failed to parse mode_state: ${e.message}")
+                    }
+                }
+            }
         }
     }
 
@@ -480,6 +509,7 @@ class UnifiedWebSocketClient(
             currentSessionId = null
             currentEncodedPath = null
             _sessionState.value = null
+            _operationMode.value = OperationMode.DEFAULT
             DebugLogger.d(TAG, "Unsubscribed from conversation: $currentConversationId")
         }
     }
@@ -597,6 +627,25 @@ class UnifiedWebSocketClient(
     }
 
     /**
+     * Sends a mode change request to the server.
+     *
+     * @param mode The new operation mode to set
+     */
+    suspend fun sendModeChange(mode: OperationMode) {
+        mutex.withLock {
+            val currentSession = session
+            if (currentSession == null || _connectionState.value != ConnectionState.Connected) {
+                DebugLogger.e(TAG, "Cannot send mode change - not connected")
+                throw IllegalStateException("WebSocket is not connected")
+            }
+            val modeMessage = ModeChangeMessage(mode = mode.toServerValue())
+            val jsonMsg = json.encodeToString(ModeChangeMessage.serializer(), modeMessage)
+            DebugLogger.d(TAG, "Sending mode change: ${mode.toServerValue()}")
+            currentSession.send(Frame.Text(jsonMsg))
+        }
+    }
+
+    /**
      * Closes the WebSocket connection and cleans up resources.
      * Safe to call even if not connected.
      * This is a manual disconnect - auto-reconnection will NOT occur.
@@ -625,6 +674,7 @@ class UnifiedWebSocketClient(
             currentSessionId = null
             currentEncodedPath = null
             _sessionState.value = null
+            _operationMode.value = OperationMode.DEFAULT
 
             _connectionState.value = ConnectionState.Disconnected
         }

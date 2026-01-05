@@ -6,6 +6,8 @@ package com.claudecode.native.data.repository
 object PreferenceKeys {
     const val DARK_MODE = "dark_mode"
     const val SERVER_URL = "server_url"
+    /** Whether to use bypass permissions mode by default for new conversations */
+    const val BYPASS_DEFAULT = "bypass_default"
 }
 
 /**

@@ -48,6 +48,7 @@ const (
 type ConversationRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*conversation.Conversation, error)
 	Update(ctx context.Context, c *conversation.Conversation) error
+	UpdatePermissionMode(ctx context.Context, id uuid.UUID, mode string) error
 }
 
 // ProjectRepository defines the interface for project data access
@@ -495,12 +496,25 @@ func (h *Handler) handleChatMessage(client *Client, content string, images []Ima
 	h.sendStatusToClient(client, "processing")
 	h.logger.Debug("sent processing status")
 
+	// Get permission mode for this session
+	var permissionMode string = "default"
+	if !isFilesystemSession {
+		// For DB-backed sessions, get permission mode from conversation
+		ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+		conv, err := h.convRepo.FindByID(ctx, convID)
+		cancel()
+		if err == nil && conv.PermissionMode != "" {
+			permissionMode = conv.PermissionMode
+		}
+	}
+
 	// Get or create Claude process for this conversation
 	// Use claudeSessionID (from ClaudeSession if synced, or convID if new)
 	h.logger.Debug("creating claude process",
 		zap.String("projectPath", projectPath),
-		zap.String("claudeSessionID", claudeSessionID.String()))
-	process, err := h.claudeMgr.CreateProcess(claudeSessionID, projectPath, nil)
+		zap.String("claudeSessionID", claudeSessionID.String()),
+		zap.String("permissionMode", permissionMode))
+	process, err := h.claudeMgr.CreateProcess(claudeSessionID, projectPath, nil, permissionMode)
 	if err != nil {
 		h.logger.Error("failed to create claude process", zap.Error(err))
 		h.sendErrorToClient(client, "failed to start Claude")
@@ -765,7 +779,12 @@ func (h *Handler) handleCompactionRecovery(client *Client, oldProcess *claude.Pr
 	}
 
 	// Create a new process - it will use --resume automatically since session file exists
-	newProcess, err := h.claudeMgr.CreateProcess(claudeSessionID, projectPath, nil)
+	// Use the old process's permission mode for recovery
+	permissionMode := oldProcess.PermissionMode
+	if permissionMode == "" {
+		permissionMode = "default"
+	}
+	newProcess, err := h.claudeMgr.CreateProcess(claudeSessionID, projectPath, nil, permissionMode)
 	if err != nil {
 		h.logger.Error("failed to create new process for recovery",
 			zap.String("claudeSessionID", claudeSessionID.String()),
@@ -1295,6 +1314,8 @@ func (h *Handler) handleUserMessage(client *Client, msg *IncomingMessage) {
 		h.handleHistorySubscribeMessage(client, msg)
 	case MessageTypeHistoryUnsubscribe:
 		h.handleHistoryUnsubscribeMessage(client)
+	case MessageTypeModeChange:
+		h.handleModeChangeMessage(client, msg)
 	default:
 		h.sendErrorToClient(client, "Unknown message type: "+msg.Type)
 	}
@@ -1361,6 +1382,9 @@ func (h *Handler) handleSubscribeMessage(client *Client, msg *IncomingMessage) {
 
 	// Send queue sync
 	h.sendQueueSyncToClient(client)
+
+	// Send mode state
+	h.sendModeStateToClient(client, convID, conv.PermissionMode)
 
 	h.logger.Info("Client subscribed to conversation",
 		zap.String("clientID", client.ID.String()),
@@ -1431,6 +1455,9 @@ func (h *Handler) handleFilesystemSubscribe(client *Client, msg *IncomingMessage
 
 	// Send empty queue sync for filesystem sessions (they don't use DB queues)
 	h.sendEmptyQueueSyncToClient(client)
+
+	// Send default mode state for filesystem sessions
+	h.sendModeStateToClient(client, virtualConvID, "default")
 
 	h.logger.Info("Client subscribed to filesystem session",
 		zap.String("clientID", client.ID.String()),
@@ -1692,6 +1719,104 @@ func (h *Handler) handleHistoryUnsubscribeMessage(client *Client) {
 
 	// Send confirmation
 	h.sendHistoryUnsubscribedToClient(client)
+}
+
+// handleModeChangeMessage handles permission mode change requests
+func (h *Handler) handleModeChangeMessage(client *Client, msg *IncomingMessage) {
+	// Validate client is subscribed to a conversation
+	if client.ConversationID == uuid.Nil {
+		h.sendErrorToClient(client, "Not subscribed to any conversation")
+		return
+	}
+
+	// Validate mode
+	mode := PermissionMode(msg.Mode)
+	if !ValidPermissionModes[mode] {
+		h.sendErrorToClient(client, "Invalid permission mode: "+msg.Mode)
+		return
+	}
+
+	// For filesystem sessions, we don't persist to DB but still broadcast
+	if client.IsFilesystemSession {
+		h.logger.Info("permission mode changed for filesystem session",
+			zap.String("clientID", client.ID.String()),
+			zap.String("sessionID", client.ClaudeSessionID.String()),
+			zap.String("mode", string(mode)))
+
+		// Broadcast mode change to all clients in the session
+		h.broadcastModeChanged(client.ConversationID, string(mode), client.UserID.String())
+		return
+	}
+
+	// Update database
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	if err := h.convRepo.UpdatePermissionMode(ctx, client.ConversationID, string(mode)); err != nil {
+		h.logger.Error("failed to update permission mode",
+			zap.String("conversationID", client.ConversationID.String()),
+			zap.String("mode", string(mode)),
+			zap.Error(err))
+		h.sendErrorToClient(client, "Failed to update permission mode")
+		return
+	}
+
+	h.logger.Info("permission mode updated",
+		zap.String("conversationID", client.ConversationID.String()),
+		zap.String("mode", string(mode)),
+		zap.String("changedBy", client.UserID.String()))
+
+	// Broadcast mode change to all clients in the conversation
+	h.broadcastModeChanged(client.ConversationID, string(mode), client.UserID.String())
+}
+
+// broadcastModeChanged broadcasts mode change to all clients in a conversation
+func (h *Handler) broadcastModeChanged(convID uuid.UUID, mode string, changedBy string) {
+	payload := ModeChangedPayload{
+		ConversationID: convID.String(),
+		Mode:           mode,
+		ChangedBy:      changedBy,
+	}
+
+	msg := OutgoingMessage{
+		Type:           MessageTypeModeChanged,
+		ConversationID: convID.String(),
+		Payload:        payload,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("failed to marshal mode_changed message", zap.Error(err))
+		return
+	}
+
+	h.hub.BroadcastToConversation(convID, data)
+}
+
+// sendModeStateToClient sends the current mode state to a client
+func (h *Handler) sendModeStateToClient(client *Client, convID uuid.UUID, mode string) {
+	payload := ModeStatePayload{
+		ConversationID: convID.String(),
+		Mode:           mode,
+	}
+
+	msg := OutgoingMessage{
+		Type:    MessageTypeModeState,
+		Payload: payload,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("failed to marshal mode_state message", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	default:
+		h.logger.Warn("client send buffer full, dropping mode_state message",
+			zap.String("clientID", client.ID.String()))
+	}
 }
 
 // NewMessagesPayload is the payload for new_messages WebSocket message

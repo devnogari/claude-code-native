@@ -121,6 +121,14 @@ object MessageType {
     const val HISTORY_UNSUBSCRIBED = "history_unsubscribed"
     /** New messages from history file (unified WebSocket) */
     const val NEW_MESSAGES = "new_messages"
+
+    // Permission mode message types
+    /** Client request to change permission mode */
+    const val MODE_CHANGE = "mode_change"
+    /** Server broadcast of mode change to all clients */
+    const val MODE_CHANGED = "mode_changed"
+    /** Server sends current mode state on subscribe */
+    const val MODE_STATE = "mode_state"
 }
 
 /**
@@ -236,6 +244,41 @@ data class TodoItemPayload(
     @SerialName("active_form") val activeForm: String? = null,
     val priority: String? = null,
     val id: String? = null
+)
+
+// ============================================================
+// Permission Mode DTOs
+// ============================================================
+
+/**
+ * Outgoing mode change message for unified WebSocket.
+ * Client sends this to request a permission mode change.
+ */
+@Serializable
+data class ModeChangeMessage(
+    val type: String = MessageType.MODE_CHANGE,
+    val mode: String
+)
+
+/**
+ * Payload for mode_changed WebSocket message.
+ * Server broadcasts this to all clients when mode changes.
+ */
+@Serializable
+data class ModeChangedPayload(
+    @SerialName("conversation_id") val conversationId: String,
+    val mode: String,
+    @SerialName("changed_by") val changedBy: String? = null
+)
+
+/**
+ * Payload for mode_state WebSocket message.
+ * Server sends this to client on subscribe to sync current mode.
+ */
+@Serializable
+data class ModeStatePayload(
+    @SerialName("conversation_id") val conversationId: String,
+    val mode: String
 )
 
 // ============================================================

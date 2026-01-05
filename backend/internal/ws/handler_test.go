@@ -211,8 +211,9 @@ func TestOutgoingMessage_JSONMarshaling(t *testing.T) {
 // --- Mock Repositories ---
 
 type mockConversationRepository struct {
-	findByIDFunc func(ctx context.Context, id uuid.UUID) (*conversation.Conversation, error)
-	updateFunc   func(ctx context.Context, c *conversation.Conversation) error
+	findByIDFunc             func(ctx context.Context, id uuid.UUID) (*conversation.Conversation, error)
+	updateFunc               func(ctx context.Context, c *conversation.Conversation) error
+	updatePermissionModeFunc func(ctx context.Context, id uuid.UUID, mode string) error
 }
 
 func (m *mockConversationRepository) FindByID(ctx context.Context, id uuid.UUID) (*conversation.Conversation, error) {
@@ -225,6 +226,13 @@ func (m *mockConversationRepository) FindByID(ctx context.Context, id uuid.UUID)
 func (m *mockConversationRepository) Update(ctx context.Context, c *conversation.Conversation) error {
 	if m.updateFunc != nil {
 		return m.updateFunc(ctx, c)
+	}
+	return nil
+}
+
+func (m *mockConversationRepository) UpdatePermissionMode(ctx context.Context, id uuid.UUID, mode string) error {
+	if m.updatePermissionModeFunc != nil {
+		return m.updatePermissionModeFunc(ctx, id, mode)
 	}
 	return nil
 }
