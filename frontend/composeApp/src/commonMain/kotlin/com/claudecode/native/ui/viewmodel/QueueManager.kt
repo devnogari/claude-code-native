@@ -38,7 +38,12 @@ class QueueManager(
     private val scope: CoroutineScope,
     private val onError: (String) -> Unit,
     private val isFilesystemSession: (String) -> Boolean,
-    private val generateMessageId: () -> String
+    private val generateMessageId: () -> String,
+    /**
+     * Callback to check if streaming is currently active.
+     * Used to filter queue_sync messages that arrive after streaming completes.
+     */
+    private val isStreamingActive: () -> Boolean = { false }
 ) {
     companion object {
         private const val TAG = "QueueManager"
@@ -267,12 +272,27 @@ class QueueManager(
                             serverImages = serverImages
                         )
                     }
+
+                    // If streaming is NOT active (completed), filter out sent messages
+                    // This handles the race condition where queue_sync arrives with stale data
+                    // after streaming completes but before clearSentQueueMessages() is called
+                    val filteredServerMessages = if (!isStreamingActive()) {
+                        // Keep only CLI messages when not streaming
+                        val filtered = serverMessages.filter { it.source == QueuedMessageSource.CLI }
+                        if (filtered.size < serverMessages.size) {
+                            DebugLogger.d(TAG, "Filtered ${serverMessages.size - filtered.size} stale messages from queue_sync (streaming not active)")
+                        }
+                        filtered
+                    } else {
+                        serverMessages
+                    }
+
                     // Keep local-only messages
                     val currentQueue = getCurrentQueue(conversationId)
                     val localOnlyMessages = currentQueue.filter { it.source == QueuedMessageSource.LOCAL }
 
-                    updateCurrentQueue(conversationId) { serverMessages + localOnlyMessages }
-                    DebugLogger.d(TAG, "Queue sync from WebSocket: ${serverMessages.size} server + ${localOnlyMessages.size} local")
+                    updateCurrentQueue(conversationId) { filteredServerMessages + localOnlyMessages }
+                    DebugLogger.d(TAG, "Queue sync from WebSocket: ${filteredServerMessages.size} server + ${localOnlyMessages.size} local")
                 } catch (e: Exception) {
                     DebugLogger.e(TAG, "Failed to parse queue_sync payload: ${e.message}", e)
                 }
