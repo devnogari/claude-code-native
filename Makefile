@@ -131,11 +131,22 @@ docker-build:
 # Testing
 # =============================================================================
 
-test: test-backend
+test: test-all
 
 test-backend:
 	@echo "Running backend tests..."
 	cd backend && go test ./...
+
+test-frontend:
+	@echo "Running frontend tests..."
+	cd frontend && ./gradlew :composeApp:allTests
+
+test-all: test-backend test-frontend
+
+report-test:
+	@echo "Generating test reports..."
+	cd backend && go test -json ./... > test-report-backend.json
+	cd frontend && ./gradlew :composeApp:allTests --continue
 
 test-backend-v:
 	@echo "Running backend tests (verbose)..."
