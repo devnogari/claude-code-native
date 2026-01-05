@@ -458,6 +458,11 @@ func DecodeProjectPath(encoded string) string {
 		encoded = "/" + encoded[1:]
 	}
 
+	// Pre-process: replace -- with hidden dir marker (/.hidden)
+	// Claude CLI encodes /.dir as --dir (both / and leading . become -)
+	const hiddenMarker = "\x00HIDDEN\x00"
+	processedEncoded := strings.ReplaceAll(encoded, "--", hiddenMarker)
+
 	// Simple case: replace all dashes with /
 	simplePath := strings.ReplaceAll(encoded, "-", "/")
 
@@ -466,19 +471,138 @@ func DecodeProjectPath(encoded string) string {
 		return simplePath
 	}
 
-	// Path doesn't exist - try smart decoding
-	// Split by - and try to find valid path by checking filesystem
-	parts := strings.Split(encoded, "-")
-	if result := findValidPath("", parts); result != "" {
+	// Smart decoding: split by - and try to find valid path
+	// This preserves hyphens in directory names like "claude-code-native"
+	parts := strings.Split(processedEncoded, "-")
+	if result := findValidPathWithHidden(parts, hiddenMarker); result != "" {
 		return result
+	}
+
+	// Path doesn't exist - try to decode with best effort
+	// Use hidden dir decoding for non-existent paths
+	hiddenPath := decodeWithHiddenDirs(encoded)
+	if hiddenPath != simplePath {
+		return hiddenPath
 	}
 
 	// Fallback to simple replacement
 	return simplePath
 }
 
+// decodeWithHiddenDirs decodes path where -- represents /. (hidden directory)
+// Claude CLI encodes both / and leading . as -, so /.hidden becomes --hidden
+func decodeWithHiddenDirs(encoded string) string {
+	// -- means /. (slash followed by dot for hidden directory)
+	// Replace -- with /. first
+	result := strings.ReplaceAll(encoded, "--", "/.")
+
+	// Replace remaining - with /
+	result = strings.ReplaceAll(result, "-", "/")
+
+	return result
+}
+
+// findValidPathWithHidden handles path decoding with hidden directory markers
+// The hiddenMarker represents /. (hidden directory) from the original path
+func findValidPathWithHidden(parts []string, hiddenMarker string) string {
+	// Try to find the longest existing prefix using smart decoding
+	// Then decode remaining parts with hidden dir rules
+	longestPrefix, remainingParts := findLongestExistingPath("", parts, hiddenMarker)
+
+	if longestPrefix != "" {
+		if len(remainingParts) > 0 {
+			// Decode remaining with simple rules (join with /, marker -> /.)
+			remaining := decodeRemainingParts(remainingParts, hiddenMarker)
+			return longestPrefix + "/" + remaining
+		}
+		return longestPrefix
+	}
+
+	// No existing prefix found - decode everything with hidden dir rules
+	return decodeRemainingParts(parts, hiddenMarker)
+}
+
+// findLongestExistingPath finds the longest path that exists on filesystem
+// using smart decoding (trying different segment combinations)
+// Returns the longest existing path and remaining parts
+func findLongestExistingPath(base string, remaining []string, hiddenMarker string) (string, []string) {
+	if len(remaining) == 0 {
+		return base, nil
+	}
+
+	var longestPath string
+	var longestRemainingIdx int
+
+	// Try combining different numbers of segments
+	for numSegments := 1; numSegments <= len(remaining); numSegments++ {
+		segment := strings.Join(remaining[:numSegments], "-")
+
+		// Handle hidden directory marker in segment
+		if strings.Contains(segment, hiddenMarker) {
+			segment = strings.ReplaceAll(segment, hiddenMarker, "/.")
+		}
+
+		var nextPath string
+		if base == "" {
+			nextPath = segment
+		} else {
+			nextPath = base + "/" + segment
+		}
+
+		if dirExists(nextPath) {
+			// Found a valid path, try to extend further
+			extendedPath, extendedRemaining := findLongestExistingPath(nextPath, remaining[numSegments:], hiddenMarker)
+			if len(extendedPath) > len(longestPath) {
+				longestPath = extendedPath
+				longestRemainingIdx = len(remaining) - len(extendedRemaining)
+			}
+		}
+	}
+
+	if longestPath != "" {
+		return longestPath, remaining[longestRemainingIdx:]
+	}
+
+	// No valid path found from this base, return base as is
+	return base, remaining
+}
+
+// decodeRemainingParts decodes remaining path parts using simple rules
+func decodeRemainingParts(parts []string, hiddenMarker string) string {
+	var result strings.Builder
+
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		// Handle hidden directory marker in part
+		if strings.Contains(part, hiddenMarker) {
+			subParts := strings.Split(part, hiddenMarker)
+			for j, subPart := range subParts {
+				if j > 0 {
+					result.WriteString("/.")
+				} else if result.Len() > 0 {
+					result.WriteString("/")
+				}
+				result.WriteString(subPart)
+			}
+		} else {
+			if i > 0 || result.Len() > 0 {
+				result.WriteString("/")
+			}
+			result.WriteString(part)
+		}
+	}
+
+	return result.String()
+}
+
 // findValidPath recursively tries to find a valid path by combining segments
+// hiddenMarker is used to identify hidden directories (/.dir)
 func findValidPath(base string, remaining []string) string {
+	const hiddenMarker = "\x00HIDDEN\x00"
+
 	if len(remaining) == 0 {
 		if base != "" && dirExists(base) {
 			return base
@@ -490,6 +614,12 @@ func findValidPath(base string, remaining []string) string {
 	for numSegments := 1; numSegments <= len(remaining); numSegments++ {
 		// Join numSegments parts with dashes (preserving original dashes in names)
 		segment := strings.Join(remaining[:numSegments], "-")
+
+		// Handle hidden directory marker in segment
+		// e.g., "native\x00HIDDEN\x00worktrees" -> "native/.worktrees"
+		if strings.Contains(segment, hiddenMarker) {
+			segment = strings.ReplaceAll(segment, hiddenMarker, "/.")
+		}
 
 		var nextPath string
 		if base == "" {

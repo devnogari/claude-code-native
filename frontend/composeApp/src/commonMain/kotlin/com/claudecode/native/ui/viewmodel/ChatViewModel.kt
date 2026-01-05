@@ -91,7 +91,8 @@ class ChatViewModel(
         scope = scope,
         onError = { error -> _error.value = error },
         isFilesystemSession = ::isFilesystemSessionId,
-        generateMessageId = ::generateMessageId
+        generateMessageId = ::generateMessageId,
+        isStreamingActive = { _isStreaming.value }
     )
 
     /** Progress tracker for per-conversation streaming progress */
