@@ -136,6 +136,11 @@ func (h *Hub) unregisterClient(client *Client) {
 
 	// Close the client's Send channel
 	close(client.Send)
+
+	// Explicitly close the WebSocket connection if it's still open
+	if client.Conn != nil {
+		client.Conn.Close()
+	}
 }
 
 // removeClientFromConversation removes a client from a conversation's client map.

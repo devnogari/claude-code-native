@@ -16,6 +16,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.random.Random
 
 /**
  * Configuration for unified WebSocket client.
@@ -24,12 +25,14 @@ import kotlin.coroutines.cancellation.CancellationException
  * @param enableAutoReconnect Whether auto-reconnection is enabled (default: true)
  * @param initialDelayMs Initial delay before first reconnection attempt in milliseconds (default: 1000)
  * @param maxDelayMs Maximum delay between reconnection attempts in milliseconds (default: 30000)
+ * @param jitterFactor Randomization factor to prevent "thundering herd" effect (default: 0.2)
  */
 data class UnifiedWebSocketConfig(
     val maxReconnectAttempts: Int = 5,
     val enableAutoReconnect: Boolean = true,
     val initialDelayMs: Long = 1000L,
-    val maxDelayMs: Long = 30000L
+    val maxDelayMs: Long = 30000L,
+    val jitterFactor: Double = 0.2
 )
 
 /**
@@ -367,7 +370,7 @@ class UnifiedWebSocketClient(
     }
 
     /**
-     * Schedules a reconnection attempt with exponential backoff.
+     * Schedules a reconnection attempt with exponential backoff and jitter.
      */
     private fun scheduleReconnection() {
         if (!config.enableAutoReconnect) {
@@ -387,18 +390,25 @@ class UnifiedWebSocketClient(
         reconnectAttempt++
 
         // Calculate exponential backoff delay: 1s, 2s, 4s, 8s, ... up to maxDelayMs
-        val delayMs = minOf(
+        val baseDelay = minOf(
             config.initialDelayMs * (1L shl (reconnectAttempt - 1)),
             config.maxDelayMs
         )
 
-        DebugLogger.d(TAG, "Scheduling reconnection attempt $reconnectAttempt in ${delayMs}ms")
+        // Add jitter: baseDelay * (1 ± jitterFactor)
+        val jitterRange = baseDelay * config.jitterFactor
+        val jitter = (Random.nextDouble(-jitterRange, jitterRange)).toLong()
+        val delayMs = (baseDelay + jitter).coerceIn(0, config.maxDelayMs)
 
+        DebugLogger.d(TAG, "Scheduling reconnection attempt $reconnectAttempt in ${delayMs}ms (base: ${baseDelay}ms)")
+
+        reconnectJob?.cancel()
         reconnectJob = scope.launch {
             _connectionState.value = ConnectionState.Reconnecting(reconnectAttempt)
             delay(delayMs)
 
             mutex.withLock {
+                // Only proceed if still in reconnecting state and not manually disconnected
                 if (!isManualDisconnect && _connectionState.value is ConnectionState.Reconnecting) {
                     connectInternal()
                 }

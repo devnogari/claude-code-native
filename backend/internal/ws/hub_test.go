@@ -105,6 +105,14 @@ func TestHub_Unregister(t *testing.T) {
 		t.Error("expected client to be removed from clients map")
 	}
 
+	// Verify client channels are closed
+	select {
+	case <-client.Done:
+		// OK
+	default:
+		t.Error("expected client.Done channel to be closed")
+	}
+
 	// Verify client was removed from conversations map
 	hub.mu.RLock()
 	convClients, convExists := hub.conversations[convID]
