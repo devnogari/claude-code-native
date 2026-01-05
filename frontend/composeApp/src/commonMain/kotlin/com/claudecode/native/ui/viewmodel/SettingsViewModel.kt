@@ -1,6 +1,8 @@
 package com.claudecode.native.ui.viewmodel
 
 import com.claudecode.native.data.api.ApiClient
+import com.claudecode.native.data.repository.PreferenceKeys
+import com.claudecode.native.data.repository.PreferencesRepository
 import com.claudecode.native.data.repository.ThemeRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -15,16 +17,19 @@ import kotlinx.coroutines.launch
  * Handles:
  * - Server URL configuration
  * - Dark mode toggle
+ * - Bypass permissions default setting
  * - Logout functionality
  * - Cache clearing
  *
  * @param apiClient API client for server operations
  * @param themeRepository Repository for managing theme settings
+ * @param preferencesRepository Repository for managing app preferences
  * @param scope Injected coroutine scope for lifecycle management
  */
 class SettingsViewModel(
     private val apiClient: ApiClient,
     private val themeRepository: ThemeRepository,
+    private val preferencesRepository: PreferencesRepository,
     private val scope: CoroutineScope
 ) {
     private val _serverHost = MutableStateFlow(apiClient.serverHost)
@@ -49,6 +54,12 @@ class SettingsViewModel(
     private val _message = MutableStateFlow<String?>(null)
     /** Success message to display. */
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    private val _bypassDefault = MutableStateFlow(
+        preferencesRepository.getBoolean(PreferenceKeys.BYPASS_DEFAULT, true)  // Default to true (bypass enabled)
+    )
+    /** Whether bypass permissions mode should be the default for new conversations. */
+    val bypassDefault: StateFlow<Boolean> = _bypassDefault.asStateFlow()
 
     /**
      * Updates the server host configuration.
@@ -105,6 +116,16 @@ class SettingsViewModel(
      */
     fun setDarkMode(enabled: Boolean) {
         themeRepository.setDarkMode(enabled)
+    }
+
+    /**
+     * Sets whether bypass permissions mode should be the default for new conversations.
+     *
+     * @param enabled Whether bypass mode should be enabled by default
+     */
+    fun setBypassDefault(enabled: Boolean) {
+        _bypassDefault.value = enabled
+        preferencesRepository.setBoolean(PreferenceKeys.BYPASS_DEFAULT, enabled)
     }
 
     /**

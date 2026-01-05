@@ -3,6 +3,7 @@ package claude
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -449,10 +450,64 @@ func (h *HistoryReader) getProjectSessions(projectDir string) ([]ClaudeSession, 
 }
 
 // DecodeProjectPath converts encoded project name back to actual path
+// Supports two encoding formats:
+// 1. URL encoding (new): %2F for /, handles paths with hyphens unambiguously
+// 2. Dash encoding (legacy): / replaced with -, -- for hidden dirs
+func DecodeProjectPath(encoded string) string {
+	// Try URL decoding first (new format with %XX encoding)
+	if strings.Contains(encoded, "%") {
+		if decoded, err := urlDecode(encoded); err == nil {
+			// Validate decoded path looks reasonable (starts with /)
+			if strings.HasPrefix(decoded, "/") {
+				return decoded
+			}
+		}
+	}
+
+	// Fall back to legacy dash-based decoding
+	return decodeDashPath(encoded)
+}
+
+// urlDecode decodes a URL-encoded string
+func urlDecode(encoded string) (string, error) {
+	var result strings.Builder
+	i := 0
+	for i < len(encoded) {
+		if encoded[i] == '%' && i+2 < len(encoded) {
+			// Decode %XX
+			high, errH := hexCharToInt(encoded[i+1])
+			low, errL := hexCharToInt(encoded[i+2])
+			if errH == nil && errL == nil {
+				result.WriteByte(byte(high<<4 | low))
+				i += 3
+				continue
+			}
+		}
+		result.WriteByte(encoded[i])
+		i++
+	}
+	return result.String(), nil
+}
+
+// hexCharToInt converts a hex character to its integer value
+func hexCharToInt(c byte) (int, error) {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0'), nil
+	case c >= 'a' && c <= 'f':
+		return int(c - 'a' + 10), nil
+	case c >= 'A' && c <= 'F':
+		return int(c - 'A' + 10), nil
+	default:
+		return 0, fmt.Errorf("invalid hex char: %c", c)
+	}
+}
+
+// decodeDashPath handles the legacy dash-based path encoding
 // Claude CLI encodes paths by replacing / with -
 // Problem: can't distinguish original dashes from path separators
 // Solution: try decoding and verify path exists using recursive search
-func DecodeProjectPath(encoded string) string {
+func decodeDashPath(encoded string) string {
 	// Replace leading dash with /
 	if strings.HasPrefix(encoded, "-") {
 		encoded = "/" + encoded[1:]

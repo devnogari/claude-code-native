@@ -4,6 +4,7 @@ import com.claudecode.native.data.api.ApiClient
 import com.claudecode.native.data.api.AuthApi
 import com.claudecode.native.data.api.ClaudeHistoryApi
 import com.claudecode.native.data.api.CommandApi
+import com.claudecode.native.data.api.CommandApiInterface
 import com.claudecode.native.data.api.ConversationApi
 import com.claudecode.native.data.api.MessageApi
 import com.claudecode.native.data.api.ProjectApi
@@ -18,6 +19,12 @@ import com.claudecode.native.ui.viewmodel.LoginViewModel
 import com.claudecode.native.ui.viewmodel.ProjectListViewModel
 import com.claudecode.native.ui.viewmodel.ServerViewModel
 import com.claudecode.native.ui.viewmodel.SettingsViewModel
+import com.claudecode.native.ui.viewmodel.CommandExecutor
+import com.claudecode.native.ui.viewmodel.ConnectionManager
+import com.claudecode.native.ui.viewmodel.MessageLoader
+import com.claudecode.native.ui.viewmodel.MessageStore
+import com.claudecode.native.ui.viewmodel.SessionStateManager
+import com.claudecode.native.ui.viewmodel.ToolTracker
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
@@ -75,7 +82,7 @@ val appModule = module {
     single { ConversationApi(get()) }
     single { MessageApi(get()) }
     single { ClaudeHistoryApi(get()) }
-    single { CommandApi(get()) }
+    single<CommandApiInterface> { CommandApi(get()) }
     single { QueueApi(get()) }
 
     // Repositories
@@ -84,11 +91,29 @@ val appModule = module {
     single { ThemeRepository(get()) }  // PreferencesRepository
     single { ServerRepository() }
 
+    // Tool Tracker - session-level tool use/result matching
+    single { ToolTracker() }
+
+    // Message Store - centralized message state management
+    single { MessageStore() }
+
+    // Session State Manager - session identity and state tracking
+    single { SessionStateManager() }
+
+    // Command Executor - slash command loading and execution
+    single { CommandExecutor(get(), get()) }  // CommandApi, CoroutineScope
+
+    // Message Loader - message loading and processing from various sources
+    single { MessageLoader(get(), get(), get(), get(), get(), get(), get()) }  // ClaudeHistoryApi, ConversationApi, ProjectApi, MessageStore, SessionStateManager, ToolTracker, CoroutineScope
+
+    // Connection Manager - WebSocket connection lifecycle and subscription management
+    single { ConnectionManager(get(), get(), get(), get(), get()) }  // UnifiedWebSocketClient, ConversationApi, ProjectApi, SessionStateManager, CoroutineScope
+
     // ViewModels - use single to maintain state across recomposition (e.g., theme changes)
     single { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
-    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }  // UnifiedWebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, CommandApi, QueueApi, CoroutineScope
+    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }  // UnifiedWebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, CommandExecutor, QueueApi, ToolTracker, MessageStore, SessionStateManager, MessageLoader, ConnectionManager, PreferencesRepository, CoroutineScope
     single { ProjectListViewModel(get(), get(), get()) }  // ClaudeHistoryApi, FavoriteRepository, CoroutineScope
-    single { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
+    single { SettingsViewModel(get(), get(), get(), get()) }  // ApiClient, ThemeRepository, PreferencesRepository, CoroutineScope
     single { ServerViewModel(get(), get(), get(), get()) }  // ServerRepository, ApiClient, UnifiedWebSocketClient, CoroutineScope
 
     // Unified WebSocket Client - single persistent connection per user session

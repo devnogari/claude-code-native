@@ -85,6 +85,7 @@ type Process struct {
 	ConversationID uuid.UUID
 	WorkDir        string
 	Env            []string
+	PermissionMode string // "default", "plan", or "bypassPermissions"
 	Cmd            *exec.Cmd
 	Status         string
 	Output         chan OutputMessage
@@ -288,13 +289,28 @@ func (p *Process) StartInteractive() error {
 	// --input-format stream-json: accept JSON messages via stdin
 	// --output-format stream-json: stream JSON chunks for real-time updates
 	// --verbose: required for stream-json output
-	// --dangerously-skip-permissions: skip permission prompts for automated usage
 	args := []string{
 		"--print",
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
-		"--dangerously-skip-permissions",
+	}
+
+	// Add permission mode flag based on configured mode
+	switch p.PermissionMode {
+	case "plan":
+		// Plan mode: Claude creates a plan, user reviews before execution
+		args = append(args, "--permission-mode", "plan")
+		p.logger.Debug("starting in plan mode")
+	case "bypassPermissions":
+		// Bypass mode: Skip all permission prompts
+		args = append(args, "--dangerously-skip-permissions")
+		p.logger.Debug("starting in bypass mode")
+	default:
+		// Default mode: Use bypass permissions for automated usage
+		// This maintains backwards compatibility with existing behavior
+		args = append(args, "--dangerously-skip-permissions")
+		p.logger.Debug("starting in default mode (bypass permissions)")
 	}
 
 	// Check if a Claude session file already exists for this conversation

@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -41,7 +42,10 @@ import com.claudecode.native.util.Platform
  * - Text input with multiline support
  * - Image attachment support with preview
  * - Send/Stop button states based on streaming
- * - Keyboard shortcuts (Enter to send, Shift+Enter for newline, ESC to stop)
+ * - Keyboard shortcuts:
+ *   - Enter to send, Shift+Enter for newline
+ *   - ESC to stop generation
+ *   - Shift+Tab or Alt+M to cycle operation mode
  * - Queue messages during streaming
  *
  * @param inputTextValue Current text field value with selection state
@@ -53,6 +57,7 @@ import com.claudecode.native.util.Platform
  * @param onRemoveImage Callback to remove an attached image by ID
  * @param onSend Callback to send the message
  * @param onStop Callback to stop response generation
+ * @param onModeToggle Callback to cycle through operation modes (Shift+Tab or Alt+M)
  * @param canFocus Whether the input field can receive focus (for iOS keyboard handling)
  * @param modifier Modifier for the input bar container
  */
@@ -67,6 +72,7 @@ fun ChatInputBar(
     onRemoveImage: (String) -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onModeToggle: () -> Unit = {},
     canFocus: Boolean = true,
     modifier: Modifier = Modifier
 ) {
@@ -120,6 +126,16 @@ fun ChatInputBar(
                                 // ESC to stop streaming (Desktop)
                                 keyEvent.key == Key.Escape && keyEvent.type == KeyEventType.KeyDown && isStreaming -> {
                                     onStop()
+                                    true // Consume the event
+                                }
+                                // Shift+Tab to cycle operation mode
+                                keyEvent.key == Key.Tab && keyEvent.type == KeyEventType.KeyDown && keyEvent.isShiftPressed -> {
+                                    onModeToggle()
+                                    true // Consume the event
+                                }
+                                // Alt+M to cycle operation mode
+                                keyEvent.key == Key.M && keyEvent.type == KeyEventType.KeyDown && keyEvent.isAltPressed -> {
+                                    onModeToggle()
                                     true // Consume the event
                                 }
                                 // Desktop: Enter to send (without Shift), Shift+Enter for newline

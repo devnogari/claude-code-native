@@ -52,8 +52,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import com.claudecode.native.data.model.OperationMode
 import com.claudecode.native.data.websocket.ConnectionState
 import com.claudecode.native.ui.component.AttachedImagesPreview
+import com.claudecode.native.ui.component.ModeToggle
 import com.claudecode.native.ui.component.ChatInputBar
 import com.claudecode.native.ui.component.ChatMessageList
 import com.claudecode.native.ui.component.ConnectionStatusBar
@@ -221,6 +223,7 @@ fun ChatScreenContent(
     val attachedImages by viewModel.attachedImages.collectAsState()
     val hasMoreMessages by viewModel.hasMoreMessages.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
+    val operationMode by viewModel.operationMode.collectAsState()
 
     // Image picker
     val imagePicker = remember { ImagePicker() }
@@ -459,6 +462,14 @@ fun ChatScreenContent(
                     }
                 },
                 actions = {
+                    // Mode toggle - shows current operation mode and allows cycling
+                    ModeToggle(
+                        currentMode = operationMode,
+                        onModeClick = { viewModel.cycleOperationMode() },
+                        enabled = connectionState == ConnectionState.Connected && !isDraftSession,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+
                     // New Session button - disabled for draft sessions (not yet created)
                     IconButton(
                         onClick = onNewSession,
@@ -807,6 +818,7 @@ fun ChatScreenContent(
                     }
                 },
                 onStop = { viewModel.stopGeneration() },
+                onModeToggle = { viewModel.cycleOperationMode() },
                 canFocus = canFocusInput,
                 modifier = Modifier
                     .fillMaxWidth()
