@@ -42,6 +42,12 @@ This matches SuperClaude's `/sc:` command convention.
 
 Claude Code Native is a cross-platform desktop/web application providing a native UI for Claude Code CLI. It consists of a Go backend with real-time WebSocket streaming and a Kotlin Multiplatform frontend (Compose).
 
+### Project Roadmap & Goals
+- [Project Roadmap 2026](docs/plans/roadmap-2026.md) - Phase 5 (Advanced) & Phase 6 (Distribution)
+- [Refactoring & Security Plan](docs/plans/refactoring-and-security-plan.md) - Detailed implementation for ChatViewModel & SecureStorage
+- [Code Quality Roadmap](docs/plans/2026-01-03-code-quality-roadmap.md) - Technical debt and refactoring plan
+- [Unified WebSocket Plan](docs/plans/2026-01-03-unified-websocket-implementation.md) - Core communication architecture
+
 ## Build & Run Commands
 
 ### Backend (Go)
