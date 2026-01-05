@@ -213,7 +213,8 @@ func (h *HistoryWatchHandler) HandleUnifiedConnection(c *websocket.Conn) {
 		handler: h,
 	}
 
-	h.logger.Debug("unified watch client connected")
+	h.logger.Info("unified watch client connected",
+		zap.String("remoteAddr", c.RemoteAddr().String()))
 
 	// Cleanup on disconnect
 	defer func() {
@@ -323,7 +324,7 @@ func (h *HistoryWatchHandler) handleSessionChange(encodedPath, sessionID string,
 		return
 	}
 
-	h.logger.Debug("broadcasting new messages to watch clients",
+	h.logger.Info("broadcasting new messages to watch clients",
 		zap.String("sessionID", sessionID),
 		zap.Int("messageCount", len(newMessages)),
 		zap.Int("clientCount", len(clients)))
@@ -450,6 +451,9 @@ func (h *HistoryWatchHandler) readPumpUnified(client *WatchClient) {
 			h.sendPong(client)
 
 		case WatchMessageTypeSubscribe:
+			h.logger.Info("subscribe message received",
+				zap.String("encodedPath", msg.EncodedPath),
+				zap.String("sessionID", msg.SessionID))
 			if msg.EncodedPath == "" || msg.SessionID == "" {
 				h.sendErrorToClient(client, "encoded_path and session_id are required for subscribe")
 				continue

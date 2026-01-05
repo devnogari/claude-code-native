@@ -13,7 +13,6 @@ import com.claudecode.native.data.model.ExecuteContext
 import com.claudecode.native.data.model.MessageRole
 import com.claudecode.native.data.model.SessionState
 import com.claudecode.native.data.websocket.ConnectionState
-import com.claudecode.native.data.websocket.HistoryWatchClient
 import com.claudecode.native.data.websocket.HistoryWatchEvent
 import com.claudecode.native.data.websocket.IncomingMessage
 import com.claudecode.native.data.websocket.MessageType
@@ -77,7 +76,6 @@ class ChatViewModel(
     private val conversationApi: ConversationApi,
     private val projectApi: ProjectApi,
     private val claudeHistoryApi: ClaudeHistoryApi,
-    private val historyWatchClient: HistoryWatchClient,
     private val commandApi: CommandApi,
     private val queueApi: QueueApi,
     private val scope: CoroutineScope
@@ -504,9 +502,11 @@ class ChatViewModel(
             }
         }
 
-        // Collect history watch events for real-time file changes
+        // Collect history watch events for real-time file changes (via unified WebSocket)
         scope.launch {
-            historyWatchClient.events.collect { event ->
+            DebugLogger.d(TAG, "Starting unifiedWebSocketClient.historyWatchEvents collector")
+            unifiedWebSocketClient.historyWatchEvents.collect { event ->
+                DebugLogger.d(TAG, "Received historyWatchEvent: ${event::class.simpleName}")
                 handleHistoryWatchEvent(event)
             }
         }
@@ -647,7 +647,7 @@ class ChatViewModel(
                 if (currentConversationId != null && currentConversationId != conversationId) {
                     // Unsubscribe from current conversation (unified connection stays open)
                     unifiedWebSocketClient.unsubscribe()
-                    historyWatchClient.disconnect()
+                    unifiedWebSocketClient.historyUnsubscribe()
                     isStreamingFromHistoryWatch = false
 
                     // NOTE: We intentionally DO NOT clear messages/title here anymore.
@@ -735,14 +735,14 @@ class ChatViewModel(
                     }
                     DebugLogger.d(TAG, "[$connectCallId] Guard passed, continuing with connection")
 
-                    // Connect to history watch for real-time file changes
-                    DebugLogger.d(TAG, "ChatViewModel: Connecting history watch for $encodedPath / $sessionId")
-                    historyWatchClient.connect(encodedPath, sessionId, token)
-
                     // Connect WebSocket with the full session identifier
                     // This allows continuing the conversation
                     DebugLogger.d(TAG, "[$connectCallId] Connecting WebSocket for filesystem session")
                     connectUnified(token, conversationId, sessionId, encodedPath)
+
+                    // Subscribe to history watch for real-time file changes (after WebSocket connected)
+                    DebugLogger.d(TAG, "ChatViewModel: Subscribing history watch for $encodedPath / $sessionId")
+                    unifiedWebSocketClient.historySubscribe(encodedPath, sessionId)
                     DebugLogger.d(TAG, "[$connectCallId] <<< connect() COMPLETE for: $shortConvId")
                     DebugLogger.d(TAG, "[$connectCallId] Final state: title=${_conversationTitle.value?.take(40)}, msgCount=${_messages.value.size}")
                 } else {
@@ -1105,7 +1105,7 @@ class ChatViewModel(
     }
 
     /**
-     * Connects to the history watch WebSocket for real-time file change notifications.
+     * Subscribes to history watch for real-time file change notifications via unified WebSocket.
      */
     private suspend fun connectHistoryWatch(conversationId: String, token: String) {
         try {
@@ -1125,12 +1125,12 @@ class ChatViewModel(
             currentEncodedPath = encodedPath
             currentClaudeSession = claudeSession
 
-            DebugLogger.d(TAG, "ChatViewModel: Connecting history watch for $encodedPath / $claudeSession")
-            historyWatchClient.connect(encodedPath, claudeSession, token)
+            DebugLogger.d(TAG, "ChatViewModel: Subscribing history watch for $encodedPath / $claudeSession")
+            unifiedWebSocketClient.historySubscribe(encodedPath, claudeSession)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            DebugLogger.d(TAG, "ChatViewModel: Failed to connect history watch: ${e.message}")
+            DebugLogger.d(TAG, "ChatViewModel: Failed to subscribe history watch: ${e.message}")
             // Don't fail the main connection if history watch fails
         }
     }
@@ -1402,9 +1402,9 @@ class ChatViewModel(
     fun disconnect() {
         scope.launch {
             try {
-                // Unsubscribe from current conversation and disconnect history watch
+                // Unsubscribe from current conversation and history watch (via unified WebSocket)
                 unifiedWebSocketClient.unsubscribe()
-                historyWatchClient.disconnect()
+                unifiedWebSocketClient.historyUnsubscribe()
 
                 currentConversationId = null
                 _currentConversationIdFlow.value = null
@@ -1581,9 +1581,9 @@ class ChatViewModel(
             DebugLogger.d(TAG, "ChatViewModel: Connecting WebSocket for new session: $newConversationId")
             connectUnified(token, newConversationId, newSessionId, encodedPath)
 
-            // Connect history watch for real-time updates
-            DebugLogger.d(TAG, "ChatViewModel: Connecting history watch for new session: $encodedPath / $newSessionId")
-            historyWatchClient.connect(encodedPath, newSessionId, token)
+            // Subscribe to history watch for real-time updates (after WebSocket connected)
+            DebugLogger.d(TAG, "ChatViewModel: Subscribing history watch for new session: $encodedPath / $newSessionId")
+            unifiedWebSocketClient.historySubscribe(encodedPath, newSessionId)
 
             // Now send the message with images
             sendMessageInternal(content, images)
@@ -2030,20 +2030,34 @@ class ChatViewModel(
      * enabling the app to show messages from Claude running in terminal or other sources.
      */
     private suspend fun handleHistoryWatchEvent(event: HistoryWatchEvent) {
+        println("ChatViewModel: handleHistoryWatchEvent called with event type: ${event::class.simpleName}")
         when (event) {
             is HistoryWatchEvent.Connected -> {
+                println("ChatViewModel: History watch connected for ${event.sessionId}")
                 DebugLogger.d(TAG, "ChatViewModel: History watch connected for ${event.sessionId}")
             }
 
             is HistoryWatchEvent.NewMessages -> {
+                println("ChatViewModel: NewMessages event received!")
+                println("ChatViewModel:   event.sessionId=${event.sessionId}")
+                println("ChatViewModel:   event.encodedPath=${event.encodedPath}")
+                println("ChatViewModel:   event.messages.size=${event.messages.size}")
+                println("ChatViewModel:   event.sessionState=${event.sessionState}")
+                println("ChatViewModel:   currentClaudeSession=$currentClaudeSession")
+                println("ChatViewModel:   currentEncodedPath=$currentEncodedPath")
+
                 // Validate event belongs to current conversation to prevent stale messages
                 // from previous conversation appearing after switching chat rooms
                 if (event.sessionId != currentClaudeSession || event.encodedPath != currentEncodedPath) {
+                    println("ChatViewModel: ⚠️ IGNORING - session/path mismatch!")
+                    println("ChatViewModel:   sessionId match: ${event.sessionId == currentClaudeSession}")
+                    println("ChatViewModel:   encodedPath match: ${event.encodedPath == currentEncodedPath}")
                     DebugLogger.d(TAG, "ChatViewModel: Ignoring history watch event for stale session " +
                             "(event: ${event.sessionId}, current: $currentClaudeSession)")
                     return
                 }
 
+                println("ChatViewModel: ✓ Session/path matched! Processing ${event.messages.size} messages...")
                 DebugLogger.d(TAG, "ChatViewModel: Received ${event.messages.size} new messages from history watch")
 
                 // Fallback: Emit session created event if not already emitted via STREAM message

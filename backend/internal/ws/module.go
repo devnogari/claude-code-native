@@ -25,8 +25,9 @@ var Module = fx.Module("ws",
 		projRepo *project.Repository,
 		msgRepo *message.Repository,
 		queueService queue.Service,
+		historyCache *claude.HistoryCache,
 	) *Handler {
-		return NewHandler(hub, config, logger, claudeMgr, convRepo, projRepo, msgRepo, queueService)
+		return NewHandler(hub, config, logger, claudeMgr, convRepo, projRepo, msgRepo, queueService, historyCache)
 	}),
 	fx.Invoke(func(lc fx.Lifecycle, hub *Hub) {
 		lc.Append(fx.Hook{

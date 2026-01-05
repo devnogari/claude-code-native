@@ -48,6 +48,12 @@ type HistoryCache struct {
 	subscribersMu sync.RWMutex
 	subscribers   map[string][]SessionChangeCallback // keyed by "encodedPath/sessionID"
 
+	// Track source-to-children relationships for inherited sessions
+	// When a file changes in sourceKey, we also notify subscribers of childKeys
+	// sourceKey (sourcePath/sessionID) -> []childKey (childPath/sessionID)
+	sourceToChildren   map[string][]string
+	sourceToChildrenMu sync.RWMutex
+
 	// Track last known message UUID per session for detecting new messages
 	lastMessageUUID   map[string]string // keyed by "encodedPath/sessionID"
 	lastMessageUUIDMu sync.RWMutex
@@ -83,6 +89,7 @@ func NewHistoryCache(logger *zap.Logger, basePath string) (*HistoryCache, error)
 		projects:         make(map[string]*ClaudeProject),
 		excluded:         make(map[string]bool),
 		subscribers:      make(map[string][]SessionChangeCallback),
+		sourceToChildren: make(map[string][]string),
 		lastMessageUUID:  make(map[string]string),
 		lastSessionState: make(map[string]SessionState),
 	}
@@ -577,15 +584,25 @@ func (c *HistoryCache) watchLoop() {
 				return
 			}
 
+			c.logger.Debug("fsnotify event received",
+				zap.String("eventName", event.Name),
+				zap.String("eventOp", event.Op.String()))
+
 			// Determine which project was affected
 			encodedPath := c.getEncodedPathFromEvent(event.Name)
 			if encodedPath == "" {
+				c.logger.Debug("no encoded path from event, checking if new project",
+					zap.String("eventName", event.Name))
 				// Might be a new project directory
 				if event.Has(fsnotify.Create) {
 					c.handleNewProject(event.Name)
 				}
 				continue
 			}
+
+			c.logger.Debug("notifying session subscribers for file change",
+				zap.String("encodedPath", encodedPath),
+				zap.String("file", event.Name))
 
 			// Notify subscribers immediately for real-time updates
 			go c.notifySessionSubscribers(encodedPath, event.Name)
@@ -838,8 +855,56 @@ func (c *HistoryCache) GetSessionMessagesPaginated(encodedPath, sessionID string
 func (c *HistoryCache) Subscribe(encodedPath, sessionID string, callback SessionChangeCallback) {
 	key := encodedPath + "/" + sessionID
 	c.subscribersMu.Lock()
-	defer c.subscribersMu.Unlock()
 	c.subscribers[key] = append(c.subscribers[key], callback)
+	c.subscribersMu.Unlock()
+
+	// Check if this is an inherited session and track the relationship
+	// This ensures notifications work when the actual file is in a parent project
+	sourceEncodedPath := c.findSessionSourcePath(encodedPath, sessionID)
+	if sourceEncodedPath != "" && sourceEncodedPath != encodedPath {
+		sourceKey := sourceEncodedPath + "/" + sessionID
+		c.sourceToChildrenMu.Lock()
+		// Check if already tracked to avoid duplicates
+		alreadyTracked := false
+		for _, child := range c.sourceToChildren[sourceKey] {
+			if child == key {
+				alreadyTracked = true
+				break
+			}
+		}
+		if !alreadyTracked {
+			c.sourceToChildren[sourceKey] = append(c.sourceToChildren[sourceKey], key)
+		}
+		c.sourceToChildrenMu.Unlock()
+
+		// Also initialize lastMessageUUID for the source key if not already set
+		// This ensures the notification logic uses the correct baseline
+		c.lastMessageUUIDMu.Lock()
+		if _, exists := c.lastMessageUUID[sourceKey]; !exists {
+			messages, _ := c.GetSessionMessages(sourceEncodedPath, sessionID)
+			lastUUID := ""
+			for _, msg := range messages {
+				if msg.UUID != "" {
+					if msg.Message != nil && (msg.Message.Role == "user" || msg.Message.Role == "assistant") {
+						lastUUID = msg.UUID
+					} else if msg.Type == "queue-operation" {
+						lastUUID = msg.UUID
+					}
+				}
+			}
+			c.lastMessageUUID[sourceKey] = lastUUID
+
+			// Also initialize session state for source key
+			c.lastSessionStateMu.Lock()
+			c.lastSessionState[sourceKey] = GetSessionState(messages)
+			c.lastSessionStateMu.Unlock()
+		}
+		c.lastMessageUUIDMu.Unlock()
+
+		c.logger.Debug("tracking inherited session subscription",
+			zap.String("sourceKey", sourceKey),
+			zap.String("childKey", key))
+	}
 
 	// Initialize last message UUID and session state
 	c.lastMessageUUIDMu.Lock()
@@ -874,8 +939,25 @@ func (c *HistoryCache) Subscribe(encodedPath, sessionID string, callback Session
 func (c *HistoryCache) Unsubscribe(encodedPath, sessionID string) {
 	key := encodedPath + "/" + sessionID
 	c.subscribersMu.Lock()
-	defer c.subscribersMu.Unlock()
 	delete(c.subscribers, key)
+	c.subscribersMu.Unlock()
+
+	// Clean up source-to-children tracking for inherited sessions
+	c.sourceToChildrenMu.Lock()
+	for sourceKey, children := range c.sourceToChildren {
+		for i, child := range children {
+			if child == key {
+				// Remove this child from the list
+				c.sourceToChildren[sourceKey] = append(children[:i], children[i+1:]...)
+				break
+			}
+		}
+		// Clean up empty entries
+		if len(c.sourceToChildren[sourceKey]) == 0 {
+			delete(c.sourceToChildren, sourceKey)
+		}
+	}
+	c.sourceToChildrenMu.Unlock()
 
 	// Clean up UUID tracking to prevent memory leak
 	c.lastMessageUUIDMu.Lock()
@@ -897,17 +979,69 @@ func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath str
 	// Extract session ID from file path
 	filename := filepath.Base(filePath)
 	if !strings.HasSuffix(filename, ".jsonl") || strings.HasPrefix(filename, "agent-") {
+		c.logger.Debug("skipping non-session file",
+			zap.String("filename", filename))
 		return
 	}
 	sessionID := strings.TrimSuffix(filename, ".jsonl")
 	key := encodedPath + "/" + sessionID
 
-	// Check if there are subscribers
+	c.logger.Debug("checking subscribers for session",
+		zap.String("key", key),
+		zap.String("sessionID", sessionID))
+
+	// Collect all subscribers: direct and inherited (child projects)
+	// childSubscribers maps childEncodedPath -> callbacks
+	type subscriberInfo struct {
+		encodedPath string
+		callbacks   []SessionChangeCallback
+	}
+	var allSubscribers []subscriberInfo
+
+	// Check for direct subscribers
 	c.subscribersMu.RLock()
-	callbacks := c.subscribers[key]
+	if cbs := c.subscribers[key]; len(cbs) > 0 {
+		allSubscribers = append(allSubscribers, subscriberInfo{
+			encodedPath: encodedPath,
+			callbacks:   cbs,
+		})
+	}
 	c.subscribersMu.RUnlock()
 
-	if len(callbacks) == 0 {
+	// Check for inherited subscribers (child projects that inherit from this source)
+	c.sourceToChildrenMu.RLock()
+	childKeys := c.sourceToChildren[key]
+	c.sourceToChildrenMu.RUnlock()
+
+	if len(childKeys) > 0 {
+		c.subscribersMu.RLock()
+		for _, childKey := range childKeys {
+			if cbs := c.subscribers[childKey]; len(cbs) > 0 {
+				// Extract encodedPath from childKey (format: "encodedPath/sessionID")
+				parts := strings.SplitN(childKey, "/", 2)
+				if len(parts) == 2 {
+					allSubscribers = append(allSubscribers, subscriberInfo{
+						encodedPath: parts[0],
+						callbacks:   cbs,
+					})
+				}
+			}
+		}
+		c.subscribersMu.RUnlock()
+	}
+
+	totalCallbacks := 0
+	for _, s := range allSubscribers {
+		totalCallbacks += len(s.callbacks)
+	}
+
+	c.logger.Debug("subscriber check result",
+		zap.String("key", key),
+		zap.Int("directSubscribers", len(allSubscribers)),
+		zap.Int("totalCallbacks", totalCallbacks),
+		zap.Int("inheritedChildKeys", len(childKeys)))
+
+	if totalCallbacks == 0 {
 		return
 	}
 
@@ -989,10 +1123,15 @@ func (c *HistoryCache) notifySessionSubscribers(encodedPath string, filePath str
 		zap.String("lastUUID", lastUUID),
 		zap.String("newLastUUID", newLastUUID),
 		zap.String("sessionState", string(currentSessionState)),
-		zap.Bool("stateChanged", sessionStateChanged))
+		zap.Bool("stateChanged", sessionStateChanged),
+		zap.Int("subscriberCount", len(allSubscribers)))
 
-	// Notify all subscribers
-	for _, callback := range callbacks {
-		go callback(encodedPath, sessionID, newMessages)
+	// Notify all subscribers (direct and inherited)
+	// Each subscriber receives their own encodedPath, not the source encodedPath
+	for _, sub := range allSubscribers {
+		subEncodedPath := sub.encodedPath // Capture for goroutine
+		for _, callback := range sub.callbacks {
+			go callback(subEncodedPath, sessionID, newMessages)
+		}
 	}
 }
