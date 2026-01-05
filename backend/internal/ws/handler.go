@@ -72,6 +72,7 @@ type Handler struct {
 	projRepo     ProjectRepository
 	msgRepo      MessageRepository
 	queueService queue.Service
+	historyCache *claude.HistoryCache // For unified history watch
 }
 
 // NewHandler creates a new WebSocket handler with all dependencies
@@ -84,6 +85,7 @@ func NewHandler(
 	projRepo ProjectRepository,
 	msgRepo MessageRepository,
 	queueService queue.Service,
+	historyCache *claude.HistoryCache,
 ) *Handler {
 	return &Handler{
 		hub:          hub,
@@ -94,6 +96,7 @@ func NewHandler(
 		projRepo:     projRepo,
 		msgRepo:      msgRepo,
 		queueService: queueService,
+		historyCache: historyCache,
 	}
 }
 
@@ -602,8 +605,16 @@ const maxCompactionRetries = 1
 // retryCount tracks the number of recovery attempts to prevent infinite loops
 func (h *Handler) streamProcessOutputWithRecovery(client *Client, process *claude.Process, isFilesystemSession bool, imagePaths []string, retryCount int) {
 	convID := client.ConversationID
+	// Use claudeSessionID for broadcasting - this is the actual session ID from the process
+	// Different clients may have different conversationID but watch the same claudeSession
+	claudeSessionID := process.ConversationID
 	var assistantContent string
 	var needsCompactionRecovery bool
+
+	h.logger.Info("streamProcessOutputWithRecovery started",
+		zap.String("conversationID", convID.String()),
+		zap.String("claudeSessionID", claudeSessionID.String()),
+		zap.Bool("isFilesystemSession", isFilesystemSession))
 
 	// Clean up temp image files after Claude CLI finishes (regardless of success/failure)
 	defer func() {
@@ -655,13 +666,9 @@ streamLoop:
 					continue
 				}
 
-				// Forward non-JSON stderr to client for visibility
-				select {
-				case <-client.Done:
-					break streamLoop
-				default:
-					h.sendStderrToClient(client, output.Content)
-				}
+				// Forward non-JSON stderr to all clients in the conversation
+				// Using broadcast ensures reconnected clients receive stderr output
+				h.broadcastStderrToConversation(convID, output.Content)
 				continue
 			}
 
@@ -671,13 +678,10 @@ streamLoop:
 				if isDisplayable && text != "" {
 					assistantContent += text
 
-					// Send stream message to client with the parsed text
-					select {
-					case <-client.Done:
-						break streamLoop
-					default:
-						h.sendStreamToClient(client, text)
-					}
+					// Broadcast stream message to all clients watching this Claude session
+					// This ensures reconnected clients receive stream output even if
+					// they weren't the original client that started the process
+					h.broadcastStreamToSession(claudeSessionID, text)
 				}
 			}
 
@@ -686,27 +690,19 @@ streamLoop:
 				continue
 			}
 			h.logger.Error("claude process error",
-				zap.String("conversationID", convID.String()),
+				zap.String("claudeSessionID", claudeSessionID.String()),
 				zap.Error(err))
-			// Check if client is still connected before sending error
-			select {
-			case <-client.Done:
-				break streamLoop
-			default:
-				h.sendErrorToClient(client, "Claude error: "+err.Error())
-			}
+			// Broadcast error to all clients watching this Claude session
+			h.broadcastErrorToSession(claudeSessionID, "Claude error: "+err.Error())
 		}
 	}
 
 	// Handle compaction recovery if needed
 	if needsCompactionRecovery && retryCount < maxCompactionRetries {
-		select {
-		case <-client.Done:
-			// Client disconnected, skip recovery
-		default:
-			h.handleCompactionRecovery(client, process, isFilesystemSession, retryCount)
-			return // Recovery handles completion message
-		}
+		// Continue with recovery regardless of client connection state
+		// The process needs to recover for future clients
+		h.handleCompactionRecovery(client, process, isFilesystemSession, retryCount)
+		return // Recovery handles completion message
 	}
 
 	// Save the assistant message if we received any content (database-based sessions only)
@@ -730,13 +726,9 @@ streamLoop:
 		}
 	}
 
-	// Send completion message only if client is still connected
-	select {
-	case <-client.Done:
-		// Client already disconnected, don't try to send
-	default:
-		h.sendCompleteToClient(client)
-	}
+	// Broadcast completion message to all clients watching this Claude session
+	// This ensures all connected clients (including reconnected ones) receive the complete signal
+	h.broadcastCompleteToSession(claudeSessionID)
 }
 
 // handleCompactionRecovery handles automatic recovery from "Conversation too long" error
@@ -888,6 +880,58 @@ func (h *Handler) sendCompleteToClient(client *Client) {
 			zap.String("conversationID", client.ConversationID.String()))
 	case <-client.Done:
 	}
+}
+
+// broadcastStreamToConversation broadcasts stream content to all clients in the conversation
+// This ensures reconnected clients receive stream output even if a different client started the process
+func (h *Handler) broadcastStreamToConversation(convID uuid.UUID, content string) {
+	msg := createOutgoingStream(convID, content)
+	data, _ := json.Marshal(msg)
+	h.hub.BroadcastToConversation(convID, data)
+}
+
+// broadcastStderrToConversation broadcasts stderr content to all clients in the conversation
+func (h *Handler) broadcastStderrToConversation(convID uuid.UUID, content string) {
+	msg := createOutgoingStderr(convID, content)
+	data, _ := json.Marshal(msg)
+	h.hub.BroadcastToConversation(convID, data)
+}
+
+// broadcastCompleteToConversation broadcasts complete message to all clients in the conversation
+func (h *Handler) broadcastCompleteToConversation(convID uuid.UUID) {
+	msg := createOutgoingComplete(convID)
+	data, _ := json.Marshal(msg)
+	h.hub.BroadcastToConversation(convID, data)
+}
+
+// broadcastErrorToConversation broadcasts error message to all clients in the conversation
+func (h *Handler) broadcastErrorToConversation(convID uuid.UUID, errMsg string) {
+	msg := createOutgoingError(errMsg)
+	data, _ := json.Marshal(msg)
+	h.hub.BroadcastToConversation(convID, data)
+}
+
+// broadcastStreamToSession broadcasts stream content to all clients watching a Claude session
+// This is used for filesystem sessions where clients may have different conversationIDs
+// but are all watching the same underlying Claude session
+func (h *Handler) broadcastStreamToSession(sessionID uuid.UUID, content string) {
+	msg := createOutgoingStream(sessionID, content)
+	data, _ := json.Marshal(msg)
+	h.hub.BroadcastToClaudeSession(sessionID, data)
+}
+
+// broadcastErrorToSession broadcasts error message to all clients watching a Claude session
+func (h *Handler) broadcastErrorToSession(sessionID uuid.UUID, errMsg string) {
+	msg := createOutgoingError(errMsg)
+	data, _ := json.Marshal(msg)
+	h.hub.BroadcastToClaudeSession(sessionID, data)
+}
+
+// broadcastCompleteToSession broadcasts complete message to all clients watching a Claude session
+func (h *Handler) broadcastCompleteToSession(sessionID uuid.UUID) {
+	msg := createOutgoingComplete(sessionID)
+	data, _ := json.Marshal(msg)
+	h.hub.BroadcastToClaudeSession(sessionID, data)
 }
 
 // decodeProjectPath converts an encoded path back to the original filesystem path.
@@ -1224,6 +1268,14 @@ func (h *Handler) readUserPump(client *Client) {
 
 // handleUserMessage routes messages for the unified user WebSocket
 func (h *Handler) handleUserMessage(client *Client, msg *IncomingMessage) {
+	h.logger.Info("handleUserMessage received",
+		zap.String("clientID", client.ID.String()),
+		zap.String("type", msg.Type),
+		zap.String("content", msg.Content),
+		zap.String("sessionID", msg.SessionID),
+		zap.String("encodedPath", msg.EncodedPath),
+		zap.String("conversationID", msg.ConversationID))
+
 	switch msg.Type {
 	case MessageTypeAuth:
 		// Auth is handled by middleware, but we need to acknowledge the message
@@ -1239,6 +1291,10 @@ func (h *Handler) handleUserMessage(client *Client, msg *IncomingMessage) {
 		h.handleUserStopMessage(client)
 	case MessageTypePing:
 		h.handlePingMessage(client)
+	case MessageTypeHistorySubscribe:
+		h.handleHistorySubscribeMessage(client, msg)
+	case MessageTypeHistoryUnsubscribe:
+		h.handleHistoryUnsubscribeMessage(client)
 	default:
 		h.sendErrorToClient(client, "Unknown message type: "+msg.Type)
 	}
@@ -1572,4 +1628,170 @@ func (h *Handler) handleUserStopMessage(client *Client) {
 
 	// Use cached ClaudeSessionID from subscription (no DB lookup needed)
 	h.handleStopMessage(client, client.ClaudeSessionID)
+}
+
+// handleHistorySubscribeMessage handles history watch subscription via unified WebSocket
+func (h *Handler) handleHistorySubscribeMessage(client *Client, msg *IncomingMessage) {
+	if h.historyCache == nil {
+		h.sendErrorToClient(client, "History watch not available")
+		return
+	}
+
+	encodedPath := msg.EncodedPath
+	sessionID := msg.SessionID
+
+	if encodedPath == "" || sessionID == "" {
+		h.sendErrorToClient(client, "encoded_path and session_id are required for history_subscribe")
+		return
+	}
+
+	// Unsubscribe from previous history watch if any
+	if client.HistoryEncodedPath != "" && client.HistorySessionID != "" {
+		h.historyCache.Unsubscribe(client.HistoryEncodedPath, client.HistorySessionID)
+	}
+
+	// Update client's history subscription state
+	client.HistoryEncodedPath = encodedPath
+	client.HistorySessionID = sessionID
+
+	// Subscribe to history cache with a callback that sends to this client
+	h.historyCache.Subscribe(encodedPath, sessionID, func(ep, sid string, newMessages []claude.ClaudeMessage) {
+		h.sendHistoryNewMessages(client, ep, sid, newMessages)
+	})
+
+	h.logger.Info("Client subscribed to history watch via unified WebSocket",
+		zap.String("clientID", client.ID.String()),
+		zap.String("encodedPath", encodedPath),
+		zap.String("sessionID", sessionID))
+
+	// Send confirmation
+	h.sendHistorySubscribedToClient(client, encodedPath, sessionID)
+}
+
+// handleHistoryUnsubscribeMessage handles history watch unsubscription via unified WebSocket
+func (h *Handler) handleHistoryUnsubscribeMessage(client *Client) {
+	if client.HistoryEncodedPath == "" || client.HistorySessionID == "" {
+		// Not subscribed to history watch, send confirmation anyway
+		h.sendHistoryUnsubscribedToClient(client)
+		return
+	}
+
+	// Unsubscribe from history cache
+	if h.historyCache != nil {
+		h.historyCache.Unsubscribe(client.HistoryEncodedPath, client.HistorySessionID)
+	}
+
+	h.logger.Info("Client unsubscribed from history watch via unified WebSocket",
+		zap.String("clientID", client.ID.String()),
+		zap.String("encodedPath", client.HistoryEncodedPath),
+		zap.String("sessionID", client.HistorySessionID))
+
+	// Clear client's history subscription state
+	client.HistoryEncodedPath = ""
+	client.HistorySessionID = ""
+
+	// Send confirmation
+	h.sendHistoryUnsubscribedToClient(client)
+}
+
+// NewMessagesPayload is the payload for new_messages WebSocket message
+type NewMessagesPayload struct {
+	SessionID    string                 `json:"session_id"`
+	EncodedPath  string                 `json:"encoded_path"`
+	Messages     []claude.ClaudeMessage `json:"messages"`
+	SessionState claude.SessionState    `json:"session_state"`
+	Todos        []claude.TodoItem      `json:"todos"`
+}
+
+// sendHistoryNewMessages sends new messages from history watch to the client
+func (h *Handler) sendHistoryNewMessages(client *Client, encodedPath, sessionID string, newMessages []claude.ClaudeMessage) {
+	// Get all messages to determine session state
+	allMessages, err := h.historyCache.GetSessionMessages(encodedPath, sessionID)
+	sessionState := claude.SessionStateIdle
+	if err == nil {
+		sessionState = claude.GetSessionState(allMessages)
+	}
+
+	// Get todos for this session
+	todos, _ := claude.GetSessionTodos(sessionID)
+
+	// Create payload
+	payload := NewMessagesPayload{
+		SessionID:    sessionID,
+		EncodedPath:  encodedPath,
+		Messages:     newMessages,
+		SessionState: sessionState,
+		Todos:        todos,
+	}
+
+	// Wrap in OutgoingMessage with payload field
+	msg := OutgoingMessage{
+		Type:    MessageTypeNewMessages,
+		Payload: payload,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("failed to marshal history new_messages", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	case <-client.Done:
+		// Client disconnected
+	default:
+		h.logger.Warn("failed to send history new_messages - buffer full",
+			zap.String("clientID", client.ID.String()))
+	}
+}
+
+// HistorySubscribedPayload is the payload for history_subscribed WebSocket message
+type HistorySubscribedPayload struct {
+	SessionID   string `json:"session_id"`
+	EncodedPath string `json:"encoded_path"`
+}
+
+// sendHistorySubscribedToClient sends history subscription confirmation
+func (h *Handler) sendHistorySubscribedToClient(client *Client, encodedPath, sessionID string) {
+	payload := HistorySubscribedPayload{
+		SessionID:   sessionID,
+		EncodedPath: encodedPath,
+	}
+
+	msg := OutgoingMessage{
+		Type:    MessageTypeHistorySubscribed,
+		Payload: payload,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("failed to marshal history_subscribed", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	default:
+		h.logger.Warn("failed to send history_subscribed - buffer full")
+	}
+}
+
+// sendHistoryUnsubscribedToClient sends history unsubscription confirmation
+func (h *Handler) sendHistoryUnsubscribedToClient(client *Client) {
+	msg := OutgoingMessage{
+		Type: MessageTypeHistoryUnsubscribed,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("failed to marshal history_unsubscribed", zap.Error(err))
+		return
+	}
+
+	select {
+	case client.Send <- data:
+	default:
+		h.logger.Warn("failed to send history_unsubscribed - buffer full")
+	}
 }

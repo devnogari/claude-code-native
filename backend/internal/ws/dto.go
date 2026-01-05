@@ -39,6 +39,18 @@ const (
 	MessageTypeSubscribed = "subscribed"
 	// MessageTypeSessionState is sent by server with full session state
 	MessageTypeSessionState = "session_state"
+
+	// History watch message types (unified into main WebSocket)
+	// MessageTypeHistorySubscribe is sent by client to subscribe to history watch
+	MessageTypeHistorySubscribe = "history_subscribe"
+	// MessageTypeHistoryUnsubscribe is sent by client to unsubscribe from history watch
+	MessageTypeHistoryUnsubscribe = "history_unsubscribe"
+	// MessageTypeHistorySubscribed is sent by server to confirm history subscription
+	MessageTypeHistorySubscribed = "history_subscribed"
+	// MessageTypeHistoryUnsubscribed is sent by server to confirm history unsubscription
+	MessageTypeHistoryUnsubscribed = "history_unsubscribed"
+	// MessageTypeNewMessages is sent by server with new messages from history watch
+	MessageTypeNewMessages = "new_messages"
 )
 
 // ImageContent represents an image attachment in a chat message

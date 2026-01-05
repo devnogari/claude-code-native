@@ -12,7 +12,6 @@ import com.claudecode.native.data.repository.FavoriteRepository
 import com.claudecode.native.data.repository.PreferencesRepository
 import com.claudecode.native.data.repository.ServerRepository
 import com.claudecode.native.data.repository.ThemeRepository
-import com.claudecode.native.data.websocket.HistoryWatchClient
 import com.claudecode.native.data.websocket.UnifiedWebSocketClient
 import com.claudecode.native.ui.viewmodel.ChatViewModel
 import com.claudecode.native.ui.viewmodel.LoginViewModel
@@ -87,20 +86,13 @@ val appModule = module {
 
     // ViewModels - use single to maintain state across recomposition (e.g., theme changes)
     single { LoginViewModel(get(), get(), get()) }  // AuthApi, ProjectApi, CoroutineScope
-    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get()) }  // UnifiedWebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, HistoryWatchClient, CommandApi, QueueApi, CoroutineScope
+    single { ChatViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }  // UnifiedWebSocketClient, ApiClient, ConversationApi, ProjectApi, ClaudeHistoryApi, CommandApi, QueueApi, CoroutineScope
     single { ProjectListViewModel(get(), get(), get()) }  // ClaudeHistoryApi, FavoriteRepository, CoroutineScope
     single { SettingsViewModel(get(), get(), get()) }  // ApiClient, ThemeRepository, CoroutineScope
     single { ServerViewModel(get(), get(), get(), get()) }  // ServerRepository, ApiClient, UnifiedWebSocketClient, CoroutineScope
 
-    // History Watch WebSocket Client for real-time session file changes
-    single {
-        HistoryWatchClient(
-            httpClient = get(),
-            scope = get()
-        )
-    }
-
     // Unified WebSocket Client - single persistent connection per user session
+    // History watch is now integrated into the unified WebSocket
     // Maintains one connection to /ws/user and uses subscribe/unsubscribe for conversation switching
     single {
         UnifiedWebSocketClient(

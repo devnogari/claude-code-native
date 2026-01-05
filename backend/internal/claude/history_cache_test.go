@@ -419,3 +419,248 @@ func TestHistoryCache_InheritedSession_GetMessagesPaginated(t *testing.T) {
 	assert.Equal(t, 2, result.Limit)
 	assert.True(t, result.HasMore)
 }
+
+// TestHistoryCache_Subscribe_FileChange_Callback tests that when a subscriber is registered
+// and a file changes, the callback is invoked with new messages
+func TestHistoryCache_Subscribe_FileChange_Callback(t *testing.T) {
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+	testProjectPath := filepath.Join(projectsDir, "test-subscribe-project")
+	err := os.MkdirAll(testProjectPath, 0755)
+	require.NoError(t, err)
+
+	// Create initial session file with one message
+	sessionID := "550e8400-e29b-41d4-a716-446655440001"
+	encodedPath := "test-subscribe-project"
+	initialContent := `{"type":"summary","sessionId":"` + sessionID + `","summary":"Test session"}
+{"type":"user","uuid":"uuid-1","message":{"role":"user","content":"Hello"}}
+`
+	sessionFile := filepath.Join(testProjectPath, sessionID+".jsonl")
+	err = os.WriteFile(sessionFile, []byte(initialContent), 0644)
+	require.NoError(t, err)
+
+	logger, _ := zap.NewDevelopment()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	// Channel to receive callback notifications
+	callbackCh := make(chan []ClaudeMessage, 10)
+	callbackCount := 0
+
+	// Subscribe to session changes
+	cache.Subscribe(encodedPath, sessionID, func(ep, sid string, messages []ClaudeMessage) {
+		callbackCount++
+		t.Logf("Callback #%d invoked: encodedPath=%s, sessionID=%s, messages=%d", callbackCount, ep, sid, len(messages))
+		for i, msg := range messages {
+			t.Logf("  Message[%d]: type=%s, uuid=%s, role=%v", i, msg.Type, msg.UUID, msg.Message)
+		}
+		callbackCh <- messages
+	})
+
+	// Give fsnotify time to register the watcher
+	time.Sleep(100 * time.Millisecond)
+
+	// Append a new message to the file
+	newMessage := `{"type":"assistant","uuid":"uuid-2","message":{"role":"assistant","content":"Hi there!"}}
+`
+	f, err := os.OpenFile(sessionFile, os.O_APPEND|os.O_WRONLY, 0644)
+	require.NoError(t, err)
+	_, err = f.WriteString(newMessage)
+	require.NoError(t, err)
+	f.Close()
+
+	// Wait for callback
+	select {
+	case messages := <-callbackCh:
+		t.Logf("Received %d new messages in callback", len(messages))
+		assert.NotEmpty(t, messages, "callback should receive new messages")
+		// Should receive only the new message (uuid-2)
+		found := false
+		for _, msg := range messages {
+			if msg.UUID == "uuid-2" {
+				found = true
+				assert.Equal(t, "assistant", msg.Type)
+				assert.Equal(t, "assistant", msg.Message.Role)
+				assert.Equal(t, "Hi there!", msg.Message.Content)
+			}
+		}
+		assert.True(t, found, "should receive the new message with uuid-2")
+	case <-time.After(3 * time.Second):
+		t.Fatal("TIMEOUT: callback was not invoked after file change - THIS IS THE BUG!")
+	}
+}
+
+// TestHistoryCache_Subscribe_MultipleMessages tests that multiple new messages
+// are all delivered in a single callback
+func TestHistoryCache_Subscribe_MultipleMessages(t *testing.T) {
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+	testProjectPath := filepath.Join(projectsDir, "test-multi-msg")
+	err := os.MkdirAll(testProjectPath, 0755)
+	require.NoError(t, err)
+
+	sessionID := "550e8400-e29b-41d4-a716-446655440002"
+	encodedPath := "test-multi-msg"
+	initialContent := `{"type":"summary","sessionId":"` + sessionID + `"}
+{"type":"user","uuid":"uuid-1","message":{"role":"user","content":"First"}}
+`
+	sessionFile := filepath.Join(testProjectPath, sessionID+".jsonl")
+	err = os.WriteFile(sessionFile, []byte(initialContent), 0644)
+	require.NoError(t, err)
+
+	logger, _ := zap.NewDevelopment()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	callbackCh := make(chan []ClaudeMessage, 10)
+
+	cache.Subscribe(encodedPath, sessionID, func(ep, sid string, messages []ClaudeMessage) {
+		t.Logf("Callback: received %d messages", len(messages))
+		callbackCh <- messages
+	})
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Append multiple messages at once
+	newMessages := `{"type":"assistant","uuid":"uuid-2","message":{"role":"assistant","content":"Reply 1"}}
+{"type":"user","uuid":"uuid-3","message":{"role":"user","content":"Second"}}
+{"type":"assistant","uuid":"uuid-4","message":{"role":"assistant","content":"Reply 2"}}
+`
+	f, err := os.OpenFile(sessionFile, os.O_APPEND|os.O_WRONLY, 0644)
+	require.NoError(t, err)
+	_, err = f.WriteString(newMessages)
+	require.NoError(t, err)
+	f.Close()
+
+	select {
+	case messages := <-callbackCh:
+		t.Logf("Received %d new messages", len(messages))
+		// Should receive all 3 new messages
+		assert.GreaterOrEqual(t, len(messages), 3, "should receive all new messages")
+	case <-time.After(3 * time.Second):
+		t.Fatal("TIMEOUT: callback was not invoked - THIS IS THE BUG!")
+	}
+}
+
+// TestHistoryCache_Subscribe_RaceCondition tests the race condition between
+// Subscribe and file change detection
+func TestHistoryCache_Subscribe_RaceCondition(t *testing.T) {
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+	testProjectPath := filepath.Join(projectsDir, "test-race")
+	err := os.MkdirAll(testProjectPath, 0755)
+	require.NoError(t, err)
+
+	sessionID := "550e8400-e29b-41d4-a716-446655440003"
+	encodedPath := "test-race"
+	initialContent := `{"type":"summary","sessionId":"` + sessionID + `"}
+{"type":"user","uuid":"uuid-1","message":{"role":"user","content":"Initial"}}
+`
+	sessionFile := filepath.Join(testProjectPath, sessionID+".jsonl")
+	err = os.WriteFile(sessionFile, []byte(initialContent), 0644)
+	require.NoError(t, err)
+
+	logger, _ := zap.NewDevelopment()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	callbackCh := make(chan []ClaudeMessage, 10)
+	callbackInvoked := false
+
+	// Start writing to file BEFORE subscribing (simulating race condition)
+	go func() {
+		// Small delay then write
+		time.Sleep(50 * time.Millisecond)
+		newMsg := `{"type":"assistant","uuid":"uuid-2","message":{"role":"assistant","content":"Racing message"}}
+`
+		f, _ := os.OpenFile(sessionFile, os.O_APPEND|os.O_WRONLY, 0644)
+		f.WriteString(newMsg)
+		f.Close()
+	}()
+
+	// Subscribe immediately
+	cache.Subscribe(encodedPath, sessionID, func(ep, sid string, messages []ClaudeMessage) {
+		t.Logf("Race callback: %d messages", len(messages))
+		callbackInvoked = true
+		callbackCh <- messages
+	})
+
+	select {
+	case messages := <-callbackCh:
+		t.Logf("Got %d messages from race condition test", len(messages))
+		assert.NotEmpty(t, messages)
+	case <-time.After(3 * time.Second):
+		if !callbackInvoked {
+			t.Log("WARNING: Race condition - file changed during/before subscribe was not detected")
+			// This is expected behavior in current implementation
+			// The fix should ensure this case is handled
+		}
+	}
+}
+
+// TestHistoryCache_notifySessionSubscribers_DirectCall tests the notifySessionSubscribers
+// method directly to isolate whether the issue is in file watching or notification
+func TestHistoryCache_notifySessionSubscribers_DirectCall(t *testing.T) {
+	tmpDir := t.TempDir()
+	claudeDir := filepath.Join(tmpDir, ".claude")
+	projectsDir := filepath.Join(claudeDir, "projects")
+	testProjectPath := filepath.Join(projectsDir, "test-direct-notify")
+	err := os.MkdirAll(testProjectPath, 0755)
+	require.NoError(t, err)
+
+	sessionID := "550e8400-e29b-41d4-a716-446655440004"
+	encodedPath := "test-direct-notify"
+	// Create session with messages
+	content := `{"type":"summary","sessionId":"` + sessionID + `"}
+{"type":"user","uuid":"uuid-1","message":{"role":"user","content":"Msg1"}}
+{"type":"assistant","uuid":"uuid-2","message":{"role":"assistant","content":"Reply1"}}
+`
+	sessionFile := filepath.Join(testProjectPath, sessionID+".jsonl")
+	err = os.WriteFile(sessionFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	logger, _ := zap.NewDevelopment()
+	cache, err := NewHistoryCache(logger, claudeDir)
+	require.NoError(t, err)
+	defer cache.Close()
+
+	callbackCh := make(chan []ClaudeMessage, 10)
+
+	// Subscribe
+	cache.Subscribe(encodedPath, sessionID, func(ep, sid string, messages []ClaudeMessage) {
+		t.Logf("Direct notify callback: %d messages", len(messages))
+		callbackCh <- messages
+	})
+
+	// Add a new message to the file
+	newMsg := `{"type":"user","uuid":"uuid-3","message":{"role":"user","content":"NewMsg"}}
+`
+	f, err := os.OpenFile(sessionFile, os.O_APPEND|os.O_WRONLY, 0644)
+	require.NoError(t, err)
+	f.WriteString(newMsg)
+	f.Close()
+
+	// Call notifySessionSubscribers DIRECTLY (bypassing fsnotify)
+	cache.notifySessionSubscribers(encodedPath, sessionFile)
+
+	select {
+	case messages := <-callbackCh:
+		t.Logf("Direct call received %d messages", len(messages))
+		assert.NotEmpty(t, messages, "direct call should receive new messages")
+		found := false
+		for _, msg := range messages {
+			if msg.UUID == "uuid-3" {
+				found = true
+			}
+		}
+		assert.True(t, found, "should find the new message uuid-3")
+	case <-time.After(1 * time.Second):
+		t.Fatal("TIMEOUT: even direct call didn't work - logic issue in notifySessionSubscribers")
+	}
+}

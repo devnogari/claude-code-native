@@ -314,8 +314,9 @@ func TestNewHandler(t *testing.T) {
 		projRepo := &mockProjectRepository{}
 		msgRepo := &mockMessageRepository{}
 		queueSvc := &mockQueueService{}
+		historyCache, _ := claude.NewHistoryCache(logger, t.TempDir())
 
-		handler := NewHandler(hub, cfg, logger, claudeMgr, convRepo, projRepo, msgRepo, queueSvc)
+		handler := NewHandler(hub, cfg, logger, claudeMgr, convRepo, projRepo, msgRepo, queueSvc, historyCache)
 
 		require.NotNil(t, handler)
 		assert.Equal(t, hub, handler.hub)
@@ -337,8 +338,9 @@ func TestNewHandler(t *testing.T) {
 		projRepo := &mockProjectRepository{}
 		msgRepo := &mockMessageRepository{}
 		queueSvc := &mockQueueService{}
+		historyCache, _ := claude.NewHistoryCache(logger, t.TempDir())
 
-		handler := NewHandler(hub, cfg, logger, claudeMgr, convRepo, projRepo, msgRepo, queueSvc)
+		handler := NewHandler(hub, cfg, logger, claudeMgr, convRepo, projRepo, msgRepo, queueSvc, historyCache)
 
 		// Verify the handler is of correct type
 		var _ *Handler = handler

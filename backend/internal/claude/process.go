@@ -506,7 +506,7 @@ func (p *Process) readOutput(pipe io.Reader, outputType string) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		// Log stderr for debugging
+		// Only log stderr as it may contain important warnings/errors
 		if outputType == "stderr" {
 			p.logger.Warn("claude stderr",
 				zap.String("conversationID", p.ConversationID.String()),

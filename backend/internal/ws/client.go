@@ -32,6 +32,12 @@ type Client struct {
 	ClaudeSessionID uuid.UUID
 	// IsFilesystemSession indicates if this is a filesystem-based session (not DB-backed)
 	IsFilesystemSession bool
+
+	// History watch subscription state (unified WebSocket only)
+	// HistoryEncodedPath is the encoded project path for history watching
+	HistoryEncodedPath string
+	// HistorySessionID is the session ID for history watching
+	HistorySessionID string
 }
 
 // NewClient creates a new WebSocket client

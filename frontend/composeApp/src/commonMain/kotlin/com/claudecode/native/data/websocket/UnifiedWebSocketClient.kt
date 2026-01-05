@@ -9,6 +9,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.cancellation.CancellationException
@@ -107,6 +109,15 @@ class UnifiedWebSocketClient(
     /** Current session state for the subscribed conversation */
     val sessionState: StateFlow<SessionStatePayload?> = _sessionState.asStateFlow()
 
+    // History watch subscription state
+    private val _currentHistorySubscription = MutableStateFlow<HistorySubscriptionState?>(null)
+    /** Currently subscribed history watch session */
+    val currentHistorySubscription: StateFlow<HistorySubscriptionState?> = _currentHistorySubscription.asStateFlow()
+
+    private val _historyWatchEvents = MutableSharedFlow<HistoryWatchEvent>()
+    /** Flow of history watch events (new messages, errors, etc.) */
+    val historyWatchEvents: SharedFlow<HistoryWatchEvent> = _historyWatchEvents.asSharedFlow()
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -170,6 +181,13 @@ class UnifiedWebSocketClient(
                 subscribeInternal(previousSubscription, currentSessionId, currentEncodedPath)
             }
 
+            // Re-subscribe to history watch if we were subscribed before
+            val previousHistory = _currentHistorySubscription.value
+            if (previousHistory != null) {
+                DebugLogger.d(TAG, "Re-subscribing to history watch: encodedPath=${previousHistory.encodedPath}, sessionId=${previousHistory.sessionId}")
+                historySubscribeInternal(previousHistory.encodedPath, previousHistory.sessionId)
+            }
+
             receiveJob = scope.launch {
                 session?.let { ws ->
                     try {
@@ -218,7 +236,7 @@ class UnifiedWebSocketClient(
     /**
      * Handles incoming messages that require special processing.
      */
-    private fun handleMessage(message: IncomingMessage) {
+    private suspend fun handleMessage(message: IncomingMessage) {
         when (message.type) {
             MessageType.SUBSCRIBED -> {
                 DebugLogger.d(TAG, "Subscribed to conversation: ${message.conversationId}")
@@ -236,6 +254,52 @@ class UnifiedWebSocketClient(
                         DebugLogger.d(TAG, "Session state updated for: ${state.conversationId}")
                     } catch (e: Exception) {
                         DebugLogger.e(TAG, "Failed to parse session state: ${e.message}")
+                    }
+                }
+            }
+            MessageType.HISTORY_SUBSCRIBED -> {
+                message.payload?.let { payload ->
+                    try {
+                        val historySubscribed = json.decodeFromJsonElement(HistorySubscribedPayload.serializer(), payload)
+                        val state = HistorySubscriptionState(
+                            encodedPath = historySubscribed.encodedPath,
+                            sessionId = historySubscribed.sessionId
+                        )
+                        _currentHistorySubscription.value = state
+                        _historyWatchEvents.emit(
+                            HistoryWatchEvent.Connected(
+                                sessionId = historySubscribed.sessionId,
+                                encodedPath = historySubscribed.encodedPath
+                            )
+                        )
+                        DebugLogger.d(TAG, "History subscribed: ${historySubscribed.sessionId}")
+                    } catch (e: Exception) {
+                        DebugLogger.e(TAG, "Failed to parse history_subscribed: ${e.message}")
+                    }
+                }
+            }
+            MessageType.HISTORY_UNSUBSCRIBED -> {
+                _currentHistorySubscription.value = null
+                _historyWatchEvents.emit(HistoryWatchEvent.Unsubscribed)
+                DebugLogger.d(TAG, "History unsubscribed")
+            }
+            MessageType.NEW_MESSAGES -> {
+                message.payload?.let { payload ->
+                    try {
+                        val newMsgsPayload = json.decodeFromJsonElement(NewMessagesPayload.serializer(), payload)
+                        _historyWatchEvents.emit(
+                            HistoryWatchEvent.NewMessages(
+                                sessionId = newMsgsPayload.sessionId,
+                                encodedPath = newMsgsPayload.encodedPath,
+                                messages = newMsgsPayload.messages,
+                                sessionState = newMsgsPayload.sessionState,
+                                todos = newMsgsPayload.todos
+                            )
+                        )
+                        DebugLogger.d(TAG, "History new_messages: ${newMsgsPayload.messages.size} messages, state=${newMsgsPayload.sessionState}")
+                    } catch (e: Exception) {
+                        DebugLogger.e(TAG, "Failed to parse new_messages: ${e.message}", e)
+                        _historyWatchEvents.emit(HistoryWatchEvent.Error("Failed to parse new_messages: ${e.message}"))
                     }
                 }
             }
@@ -388,6 +452,19 @@ class UnifiedWebSocketClient(
     }
 
     /**
+     * Internal history subscribe method for reconnection - does NOT wait for confirmation.
+     * Used only during reconnection when we need to re-subscribe without blocking.
+     */
+    private suspend fun historySubscribeInternal(encodedPath: String, sessionId: String) {
+        val subscribeMessage = HistorySubscribeMessage(
+            encodedPath = encodedPath,
+            sessionId = sessionId
+        )
+        session?.send(Frame.Text(json.encodeToString(HistorySubscribeMessage.serializer(), subscribeMessage)))
+        DebugLogger.d(TAG, "Sent history_subscribe request (reconnect): encodedPath=$encodedPath, sessionId=$sessionId")
+    }
+
+    /**
      * Unsubscribes from the current conversation.
      */
     suspend fun unsubscribe() {
@@ -404,6 +481,59 @@ class UnifiedWebSocketClient(
             currentEncodedPath = null
             _sessionState.value = null
             DebugLogger.d(TAG, "Unsubscribed from conversation: $currentConversationId")
+        }
+    }
+
+    // ============================================================
+    // History Watch Methods (unified into main WebSocket)
+    // ============================================================
+
+    /**
+     * Subscribes to watch a specific session's history file for changes.
+     * This enables real-time updates when the Claude CLI modifies the history file.
+     *
+     * @param encodedPath Base64-encoded project path
+     * @param sessionId The session ID to watch
+     * @throws IllegalStateException if not connected
+     */
+    suspend fun historySubscribe(encodedPath: String, sessionId: String) {
+        mutex.withLock {
+            if (_connectionState.value != ConnectionState.Connected) {
+                throw IllegalStateException("WebSocket is not connected")
+            }
+
+            // Check if already subscribed to same session
+            val current = _currentHistorySubscription.value
+            if (current?.sessionId == sessionId && current.encodedPath == encodedPath) {
+                DebugLogger.d(TAG, "Already subscribed to history: sessionId=$sessionId")
+                return@withLock
+            }
+
+            val subscribeMessage = HistorySubscribeMessage(
+                encodedPath = encodedPath,
+                sessionId = sessionId
+            )
+            session?.send(Frame.Text(json.encodeToString(HistorySubscribeMessage.serializer(), subscribeMessage)))
+            DebugLogger.d(TAG, "Sent history_subscribe: sessionId=$sessionId, encodedPath=$encodedPath")
+        }
+    }
+
+    /**
+     * Unsubscribes from history file watching.
+     */
+    suspend fun historyUnsubscribe() {
+        mutex.withLock {
+            if (_currentHistorySubscription.value == null) {
+                return@withLock
+            }
+
+            if (_connectionState.value == ConnectionState.Connected) {
+                val unsubscribeMessage = HistoryUnsubscribeMessage()
+                session?.send(Frame.Text(json.encodeToString(HistoryUnsubscribeMessage.serializer(), unsubscribeMessage)))
+                DebugLogger.d(TAG, "Sent history_unsubscribe")
+            }
+
+            _currentHistorySubscription.value = null
         }
     }
 

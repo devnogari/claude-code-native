@@ -263,3 +263,22 @@ func (h *Hub) UnsubscribeClient(client *Client) {
 	}
 	client.ConversationID = uuid.Nil
 }
+
+// BroadcastToClaudeSession sends a message to all clients watching a specific Claude session
+// This is used for streaming output to ensure all connected clients receive the response
+func (h *Hub) BroadcastToClaudeSession(sessionID uuid.UUID, data []byte) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	sessionStr := sessionID.String()
+	for _, client := range h.clients {
+		// Match by ClaudeSessionID (UUID) or HistorySessionID (string)
+		if client.ClaudeSessionID == sessionID || client.HistorySessionID == sessionStr {
+			select {
+			case client.Send <- data:
+			default:
+				// Skip if buffer is full
+			}
+		}
+	}
+}

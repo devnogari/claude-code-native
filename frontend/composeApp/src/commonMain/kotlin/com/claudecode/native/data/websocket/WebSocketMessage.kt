@@ -1,5 +1,8 @@
 package com.claudecode.native.data.websocket
 
+import com.claudecode.native.data.model.ClaudeMessage
+import com.claudecode.native.data.model.SessionState
+import com.claudecode.native.data.model.TodoItem
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -106,6 +109,18 @@ object MessageType {
     const val SUBSCRIBED = "subscribed"
     /** Session state synchronization (unified WebSocket) */
     const val SESSION_STATE = "session_state"
+
+    // History watch message types (unified into main WebSocket)
+    /** Subscribe to history file changes (unified WebSocket) */
+    const val HISTORY_SUBSCRIBE = "history_subscribe"
+    /** Unsubscribe from history file changes (unified WebSocket) */
+    const val HISTORY_UNSUBSCRIBE = "history_unsubscribe"
+    /** History subscription confirmed (unified WebSocket) */
+    const val HISTORY_SUBSCRIBED = "history_subscribed"
+    /** History unsubscription confirmed (unified WebSocket) */
+    const val HISTORY_UNSUBSCRIBED = "history_unsubscribed"
+    /** New messages from history file (unified WebSocket) */
+    const val NEW_MESSAGES = "new_messages"
 }
 
 /**
@@ -222,3 +237,82 @@ data class TodoItemPayload(
     val priority: String? = null,
     val id: String? = null
 )
+
+// ============================================================
+// History Watch DTOs (unified into main WebSocket)
+// ============================================================
+
+/**
+ * Outgoing history subscribe message for unified WebSocket.
+ * Type-safe wrapper for history_subscribe requests.
+ */
+@Serializable
+data class HistorySubscribeMessage(
+    val type: String = MessageType.HISTORY_SUBSCRIBE,
+    @SerialName("encoded_path") val encodedPath: String,
+    @SerialName("session_id") val sessionId: String
+)
+
+/**
+ * Outgoing history unsubscribe message for unified WebSocket.
+ * Type-safe wrapper for history_unsubscribe requests.
+ */
+@Serializable
+data class HistoryUnsubscribeMessage(
+    val type: String = MessageType.HISTORY_UNSUBSCRIBE
+)
+
+/**
+ * Payload for history_subscribed WebSocket message.
+ * Confirms subscription to history file watching.
+ */
+@Serializable
+data class HistorySubscribedPayload(
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("encoded_path") val encodedPath: String
+)
+
+/**
+ * Payload for new_messages WebSocket message.
+ * Contains new messages from the history file.
+ */
+@Serializable
+data class NewMessagesPayload(
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("encoded_path") val encodedPath: String,
+    val messages: List<ClaudeMessage> = emptyList(),
+    @SerialName("session_state") val sessionState: SessionState = SessionState.IDLE,
+    val todos: List<TodoItem> = emptyList()
+)
+
+/**
+ * State for tracking current history subscription.
+ */
+data class HistorySubscriptionState(
+    val encodedPath: String,
+    val sessionId: String
+)
+
+/**
+ * Sealed class representing history watch events from unified WebSocket.
+ */
+sealed class HistoryWatchEvent {
+    data class Connected(
+        val sessionId: String,
+        val encodedPath: String
+    ) : HistoryWatchEvent()
+
+    data class NewMessages(
+        val sessionId: String,
+        val encodedPath: String,
+        val messages: List<ClaudeMessage>,
+        val sessionState: SessionState = SessionState.IDLE,
+        val todos: List<TodoItem> = emptyList()
+    ) : HistoryWatchEvent()
+
+    data class Error(val message: String) : HistoryWatchEvent()
+
+    data object Disconnected : HistoryWatchEvent()
+
+    data object Unsubscribed : HistoryWatchEvent()
+}
