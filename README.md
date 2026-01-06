@@ -7,19 +7,32 @@
 
 A native desktop and web application for Claude Code, providing a modern cross-platform interface for AI-assisted coding. Built with a Go backend and Kotlin Multiplatform (Compose) frontend.
 
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Backend Daemon](#backend-daemon)
+- [Development](#development)
+- [API Reference](#api-reference)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Features
 
-- **Multi-Platform Support**: Desktop (macOS, Windows, Linux) and Web (WebAssembly).
-- **Real-time Streaming**: WebSocket-based communication for live AI responses.
-- **Project Management**: Organize conversations by project with persistent history.
-- **User Authentication**: Secure JWT-based authentication system.
-- **Claude Integration**: Direct integration with Claude Code CLI.
-- **Modern UI**: Material Design 3 interface with Compose Multiplatform.
-- **Unified WebSocket**: Multiplexed connections for efficient updates across sessions.
+- **Multi-Platform Support**: Desktop (macOS, Windows, Linux) and Web (WebAssembly)
+- **Real-time Streaming**: WebSocket-based communication for live AI responses
+- **Project Management**: Organize conversations by project with persistent history
+- **User Authentication**: Secure JWT-based authentication system
+- **Claude Integration**: Direct integration with Claude Code CLI
+- **Modern UI**: Material Design 3 interface with Compose Multiplatform
+- **Unified WebSocket**: Multiplexed connections for efficient updates across sessions
+- **Background Service**: Run backend as a system daemon (launchd/systemd/Windows Service)
 
-## Architecture Overview
+## Architecture
 
-```text
+```
 claude-code-native/
 ├── backend/                 # Go backend (Fiber + Bun ORM)
 │   ├── cmd/server/          # Application entry point
@@ -30,7 +43,8 @@ claude-code-native/
 │   │   ├── project/         # Project management
 │   │   ├── ws/              # WebSocket hub & handlers
 │   │   └── ...
-│   └── migrations/          # SQL migrations
+│   ├── migrations/          # SQL migrations
+│   └── scripts/service/     # Daemon control scripts
 ├── frontend/                # Kotlin Multiplatform (Compose)
 │   └── composeApp/
 │       └── src/
@@ -46,7 +60,7 @@ claude-code-native/
 |-------|------------|
 | Backend Framework | Go 1.24+ with Fiber v2 |
 | Backend DI | Uber fx |
-| Database | PostgreSQL 18 (Alpine) |
+| Database | PostgreSQL 18 |
 | ORM | Bun |
 | Frontend | Kotlin Multiplatform with Compose |
 | Frontend DI | Koin |
@@ -63,152 +77,201 @@ claude-code-native/
 
 ## Quick Start
 
-The project uses a `Makefile` to simplify development tasks.
-
 ### 1. Clone and Configure
 
 ```bash
 git clone https://github.com/devnogari/claude-code-native.git
 cd claude-code-native
 
-# Setup backend environment
-cp backend/.env.example backend/.env.local
-# Edit backend/.env.local with your values (JWT_SECRET, etc.)
-
-# Setup root environment (if using docker-compose)
+# Setup environment
 cp .env.example .env
+# Edit .env with your values (DB_PASSWORD, JWT_SECRET)
 ```
 
 ### 2. Start Services
 
-Using the `Makefile` (recommended for development):
+Using the `Makefile` (recommended):
 
 ```bash
-# Start DB, Server, and Frontend Desktop
+# Start everything (DB + Server + Desktop)
 make all
 
 # Or start individually:
 make db             # Start PostgreSQL via Docker
 make server         # Start backend server
 make frontend       # Start desktop app
+make frontend-web   # Start web app
 ```
 
 ### 3. Access the Application
 
-- **Desktop App**: Launched via `make frontend`
-- **Web App**: `make frontend-web` (accessible at http://localhost:8080 by default)
-- **Backend API**: `http://localhost:8083` (when using `make server`)
+| Service | URL |
+|---------|-----|
+| Desktop App | Launched via `make frontend` |
+| Web App | http://localhost:8080 |
+| Backend API | http://localhost:8083 |
+
+## Backend Daemon
+
+Run the backend as a system service for persistent operation.
+
+### Service Control (ctl.sh)
+
+```bash
+cd backend/scripts/service
+
+# Install and start
+./ctl.sh install      # Install as system service
+./ctl.sh start        # Start backend
+
+# Management
+./ctl.sh status       # Show service status
+./ctl.sh restart      # Restart backend
+./ctl.sh stop         # Stop backend
+./ctl.sh update       # Build and restart (after code changes)
+./ctl.sh logs         # View recent logs
+./ctl.sh logs -f      # Follow logs (tail)
+./ctl.sh uninstall    # Remove service
+
+# Full stack control
+./ctl.sh up           # Start PostgreSQL + Backend
+./ctl.sh down         # Stop all services
+
+# Database management
+./ctl.sh db start     # Start PostgreSQL
+./ctl.sh db stop      # Stop PostgreSQL
+./ctl.sh db status    # Check PostgreSQL status
+./ctl.sh db logs      # View PostgreSQL logs
+./ctl.sh db shell     # Open psql shell
+```
+
+### Platform-Specific Notes
+
+**macOS (launchd)**
+```bash
+./ctl.sh install && ./ctl.sh start
+# Logs: ~/Library/Logs/ccn-backend.log
+```
+
+**Linux (systemd)**
+```bash
+sudo ./ctl.sh install && sudo ./ctl.sh start
+# Logs: journalctl -u ccn-backend
+```
+
+**Windows (NSSM)**
+```powershell
+# Requires NSSM: choco install nssm
+.\ctl.ps1 install
+.\ctl.ps1 start
+# Logs: C:\Program Files\ccn-backend\logs\
+```
+
+### Environment Variables
+
+Set these before running `./ctl.sh install`:
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DATABASE_URL` | PostgreSQL connection string | Yes |
+| `JWT_SECRET` | JWT signing secret (32+ chars) | Yes |
+| `PORT` | Server port (default: 8083) | No |
+| `LOG_LEVEL` | debug/info/warn/error | No |
+| `CLAUDE_PROJECTS_PATH` | Claude projects directory | No |
+
+```bash
+export DATABASE_URL="postgres://ccn:password@localhost:5438/claude_code_native?sslmode=disable"
+export JWT_SECRET="your-secure-32-character-secret-key"
+./ctl.sh install
+```
 
 ## Development
 
-### Backend Development
-
-The backend is a Go application using the Fiber framework.
+### Backend
 
 ```bash
 cd backend
 go mod download
-# Running with hot reload (requires 'air')
-make server-watch
+go run ./cmd/server              # Run directly
+make server-watch                # Run with hot reload (requires 'air')
+go test ./...                    # Run tests
 ```
 
-### Frontend Development
-
-The frontend is built with Compose Multiplatform.
+### Frontend
 
 ```bash
 cd frontend
-# Run Desktop
-./gradlew composeApp:run
-# Run Web (Wasm)
-./gradlew composeApp:wasmJsBrowserRun
+./gradlew composeApp:desktopRun           # Desktop app
+./gradlew composeApp:wasmJsBrowserRun     # Web app (dev server)
+./gradlew check                            # Run tests + linting
 ```
 
-## Environment Variables
+### Build for Production
 
-### Backend (`backend/.env.local`)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Backend port | `8083` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgres://ccn:localdev@localhost:5438/...` |
-| `JWT_SECRET` | JWT signing secret (32+ chars) | Required |
-| `CLAUDE_PROJECTS_PATH` | Claude projects directory | `~/.claude` |
-
-## Scripts
-
-| Command | Description |
-|---------|-------------|
-| `make db` | Start PostgreSQL container |
-| `make server` | Start backend server |
-| `make frontend` | Start desktop application |
-| `make test` | Run all tests |
-| `make build` | Build backend and frontend |
-| `make clean` | Remove build artifacts |
-
-## Testing
-
-### Backend Tests
 ```bash
-make test-backend
+# Backend
+cd backend && go build -o ccn-backend ./cmd/server
+
+# Frontend Desktop
+cd frontend && ./gradlew composeApp:packageDistributionForCurrentOS
+
+# Frontend Web
+cd frontend && ./gradlew composeApp:wasmJsBrowserProductionWebpack
 ```
 
-### Frontend Tests
-```bash
-cd frontend
-./gradlew check
-```
-
-## API Documentation (v1)
+## API Reference
 
 ### Authentication
-- `POST /api/v1/auth/register` - Register new user
-- `POST /api/v1/auth/login` - Login and get JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/auth/register` | Register new user |
+| POST | `/api/v1/auth/login` | Login and get JWT |
 
 ### Projects
-- `GET /api/v1/projects` - List projects
-- `POST /api/v1/projects` - Create project
-- `GET /api/v1/projects/:id` - Get project
-- `PUT /api/v1/projects/:id` - Update project
-- `DELETE /api/v1/projects/:id` - Delete project
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/projects` | List all projects |
+| POST | `/api/v1/projects` | Create project |
+| GET | `/api/v1/projects/:id` | Get project details |
+| PUT | `/api/v1/projects/:id` | Update project |
+| DELETE | `/api/v1/projects/:id` | Delete project |
 
 ### Conversations
-- `GET /api/v1/projects/:projectId/conversations` - List conversations
-- `POST /api/v1/projects/:projectId/conversations` - Create conversation
-- `GET /api/v1/conversations/:id` - Get conversation
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/projects/:projectId/conversations` | List conversations |
+| POST | `/api/v1/projects/:projectId/conversations` | Create conversation |
+| GET | `/api/v1/conversations/:id` | Get conversation |
 
 ### WebSocket
-- `/api/v1/ws/user` - Unified user WebSocket (Multiplexed)
-- `/api/v1/ws/:conversationID` - Legacy per-conversation WebSocket
 
-## TODOs / Roadmap
+| Endpoint | Description |
+|----------|-------------|
+| `/api/v1/ws/user` | Unified user WebSocket (multiplexed) |
+| `/api/v1/ws/:conversationID` | Per-conversation WebSocket (legacy) |
 
-- [ ] Fix `docker-compose.local.yml` discrepancy in Makefile.
-- [ ] Add `Dockerfile` for backend and frontend.
-- [ ] Implement full production-ready `docker-compose.yml` including Traefik.
-- [ ] Add Android and iOS support to the frontend.
-- [ ] Improve documentation for WebSocket protocol messages.
+**WebSocket Message Types:**
+
+| Direction | Type | Description |
+|-----------|------|-------------|
+| Client→Server | `chat` | Send message to Claude |
+| Client→Server | `stop` | Interrupt current response |
+| Client→Server | `ping` | Keep-alive |
+| Server→Client | `stream` | Response chunk |
+| Server→Client | `complete` | Response complete |
+| Server→Client | `error` | Error message |
+| Server→Client | `pong` | Keep-alive response |
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
 
 ## License
 
-MIT License
-
-Copyright (c) 2024-2026 devnogari
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+[MIT License](LICENSE) - Copyright (c) 2024-2026 Claude Code Native Contributors
