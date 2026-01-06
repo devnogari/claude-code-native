@@ -1,5 +1,10 @@
 # Claude Code Native
 
+[![CI](https://github.com/devnogari/claude-code-native/actions/workflows/ci.yml/badge.svg)](https://github.com/devnogari/claude-code-native/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.1+-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+
 A native desktop and web application for Claude Code, providing a modern cross-platform interface for AI-assisted coding. Built with a Go backend and Kotlin Multiplatform (Compose) frontend.
 
 ## Features
