@@ -533,10 +533,9 @@ func (h *HistoryWatchHandler) readPump(client *WatchClient) {
 // writePump writes messages to the WebSocket connection
 func (h *HistoryWatchHandler) writePump(client *WatchClient) {
 	ticker := time.NewTicker(watchPingPeriod)
-	defer func() {
-		ticker.Stop()
-		_ = client.conn.Close()
-	}()
+	defer ticker.Stop()
+	// Note: Don't close client.conn here - the websocket library manages connection lifecycle
+	// and will close it when the handler function returns
 
 	for {
 		select {
