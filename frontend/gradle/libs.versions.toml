@@ -18,7 +18,7 @@ slf4j = "2.0.17"
 androidx-activityCompose = "1.12.2"
 androidx-lifecycle = "2.10.0"
 lifecycle-compose = "2.9.6"
-mockk = "1.13.14"
+mockk = "1.14.7"
 turbine = "1.2.1"
 
 [libraries]
