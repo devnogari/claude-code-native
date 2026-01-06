@@ -20,6 +20,8 @@ jobs:
         image: postgres:18
         env:
           POSTGRES_USER: ccn
+          # NOTE: This is a test-only password for CI environment.
+          # It is intentionally simple and is NOT used in production.
           POSTGRES_PASSWORD: testpassword
           POSTGRES_DB: claude_code_native_test
         ports:
@@ -47,6 +49,8 @@ jobs:
       - name: Run tests
         working-directory: backend
         env:
+          # NOTE: These are test-only credentials for CI environment.
+          # They are intentionally simple and are NOT used in production.
           DATABASE_URL: postgres://ccn:testpassword@localhost:5432/claude_code_native_test?sslmode=disable
           JWT_SECRET: testsecret123456789012345678901234
         run: go test -v -race -coverprofile=coverage.out ./...

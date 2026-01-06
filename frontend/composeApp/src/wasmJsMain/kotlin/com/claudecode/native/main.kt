@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024-2025 Claude Code Native Contributors
+
 package com.claudecode.native
 
 import androidx.compose.ui.ExperimentalComposeUiApi

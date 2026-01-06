@@ -67,13 +67,13 @@ choco install nssm  # or download from https://nssm.cc/
 
 Set these before running `install`:
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgres://ccn:localdev123@localhost:5438/...` |
-| `JWT_SECRET` | JWT signing secret (32+ chars) | (placeholder - change!) |
-| `PORT` | Server port | `8083` |
-| `LOG_LEVEL` | Log level (debug/info/warn/error) | `info` |
-| `CLAUDE_PROJECTS_PATH` | Claude projects directory | `~/.claude` |
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DATABASE_URL` | PostgreSQL connection string | **Yes** |
+| `JWT_SECRET` | JWT signing secret (32+ chars) | **Yes** |
+| `PORT` | Server port | No (default: `8083`) |
+| `LOG_LEVEL` | Log level (debug/info/warn/error) | No (default: `info`) |
+| `CLAUDE_PROJECTS_PATH` | Claude projects directory | No (default: `~/.claude`) |
 
 ### macOS/Linux
 

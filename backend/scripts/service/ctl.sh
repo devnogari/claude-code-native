@@ -24,6 +24,34 @@ log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# ============================================
+# Environment validation
+# ============================================
+
+validate_required_env() {
+    local missing=()
+
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+        missing+=("DATABASE_URL")
+    fi
+
+    if [[ -z "${JWT_SECRET:-}" ]]; then
+        missing+=("JWT_SECRET")
+    fi
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log_error "Required environment variables are not set:"
+        for var in "${missing[@]}"; do
+            echo "  - $var"
+        done
+        echo ""
+        echo "Please set these environment variables before running 'install':"
+        echo "  export DATABASE_URL=\"postgres://user:password@host:port/dbname?sslmode=disable\""
+        echo "  export JWT_SECRET=\"your-secure-secret-key-minimum-32-characters\""
+        exit 1
+    fi
+}
+
 detect_os() {
     case "$(uname -s)" in
         Darwin*) echo "macos" ;;
@@ -77,6 +105,9 @@ db_shell() {
 # ============================================
 
 macos_install() {
+    # Validate required environment variables
+    validate_required_env
+
     local plist_src="$SCRIPT_DIR/ccn-backend.plist"
     local plist_dst="$HOME/Library/LaunchAgents/com.devnogari.ccn-backend.plist"
 
@@ -94,12 +125,12 @@ macos_install() {
     fi
     local service_path="${claude_dir}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-    # Process template
+    # Process template (no default values - environment variables are required)
     log_info "Installing launchd service..."
     sed -e "s|__INSTALL_PATH__|$BACKEND_DIR|g" \
         -e "s|__HOME__|$HOME|g" \
-        -e "s|__DATABASE_URL__|${DATABASE_URL:-postgres://ccn:localdev123@localhost:5438/claude_code_native?sslmode=disable}|g" \
-        -e "s|__JWT_SECRET__|${JWT_SECRET:-your-super-secure-jwt-secret-key-minimum-32-chars}|g" \
+        -e "s|__DATABASE_URL__|${DATABASE_URL}|g" \
+        -e "s|__JWT_SECRET__|${JWT_SECRET}|g" \
         -e "s|__PATH__|$service_path|g" \
         -e "s|__GITHUB_TOKEN__|${GITHUB_TOKEN:-}|g" \
         "$plist_src" > "$plist_dst"

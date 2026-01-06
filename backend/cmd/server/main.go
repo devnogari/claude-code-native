@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024-2025 Claude Code Native Contributors
+
 // Package main is the entry point for the claude-code-native backend server.
 // It uses Uber's fx dependency injection framework to manage application lifecycle.
 package main
