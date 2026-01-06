@@ -860,24 +860,6 @@ func (h *Handler) sendPongToClient(client *Client) {
 	}
 }
 
-func (h *Handler) sendStreamToClient(client *Client, content string) {
-	msg := createOutgoingStream(client.ConversationID, content)
-	data, _ := json.Marshal(msg)
-	select {
-	case client.Send <- data:
-	default:
-	}
-}
-
-func (h *Handler) sendStderrToClient(client *Client, content string) {
-	msg := createOutgoingStderr(client.ConversationID, content)
-	data, _ := json.Marshal(msg)
-	select {
-	case client.Send <- data:
-	default:
-	}
-}
-
 func (h *Handler) sendCompleteToClient(client *Client) {
 	msg := createOutgoingComplete(client.ConversationID)
 	data, _ := json.Marshal(msg)
@@ -901,31 +883,9 @@ func (h *Handler) sendCompleteToClient(client *Client) {
 	}
 }
 
-// broadcastStreamToConversation broadcasts stream content to all clients in the conversation
-// This ensures reconnected clients receive stream output even if a different client started the process
-func (h *Handler) broadcastStreamToConversation(convID uuid.UUID, content string) {
-	msg := createOutgoingStream(convID, content)
-	data, _ := json.Marshal(msg)
-	h.hub.BroadcastToConversation(convID, data)
-}
-
 // broadcastStderrToConversation broadcasts stderr content to all clients in the conversation
 func (h *Handler) broadcastStderrToConversation(convID uuid.UUID, content string) {
 	msg := createOutgoingStderr(convID, content)
-	data, _ := json.Marshal(msg)
-	h.hub.BroadcastToConversation(convID, data)
-}
-
-// broadcastCompleteToConversation broadcasts complete message to all clients in the conversation
-func (h *Handler) broadcastCompleteToConversation(convID uuid.UUID) {
-	msg := createOutgoingComplete(convID)
-	data, _ := json.Marshal(msg)
-	h.hub.BroadcastToConversation(convID, data)
-}
-
-// broadcastErrorToConversation broadcasts error message to all clients in the conversation
-func (h *Handler) broadcastErrorToConversation(convID uuid.UUID, errMsg string) {
-	msg := createOutgoingError(errMsg)
 	data, _ := json.Marshal(msg)
 	h.hub.BroadcastToConversation(convID, data)
 }
@@ -1101,29 +1061,6 @@ func getExtensionFromMediaType(mediaType string) string {
 	}
 }
 
-// getMediaTypeFromExtension returns the media type for a given file extension
-func getMediaTypeFromExtension(ext string) string {
-	switch strings.ToLower(ext) {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	case ".bmp":
-		return "image/bmp"
-	case ".svg":
-		return "image/svg+xml"
-	default:
-		return "application/octet-stream"
-	}
-}
-
-// unused but kept for potential future use
-var _ = filepath.Base
-
 // Queue-related helper methods
 
 // sendQueueSyncToClient sends the current queue state to a client
@@ -1259,9 +1196,9 @@ func (h *Handler) readUserPump(client *Client) {
 	}()
 
 	client.Conn.SetReadLimit(maxMessageSize)
-	client.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	_ = client.Conn.SetReadDeadline(time.Now().Add(pongWait))
 	client.Conn.SetPongHandler(func(string) error {
-		client.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		_ = client.Conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 

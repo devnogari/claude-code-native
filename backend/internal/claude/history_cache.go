@@ -785,12 +785,12 @@ func (c *HistoryCache) saveExcludedProjects() {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	writer.WriteString("# Excluded projects - these won't appear in the project list\n")
-	writer.WriteString("# Delete lines to restore projects\n")
+	_, _ = writer.WriteString("# Excluded projects - these won't appear in the project list\n")
+	_, _ = writer.WriteString("# Delete lines to restore projects\n")
 	for _, p := range projects {
-		writer.WriteString(p + "\n")
+		_, _ = writer.WriteString(p + "\n")
 	}
-	writer.Flush()
+	_ = writer.Flush()
 
 	c.logger.Debug("saved excluded projects", zap.Int("count", len(projects)))
 }

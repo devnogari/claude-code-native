@@ -1,0 +1,28 @@
+linters-settings:
+  errcheck:
+    # report about not checking of errors in type assertions: `a := b.(MyStruct)`;
+    check-type-assertions: false
+    # report about assignment of errors to blank identifier: `num, _ := strconv.Atoi(numStr)`;
+    check-blank: false
+    # List of functions to exclude from checking
+    exclude-functions:
+      - (io.Closer).Close
+      - (net.Conn).Close
+
+issues:
+  # Exclude test files from certain checks
+  exclude-rules:
+    # Exclude errcheck for test files
+    - path: _test\.go
+      linters:
+        - errcheck
+    # Exclude staticcheck SA1012 (nil context) for test files
+    - path: _test\.go
+      linters:
+        - staticcheck
+      text: "SA1012"
+    # Exclude staticcheck SA5011 (possible nil pointer) for test files
+    - path: _test\.go
+      linters:
+        - staticcheck
+      text: "SA5011"

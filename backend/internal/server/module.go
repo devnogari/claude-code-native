@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"go.uber.org/fx"
+	"go.uber.org/zap"
 )
 
 var Module = fx.Module("server",
@@ -11,10 +12,14 @@ var Module = fx.Module("server",
 	fx.Invoke(registerLifecycle),
 )
 
-func registerLifecycle(lc fx.Lifecycle, server *Server) {
+func registerLifecycle(lc fx.Lifecycle, server *Server, logger *zap.Logger) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			go server.Start()
+			go func() {
+				if err := server.Start(); err != nil {
+					logger.Error("server error", zap.Error(err))
+				}
+			}()
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {

@@ -102,59 +102,6 @@ func (m *MockProjectRepository) AddProject(p *project.Project) {
 	m.projects[p.ID] = p
 }
 
-func setupTestApp(mockRepo *MockProjectRepository) *fiber.App {
-	handler := project.NewHandler(mockRepo)
-
-	app := fiber.New()
-
-	// Simulate auth middleware by setting userID and username in Locals
-	app.Use(func(c *fiber.Ctx) error {
-		// These will be overridden per test if needed
-		if c.Locals("userID") == nil {
-			c.Locals("userID", "")
-		}
-		if c.Locals("username") == nil {
-			c.Locals("username", "")
-		}
-		return c.Next()
-	})
-
-	// Register routes
-	projects := app.Group("/api/v1/projects")
-	projects.Post("/", handler.Create)
-	projects.Get("/", handler.List)
-	projects.Get("/:id", handler.Get)
-	projects.Put("/:id", handler.Update)
-	projects.Delete("/:id", handler.Delete)
-
-	return app
-}
-
-func makeRequestWithUser(app *fiber.App, method, url string, body []byte, userID, username string) (*http.Response, error) {
-	req := httptest.NewRequest(method, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	// Create a custom app that injects user context
-	testApp := fiber.New()
-	testApp.Use(func(c *fiber.Ctx) error {
-		c.Locals("userID", userID)
-		c.Locals("username", username)
-		return c.Next()
-	})
-
-	// Copy routes from original app
-	mockRepo := NewMockProjectRepository()
-	handler := project.NewHandler(mockRepo)
-	projects := testApp.Group("/api/v1/projects")
-	projects.Post("/", handler.Create)
-	projects.Get("/", handler.List)
-	projects.Get("/:id", handler.Get)
-	projects.Put("/:id", handler.Update)
-	projects.Delete("/:id", handler.Delete)
-
-	return testApp.Test(req)
-}
-
 // Helper to create test app with injected user context
 func setupTestAppWithUser(mockRepo *MockProjectRepository, userID, username string) *fiber.App {
 	handler := project.NewHandler(mockRepo)

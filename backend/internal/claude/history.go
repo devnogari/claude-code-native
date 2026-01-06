@@ -618,55 +618,6 @@ func decodeRemainingParts(parts []string, hiddenMarker string) string {
 	return result.String()
 }
 
-// findValidPath recursively tries to find a valid path by combining segments
-// hiddenMarker is used to identify hidden directories (/.dir)
-func findValidPath(base string, remaining []string) string {
-	const hiddenMarker = "\x00HIDDEN\x00"
-
-	if len(remaining) == 0 {
-		if base != "" && dirExists(base) {
-			return base
-		}
-		return ""
-	}
-
-	// Try combining different numbers of segments with dashes
-	for numSegments := 1; numSegments <= len(remaining); numSegments++ {
-		// Join numSegments parts with dashes (preserving original dashes in names)
-		segment := strings.Join(remaining[:numSegments], "-")
-
-		// Handle hidden directory marker in segment
-		// e.g., "native\x00HIDDEN\x00worktrees" -> "native/.worktrees"
-		if strings.Contains(segment, hiddenMarker) {
-			segment = strings.ReplaceAll(segment, hiddenMarker, "/.")
-		}
-
-		var nextPath string
-		if base == "" {
-			nextPath = segment
-		} else {
-			nextPath = base + "/" + segment
-		}
-
-		// If this is the last segment, check if path exists
-		if numSegments == len(remaining) {
-			if dirExists(nextPath) {
-				return nextPath
-			}
-		} else {
-			// Check if current path exists as directory
-			if dirExists(nextPath) {
-				// Recursively try remaining segments
-				if result := findValidPath(nextPath, remaining[numSegments:]); result != "" {
-					return result
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
 // dirExists checks if a directory exists
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
@@ -684,9 +635,7 @@ func EncodeProjectPath(path string) string {
 	// Replace / with -
 	encoded := strings.ReplaceAll(path, "/", "-")
 	// Remove leading dash if present (from root /)
-	if strings.HasPrefix(encoded, "-") {
-		encoded = encoded[1:]
-	}
+	encoded = strings.TrimPrefix(encoded, "-")
 	return encoded
 }
 
