@@ -19,7 +19,7 @@ androidx-activityCompose = "1.12.2"
 androidx-lifecycle = "2.10.0"
 lifecycle-compose = "2.8.4"
 mockk = "1.13.14"
-turbine = "1.2.0"
+turbine = "1.2.1"
 
 [libraries]
 # Ktor Client
