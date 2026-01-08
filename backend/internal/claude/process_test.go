@@ -86,6 +86,38 @@ func TestProcess_TrackImages_Empty(t *testing.T) {
 	p.imagesMu.Unlock()
 }
 
+func TestProcess_CheckForUpdate(t *testing.T) {
+	// 1. Create a fake "claude" binary
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "claude")
+	err := os.WriteFile(fakeBinary, []byte("#!/bin/sh\necho ok"), 0755)
+	require.NoError(t, err)
+
+	// 2. Add tmpDir to PATH
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// 3. Initially, it should be false (no mod time recorded)
+	assert.False(t, p.CheckForUpdate())
+
+	// 4. Record mod time
+	p.recordBinaryModTime()
+	assert.False(t, p.CheckForUpdate())
+
+	// 5. Update binary (change mtime)
+	// Some filesystems have low mtime precision, so we set it explicitly to a future time
+	newTime := time.Now().Add(1 * time.Second)
+	err = os.Chtimes(fakeBinary, newTime, newTime)
+	require.NoError(t, err)
+
+	// 6. Now it should be true
+	assert.True(t, p.CheckForUpdate())
+}
+
 func TestProcess_TrackImages_Multiple(t *testing.T) {
 	convID := uuid.Must(uuid.NewV4())
 	logger, _ := zap.NewDevelopment()

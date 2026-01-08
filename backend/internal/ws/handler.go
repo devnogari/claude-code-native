@@ -525,24 +525,44 @@ func (h *Handler) handleChatMessage(client *Client, content string, images []Ima
 	// If so, send message via stdin (queued message support)
 	if process.GetStatus() == claude.ProcessStatusRunning {
 		if process.IsInteractive() {
-			h.logger.Info("sending message to running interactive process (queued)",
-				zap.String("claudeSessionID", claudeSessionID.String()),
-				zap.Int("contentLength", len(content)))
+			// Check for binary updates when idle (waiting for input)
+			if process.CheckForUpdate() {
+				h.logger.Info("claude binary update detected, restarting process",
+					zap.String("claudeSessionID", claudeSessionID.String()))
 
-			// Track images for cleanup when process closes
-			process.TrackImages(imagePaths)
+				// Stop the old process
+				if err := h.claudeMgr.StopProcess(claudeSessionID); err != nil {
+					h.logger.Warn("failed to stop process for update", zap.Error(err))
+				}
 
-			if err := process.SendMessage(content, imagePaths); err != nil {
-				h.logger.Error("failed to send message to interactive process", zap.Error(err))
-				h.sendErrorToClient(client, "failed to send message: "+err.Error())
+				// Re-create the process object as StopProcess removes it from Manager
+				process, err = h.claudeMgr.CreateProcess(claudeSessionID, projectPath, nil, permissionMode)
+				if err != nil {
+					h.logger.Error("failed to re-create process after update", zap.Error(err))
+					h.sendErrorToClient(client, "failed to restart Claude after update")
+					return
+				}
+				// Fall through to StartInteractive() below to start the new version
+			} else {
+				h.logger.Info("sending message to running interactive process (queued)",
+					zap.String("claudeSessionID", claudeSessionID.String()),
+					zap.Int("contentLength", len(content)))
+
+				// Track images for cleanup when process closes
+				process.TrackImages(imagePaths)
+
+				if err := process.SendMessage(content, imagePaths); err != nil {
+					h.logger.Error("failed to send message to interactive process", zap.Error(err))
+					h.sendErrorToClient(client, "failed to send message: "+err.Error())
+					return
+				}
+				// Message sent successfully - output will be streamed by existing goroutine
+				// Image cleanup handled by process.Close() via TrackImages
+				streamStarted = true // Prevent early cleanup in defer
+				h.logger.Info("queued message sent successfully",
+					zap.String("claudeSessionID", claudeSessionID.String()))
 				return
 			}
-			// Message sent successfully - output will be streamed by existing goroutine
-			// Image cleanup handled by process.Close() via TrackImages
-			streamStarted = true // Prevent early cleanup in defer
-			h.logger.Info("queued message sent successfully",
-				zap.String("claudeSessionID", claudeSessionID.String()))
-			return
 		}
 		// Non-interactive process still running (legacy case)
 		h.logger.Warn("process already running in non-interactive mode",

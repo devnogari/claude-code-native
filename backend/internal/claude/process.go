@@ -103,6 +103,7 @@ type Process struct {
 	interactive    bool           // True if running in interactive mode
 	pendingImages  []string       // Temporary image files to clean up when process closes
 	imagesMu       sync.Mutex     // Mutex for pendingImages access
+	binaryModTime  time.Time      // Mod time of the claude binary when process was started
 }
 
 // NewProcess creates a new Process for a conversation
@@ -229,6 +230,9 @@ func (p *Process) StartWithPromptAndImages(prompt string, imagePaths []string) e
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
+
+	// Record binary modification time for update tracking
+	p.recordBinaryModTime()
 
 	p.mu.Lock()
 	p.Cmd = cmd
@@ -359,6 +363,9 @@ func (p *Process) StartInteractive() error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
+
+	// Record binary modification time for update tracking
+	p.recordBinaryModTime()
 
 	p.mu.Lock()
 	p.Cmd = cmd
@@ -734,4 +741,44 @@ func (p *Process) DeleteSession() error {
 	}
 
 	return lastErr
+}
+
+// recordBinaryModTime records the modification time of the claude binary
+func (p *Process) recordBinaryModTime() {
+	path, err := exec.LookPath("claude")
+	if err != nil {
+		p.logger.Warn("failed to look up claude path for mod time tracking", zap.Error(err))
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		p.logger.Warn("failed to stat claude binary for mod time tracking", zap.Error(err))
+		return
+	}
+	p.mu.Lock()
+	p.binaryModTime = info.ModTime()
+	p.mu.Unlock()
+	p.logger.Debug("recorded claude binary mod time", zap.Time("modTime", p.binaryModTime))
+}
+
+// CheckForUpdate checks if the claude binary has been updated since the process started
+func (p *Process) CheckForUpdate() bool {
+	p.mu.RLock()
+	lastModTime := p.binaryModTime
+	p.mu.RUnlock()
+
+	if lastModTime.IsZero() {
+		return false
+	}
+
+	path, err := exec.LookPath("claude")
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	return info.ModTime().After(lastModTime)
 }
