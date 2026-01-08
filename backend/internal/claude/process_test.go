@@ -86,6 +86,38 @@ func TestProcess_TrackImages_Empty(t *testing.T) {
 	p.imagesMu.Unlock()
 }
 
+func TestProcess_CheckForUpdate(t *testing.T) {
+	// 1. Create a fake "claude" binary
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "claude")
+	err := os.WriteFile(fakeBinary, []byte("#!/bin/sh\necho ok"), 0755)
+	require.NoError(t, err)
+
+	// 2. Add tmpDir to PATH
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// 3. Initially, it should be false (no mod time recorded)
+	assert.False(t, p.CheckForUpdate())
+
+	// 4. Record mod time
+	p.recordBinaryModTime()
+	assert.False(t, p.CheckForUpdate())
+
+	// 5. Update binary (change mtime)
+	// Some filesystems have low mtime precision, so we set it explicitly to a future time
+	newTime := time.Now().Add(1 * time.Second)
+	err = os.Chtimes(fakeBinary, newTime, newTime)
+	require.NoError(t, err)
+
+	// 6. Now it should be true
+	assert.True(t, p.CheckForUpdate())
+}
+
 func TestProcess_TrackImages_Multiple(t *testing.T) {
 	convID := uuid.Must(uuid.NewV4())
 	logger, _ := zap.NewDevelopment()
@@ -647,4 +679,151 @@ func TestParseStreamJSON_ResultMessage(t *testing.T) {
 
 	assert.False(t, isDisplayable)
 	assert.Empty(t, text)
+}
+
+// ============================================
+// Streaming State Tests (for auto-update feature)
+// ============================================
+
+func TestProcess_SetStreaming(t *testing.T) {
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// Initially not streaming
+	assert.False(t, p.IsStreaming())
+
+	// Set streaming to true
+	p.SetStreaming(true)
+	assert.True(t, p.IsStreaming())
+
+	// Set streaming to false
+	p.SetStreaming(false)
+	assert.False(t, p.IsStreaming())
+}
+
+func TestProcess_IsIdle_NotInteractive(t *testing.T) {
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// Not interactive, not streaming - should NOT be idle
+	// (idle only applies to interactive processes)
+	assert.False(t, p.IsIdle())
+}
+
+func TestProcess_IsIdle_InteractiveAndNotStreaming(t *testing.T) {
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// Set interactive mode
+	p.mu.Lock()
+	p.interactive = true
+	p.mu.Unlock()
+
+	// Interactive and not streaming - should be idle
+	assert.True(t, p.IsIdle())
+}
+
+func TestProcess_IsIdle_InteractiveAndStreaming(t *testing.T) {
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// Set interactive mode and streaming
+	p.mu.Lock()
+	p.interactive = true
+	p.streaming = true
+	p.mu.Unlock()
+
+	// Interactive but streaming - should NOT be idle
+	assert.False(t, p.IsIdle())
+}
+
+func TestProcess_StreamingState_Concurrent(t *testing.T) {
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	var wg sync.WaitGroup
+
+	// Concurrent reads and writes to streaming state
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			p.SetStreaming(true)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = p.IsStreaming()
+			_ = p.IsIdle()
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestProcess_CheckForUpdate_CachesBinaryPath(t *testing.T) {
+	// 1. Create a fake "claude" binary
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "claude")
+	err := os.WriteFile(fakeBinary, []byte("#!/bin/sh\necho ok"), 0755)
+	require.NoError(t, err)
+
+	// 2. Add tmpDir to PATH
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// 3. Record mod time - this should cache the binary path
+	p.recordBinaryModTime()
+
+	// Verify binary path is cached
+	p.mu.RLock()
+	cachedPath := p.binaryPath
+	p.mu.RUnlock()
+	assert.NotEmpty(t, cachedPath)
+	assert.Contains(t, cachedPath, "claude")
+}
+
+func TestProcess_CheckForUpdate_BinaryRemoved(t *testing.T) {
+	// 1. Create a fake "claude" binary
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "claude")
+	err := os.WriteFile(fakeBinary, []byte("#!/bin/sh\necho ok"), 0755)
+	require.NoError(t, err)
+
+	// 2. Add tmpDir to PATH
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", tmpDir+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// 3. Record mod time
+	p.recordBinaryModTime()
+	assert.False(t, p.CheckForUpdate())
+
+	// 4. Remove the binary
+	err = os.Remove(fakeBinary)
+	require.NoError(t, err)
+
+	// 5. Now CheckForUpdate should return true (binary removed triggers update)
+	assert.True(t, p.CheckForUpdate())
+}
+
+func TestProcess_CheckForUpdate_NoBinaryPath(t *testing.T) {
+	convID := uuid.Must(uuid.NewV4())
+	p := NewProcess(convID, "/tmp", nil)
+
+	// Without recording mod time, CheckForUpdate should return false
+	assert.False(t, p.CheckForUpdate())
+
+	// Set mod time but not path - should still return false
+	p.mu.Lock()
+	p.binaryModTime = time.Now()
+	p.mu.Unlock()
+
+	assert.False(t, p.CheckForUpdate())
 }

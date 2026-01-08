@@ -103,6 +103,9 @@ type Process struct {
 	interactive    bool           // True if running in interactive mode
 	pendingImages  []string       // Temporary image files to clean up when process closes
 	imagesMu       sync.Mutex     // Mutex for pendingImages access
+	binaryPath     string         // Resolved path to claude binary (cached for performance)
+	binaryModTime  time.Time      // Mod time of the claude binary when process was started
+	streaming      bool           // True if process is actively generating output (not idle)
 }
 
 // NewProcess creates a new Process for a conversation
@@ -229,6 +232,9 @@ func (p *Process) StartWithPromptAndImages(prompt string, imagePaths []string) e
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
+
+	// Record binary modification time for update tracking
+	p.recordBinaryModTime()
 
 	p.mu.Lock()
 	p.Cmd = cmd
@@ -360,6 +366,9 @@ func (p *Process) StartInteractive() error {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
 
+	// Record binary modification time for update tracking
+	p.recordBinaryModTime()
+
 	p.mu.Lock()
 	p.Cmd = cmd
 	p.stdin = stdin
@@ -480,6 +489,28 @@ func (p *Process) IsInteractive() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.interactive
+}
+
+// IsIdle returns true if the process is interactive and waiting for input (not actively streaming)
+// This is the safe state for checking binary updates and restarting
+func (p *Process) IsIdle() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.interactive && !p.streaming
+}
+
+// SetStreaming sets whether the process is actively generating output
+func (p *Process) SetStreaming(streaming bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.streaming = streaming
+}
+
+// IsStreaming returns true if the process is actively generating output
+func (p *Process) IsStreaming() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.streaming
 }
 
 // TrackImages adds image paths to be cleaned up when the process closes
@@ -734,4 +765,62 @@ func (p *Process) DeleteSession() error {
 	}
 
 	return lastErr
+}
+
+// recordBinaryModTime records the modification time of the claude binary
+// It resolves symlinks to detect actual binary changes (important for brew installations)
+func (p *Process) recordBinaryModTime() {
+	path, err := exec.LookPath("claude")
+	if err != nil {
+		p.logger.Warn("failed to look up claude path for mod time tracking", zap.Error(err))
+		return
+	}
+
+	// Resolve symlinks to get the actual binary path
+	// This is important for brew installations where claude is a symlink
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		// Fall back to original path if symlink resolution fails
+		realPath = path
+		p.logger.Debug("symlink resolution failed, using original path",
+			zap.String("path", path),
+			zap.Error(err))
+	}
+
+	info, err := os.Stat(realPath)
+	if err != nil {
+		p.logger.Warn("failed to stat claude binary for mod time tracking", zap.Error(err))
+		return
+	}
+
+	p.mu.Lock()
+	p.binaryPath = realPath
+	p.binaryModTime = info.ModTime()
+	p.mu.Unlock()
+	p.logger.Debug("recorded claude binary mod time",
+		zap.String("binaryPath", realPath),
+		zap.Time("modTime", p.binaryModTime))
+}
+
+// CheckForUpdate checks if the claude binary has been updated since the process started
+// Uses the cached binary path from recordBinaryModTime for performance
+func (p *Process) CheckForUpdate() bool {
+	p.mu.RLock()
+	lastModTime := p.binaryModTime
+	cachedPath := p.binaryPath
+	p.mu.RUnlock()
+
+	// No recorded mod time means we can't detect updates
+	if lastModTime.IsZero() || cachedPath == "" {
+		return false
+	}
+
+	// Use cached path for stat - avoids exec.LookPath syscall on every check
+	info, err := os.Stat(cachedPath)
+	if err != nil {
+		// Binary may have been removed, trigger update to re-resolve path
+		return true
+	}
+
+	return info.ModTime().After(lastModTime)
 }

@@ -525,24 +525,55 @@ func (h *Handler) handleChatMessage(client *Client, content string, images []Ima
 	// If so, send message via stdin (queued message support)
 	if process.GetStatus() == claude.ProcessStatusRunning {
 		if process.IsInteractive() {
-			h.logger.Info("sending message to running interactive process (queued)",
-				zap.String("claudeSessionID", claudeSessionID.String()),
-				zap.Int("contentLength", len(content)))
+			// Only check for binary updates when truly idle (not streaming a response)
+			// This prevents restarting mid-response which could truncate output
+			if process.IsIdle() && process.CheckForUpdate() {
+				h.logger.Info("claude binary update detected, restarting idle process",
+					zap.String("claudeSessionID", claudeSessionID.String()))
 
-			// Track images for cleanup when process closes
-			process.TrackImages(imagePaths)
+				// Notify user about the restart
+				h.sendStatusToClient(client, "restarting_for_update")
 
-			if err := process.SendMessage(content, imagePaths); err != nil {
-				h.logger.Error("failed to send message to interactive process", zap.Error(err))
-				h.sendErrorToClient(client, "failed to send message: "+err.Error())
+				// Stop the old process
+				if err := h.claudeMgr.StopProcess(claudeSessionID); err != nil {
+					h.logger.Warn("failed to stop process for update", zap.Error(err))
+					// Continue anyway - process may have already exited
+				}
+
+				// Re-create the process object as StopProcess removes it from Manager
+				process, err = h.claudeMgr.CreateProcess(claudeSessionID, projectPath, nil, permissionMode)
+				if err != nil {
+					h.logger.Error("failed to re-create process after update", zap.Error(err))
+					h.sendErrorToClient(client, "failed to restart Claude after update")
+					h.sendStatusToClient(client, "error")
+					return
+				}
+				// Fall through to StartInteractive() below to start the new version
+			} else {
+				h.logger.Info("sending message to running interactive process (queued)",
+					zap.String("claudeSessionID", claudeSessionID.String()),
+					zap.Int("contentLength", len(content)))
+
+				// Track images for cleanup when process closes
+				process.TrackImages(imagePaths)
+
+				// Mark process as streaming before sending message
+				process.SetStreaming(true)
+
+				if err := process.SendMessage(content, imagePaths); err != nil {
+					process.SetStreaming(false) // Reset on error
+					h.logger.Error("failed to send message to interactive process", zap.Error(err))
+					h.sendErrorToClient(client, "failed to send message: "+err.Error())
+					return
+				}
+				// Message sent successfully - output will be streamed by existing goroutine
+				// Streaming state will be reset when response completes
+				// Image cleanup handled by process.Close() via TrackImages
+				streamStarted = true // Prevent early cleanup in defer
+				h.logger.Info("queued message sent successfully",
+					zap.String("claudeSessionID", claudeSessionID.String()))
 				return
 			}
-			// Message sent successfully - output will be streamed by existing goroutine
-			// Image cleanup handled by process.Close() via TrackImages
-			streamStarted = true // Prevent early cleanup in defer
-			h.logger.Info("queued message sent successfully",
-				zap.String("claudeSessionID", claudeSessionID.String()))
-			return
 		}
 		// Non-interactive process still running (legacy case)
 		h.logger.Warn("process already running in non-interactive mode",
@@ -563,8 +594,12 @@ func (h *Handler) handleChatMessage(client *Client, content string, images []Ima
 	// Track images for cleanup when process closes
 	process.TrackImages(imagePaths)
 
+	// Mark process as streaming before sending message
+	process.SetStreaming(true)
+
 	// Send the first message via stdin
 	if err := process.SendMessage(content, imagePaths); err != nil {
+		process.SetStreaming(false) // Reset on error
 		h.logger.Error("failed to send initial message", zap.Error(err))
 		// Stop the process that was just started to clean up resources
 		if stopErr := h.claudeMgr.StopProcess(claudeSessionID); stopErr != nil {
@@ -710,6 +745,9 @@ streamLoop:
 			h.broadcastErrorToSession(claudeSessionID, "Claude error: "+err.Error())
 		}
 	}
+
+	// Mark process as no longer streaming (idle, ready for next message or update check)
+	process.SetStreaming(false)
 
 	// Handle compaction recovery if needed
 	if needsCompactionRecovery && retryCount < maxCompactionRetries {
