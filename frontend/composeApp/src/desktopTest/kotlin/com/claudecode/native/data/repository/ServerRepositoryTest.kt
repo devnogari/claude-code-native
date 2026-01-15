@@ -153,9 +153,9 @@ class ServerRepositoryTest : ViewModelTestBase() {
         val afterSwitch = System.currentTimeMillis()
 
         val switched = repository.servers.first { it.id == server2.id }
-        assertNotNull(switched.lastConnectedAt)
-        assertTrue(switched.lastConnectedAt!! >= beforeSwitch)
-        assertTrue(switched.lastConnectedAt!! <= afterSwitch)
+        val lastConnected = assertNotNull(switched.lastConnectedAt)
+        assertTrue(lastConnected >= beforeSwitch)
+        assertTrue(lastConnected <= afterSwitch)
     }
 
     @Test
@@ -192,9 +192,9 @@ class ServerRepositoryTest : ViewModelTestBase() {
         val afterUpdate = System.currentTimeMillis()
 
         val updated = repository.servers.first { it.id == server.id }
-        assertNotNull(updated.lastConnectedAt)
-        assertTrue(updated.lastConnectedAt!! >= beforeUpdate)
-        assertTrue(updated.lastConnectedAt!! <= afterUpdate)
+        val lastConnected = assertNotNull(updated.lastConnectedAt)
+        assertTrue(lastConnected >= beforeUpdate)
+        assertTrue(lastConnected <= afterUpdate)
     }
 
     @Test

@@ -3,13 +3,26 @@ import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig
 
+// Detect current OS for desktop artifact
+val currentOs: String = run {
+    val osName = System.getProperty("os.name")
+    val osArch = System.getProperty("os.arch")
+    when {
+        osName == "Mac OS X" && osArch == "aarch64" -> "macos-arm64"
+        osName == "Mac OS X" -> "macos-x64"
+        osName.startsWith("Win") -> "windows-x64"
+        osName == "Linux" && osArch == "aarch64" -> "linux-arm64"
+        osName == "Linux" -> "linux-x64"
+        else -> throw GradleException("Unsupported OS: $osName ($osArch)")
+    }
+}
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.android.kotlin.multiplatform.library)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
-    alias(libs.plugins.compose.hot.reload)
     alias(libs.plugins.detekt)
 }
 
@@ -98,13 +111,13 @@ kotlin {
         val desktopTest by getting
 
         commonMain.dependencies {
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material3)
-            implementation(compose.materialIconsExtended)
-            implementation(compose.ui)
-            implementation(compose.components.resources)
-            implementation(compose.components.uiToolingPreview)
+            implementation(libs.compose.runtime)
+            implementation(libs.compose.foundation)
+            implementation(libs.compose.material3)
+            implementation(libs.compose.material.icons.extended)
+            implementation(libs.compose.ui)
+            implementation(libs.compose.components.resources)
+            implementation(libs.compose.components.ui.tooling.preview)
 
             // Material3 Adaptive for split screen
             implementation(libs.compose.material3.adaptive)
@@ -146,7 +159,7 @@ kotlin {
         }
 
         desktopMain.dependencies {
-            implementation(compose.desktop.currentOs)
+            implementation("org.jetbrains.compose.desktop:desktop-jvm-$currentOs:${libs.versions.compose.multiplatform.get()}")
             implementation(libs.ktor.client.cio)
             implementation(libs.kotlinx.coroutines.swing)
             // SLF4J logging implementation for Ktor/CIO

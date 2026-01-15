@@ -94,7 +94,6 @@ class ChatViewModelTest {
     fun `ContentBlock Text should contain text content`() {
         val textBlock = ContentBlock.Text("Hello World")
 
-        assertTrue(textBlock is ContentBlock.Text)
         assertEquals("Hello World", textBlock.content)
     }
 
@@ -123,7 +122,6 @@ class ChatViewModelTest {
         )
         val toolBlock = ContentBlock.Tool(toolInfo)
 
-        assertTrue(toolBlock is ContentBlock.Tool)
         assertEquals("Bash", toolBlock.info.name)
         assertEquals("ls -la", toolBlock.info.summary)
     }

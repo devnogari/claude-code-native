@@ -108,7 +108,6 @@ class WebSocketClientTest {
     fun `ConnectionState Reconnecting should contain attempt number`() {
         val state = ConnectionState.Reconnecting(3)
 
-        assertTrue(state is ConnectionState.Reconnecting)
         assertEquals(3, state.attempt)
     }
 
@@ -116,7 +115,6 @@ class WebSocketClientTest {
     fun `ConnectionState Error should contain error message`() {
         val state = ConnectionState.Error("Connection timeout")
 
-        assertTrue(state is ConnectionState.Error)
         assertEquals("Connection timeout", state.message)
     }
 

@@ -60,7 +60,7 @@ class LoginViewModelTest : ViewModelTestBase() {
             // Should show error
             val errorState = awaitItem()
             assertTrue(errorState is LoginUiState.Error)
-            assertEquals("Username and password are required", (errorState as LoginUiState.Error).message)
+            assertEquals("Username and password are required", errorState.message)
         }
     }
 
@@ -76,7 +76,7 @@ class LoginViewModelTest : ViewModelTestBase() {
             // Should show error
             val errorState = awaitItem()
             assertTrue(errorState is LoginUiState.Error)
-            assertEquals("Username and password are required", (errorState as LoginUiState.Error).message)
+            assertEquals("Username and password are required", errorState.message)
         }
     }
 
@@ -107,7 +107,7 @@ class LoginViewModelTest : ViewModelTestBase() {
             // Should transition to Success
             val successState = awaitItem()
             assertTrue(successState is LoginUiState.Success)
-            assertEquals(tokenResponse, (successState as LoginUiState.Success).response)
+            assertEquals(tokenResponse, successState.response)
         }
     }
 
@@ -189,7 +189,7 @@ class LoginViewModelTest : ViewModelTestBase() {
             // Should show error
             val errorState = awaitItem()
             assertTrue(errorState is LoginUiState.Error)
-            assertEquals("Passwords do not match", (errorState as LoginUiState.Error).message)
+            assertEquals("Passwords do not match", errorState.message)
         }
     }
 
@@ -205,7 +205,7 @@ class LoginViewModelTest : ViewModelTestBase() {
             // Should show error
             val errorState = awaitItem()
             assertTrue(errorState is LoginUiState.Error)
-            assertEquals("Username and password are required", (errorState as LoginUiState.Error).message)
+            assertEquals("Username and password are required", errorState.message)
         }
     }
 }
