@@ -32,7 +32,10 @@ func (r *Repository) Create(ctx context.Context, user *User) error {
 	}
 
 	_, err := r.db.NewInsert().Model(user).Exec(ctx)
-	return err
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*User, error) {
@@ -47,7 +50,7 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*User, error) 
 		Scan(ctx)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("find user by id: %w", err)
 	}
 	return user, nil
 }
@@ -67,7 +70,7 @@ func (r *Repository) FindByUsername(ctx context.Context, username string) (*User
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil // User not found is not an error
 		}
-		return nil, err
+		return nil, fmt.Errorf("find user by username: %w", err)
 	}
 	return user, nil
 }
@@ -84,5 +87,8 @@ func (r *Repository) UpdateLastLogin(ctx context.Context, id uuid.UUID) error {
 		Where("id = ?", id).
 		Exec(ctx)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("update last login: %w", err)
+	}
+	return nil
 }

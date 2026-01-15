@@ -89,10 +89,10 @@ func New(p ServerParams) *Server {
 	}))
 
 	// Create handlers with proper dependencies
-	authHandler := auth.NewHandler(p.AuthService, p.UserRepo)
-	projectHandler := project.NewHandler(p.ProjectRepo)
-	convHandler := conversation.NewHandler(p.ConvRepo, p.ProjectRepo)
-	msgHandler := message.NewHandler(p.MsgRepo)
+	authHandler := auth.NewHandler(p.AuthService, p.UserRepo, p.Logger)
+	projectHandler := project.NewHandler(p.ProjectRepo, p.Logger)
+	convHandler := conversation.NewHandler(p.ConvRepo, p.ProjectRepo, p.Logger)
+	msgHandler := message.NewHandler(p.MsgRepo, p.Logger)
 
 	// Create hook handler with adapter
 	hookRepoAdapter := hook.NewProjectRepoAdapter(p.ProjectRepo)

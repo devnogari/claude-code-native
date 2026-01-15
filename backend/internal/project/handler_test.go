@@ -15,6 +15,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // MockProjectRepository implements ProjectRepository for testing
@@ -104,7 +105,7 @@ func (m *MockProjectRepository) AddProject(p *project.Project) {
 
 // Helper to create test app with injected user context
 func setupTestAppWithUser(mockRepo *MockProjectRepository, userID, username string) *fiber.App {
-	handler := project.NewHandler(mockRepo)
+	handler := project.NewHandler(mockRepo, zap.NewNop())
 
 	app := fiber.New()
 

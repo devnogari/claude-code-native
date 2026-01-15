@@ -6,6 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofrs/uuid/v5"
+	"go.uber.org/zap"
 )
 
 // ProjectRepository defines the interface for project data operations
@@ -20,13 +21,15 @@ type ProjectRepository interface {
 
 // Handler handles project HTTP requests
 type Handler struct {
-	repo ProjectRepository
+	repo   ProjectRepository
+	logger *zap.Logger
 }
 
 // NewHandler creates a new project handler
-func NewHandler(repo ProjectRepository) *Handler {
+func NewHandler(repo ProjectRepository, logger *zap.Logger) *Handler {
 	return &Handler{
-		repo: repo,
+		repo:   repo,
+		logger: logger.Named("project"),
 	}
 }
 
@@ -56,12 +59,14 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 
 	var req CreateProjectRequest
 	if err := c.BodyParser(&req); err != nil {
+		h.logger.Warn("invalid request body", zap.Error(err))
 		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
 			Error: "invalid request body",
 		})
 	}
 
 	if err := req.Validate(); err != nil {
+		h.logger.Warn("validation failed", zap.Error(err))
 		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
 			Error: err.Error(),
 		})
@@ -75,11 +80,13 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 
 	ctx := c.Context()
 	if err := h.repo.Create(ctx, project); err != nil {
+		h.logger.Error("failed to create project", zap.Error(err))
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error: "failed to create project",
 		})
 	}
 
+	h.logger.Info("project created", zap.String("name", project.Name), zap.String("id", project.ID.String()))
 	return c.Status(fiber.StatusCreated).JSON(ToResponse(project))
 }
 
@@ -95,6 +102,7 @@ func (h *Handler) List(c *fiber.Ctx) error {
 	ctx := c.Context()
 	projects, err := h.repo.FindByUserID(ctx, userID)
 	if err != nil {
+		h.logger.Error("failed to list projects", zap.Error(err))
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error: "failed to list projects",
 		})
@@ -134,6 +142,7 @@ func (h *Handler) Get(c *fiber.Ctx) error {
 				Error: "project not found",
 			})
 		}
+		h.logger.Error("failed to get project", zap.Error(err), zap.String("projectId", projectIDStr))
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error: "failed to get project",
 		})
@@ -141,6 +150,7 @@ func (h *Handler) Get(c *fiber.Ctx) error {
 
 	// Authorization check: ensure project belongs to user
 	if project.UserID != userID {
+		h.logger.Warn("forbidden access attempt", zap.String("projectId", projectIDStr), zap.String("userId", userID.String()))
 		return c.Status(fiber.StatusForbidden).JSON(ErrorResponse{
 			Error: "forbidden: you don't have access to this project",
 		})
@@ -196,6 +206,7 @@ func (h *Handler) Update(c *fiber.Ctx) error {
 
 	// Authorization check
 	if project.UserID != userID {
+		h.logger.Warn("forbidden access attempt on update", zap.String("projectId", projectIDStr), zap.String("userId", userID.String()))
 		return c.Status(fiber.StatusForbidden).JSON(ErrorResponse{
 			Error: "forbidden: you don't have access to this project",
 		})
@@ -205,11 +216,13 @@ func (h *Handler) Update(c *fiber.Ctx) error {
 	project.Name = req.Name
 
 	if err := h.repo.Update(ctx, project); err != nil {
+		h.logger.Error("failed to update project", zap.Error(err), zap.String("projectId", projectIDStr))
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error: "failed to update project",
 		})
 	}
 
+	h.logger.Info("project updated", zap.String("id", project.ID.String()), zap.String("name", project.Name))
 	return c.Status(fiber.StatusOK).JSON(ToResponse(project))
 }
 
@@ -247,16 +260,19 @@ func (h *Handler) Delete(c *fiber.Ctx) error {
 
 	// Authorization check
 	if project.UserID != userID {
+		h.logger.Warn("forbidden access attempt on delete", zap.String("projectId", projectIDStr), zap.String("userId", userID.String()))
 		return c.Status(fiber.StatusForbidden).JSON(ErrorResponse{
 			Error: "forbidden: you don't have access to this project",
 		})
 	}
 
 	if err := h.repo.Delete(ctx, projectID); err != nil {
+		h.logger.Error("failed to delete project", zap.Error(err), zap.String("projectId", projectIDStr))
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 			Error: "failed to delete project",
 		})
 	}
 
+	h.logger.Info("project deleted", zap.String("id", projectIDStr))
 	return c.SendStatus(fiber.StatusNoContent)
 }

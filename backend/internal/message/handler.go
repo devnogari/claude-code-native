@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofrs/uuid/v5"
+	"go.uber.org/zap"
 )
 
 const (
@@ -14,12 +15,16 @@ const (
 
 // Handler handles message HTTP requests
 type Handler struct {
-	repo *Repository
+	repo   *Repository
+	logger *zap.Logger
 }
 
 // NewHandler creates a new message handler
-func NewHandler(repo *Repository) *Handler {
-	return &Handler{repo: repo}
+func NewHandler(repo *Repository, logger *zap.Logger) *Handler {
+	return &Handler{
+		repo:   repo,
+		logger: logger.Named("message"),
+	}
 }
 
 // ListByConversation handles GET /api/v1/conversations/:conversationId/messages
@@ -59,6 +64,7 @@ func (h *Handler) ListByConversation(c *fiber.Ctx) error {
 
 	result, err := h.repo.FindByConversationIDPaginated(c.Context(), conversationID, limit, offset)
 	if err != nil {
+		h.logger.Error("failed to fetch messages", zap.Error(err), zap.String("conversationId", conversationIDStr))
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "failed to fetch messages",
 		})

@@ -49,11 +49,17 @@ func (r *Repository) Create(ctx context.Context, project *Project) error {
 			project.UpdatedAt, // Use UpdatedAt as CreatedAt for sync
 			project.UpdatedAt,
 		).Exec(ctx)
-		return err
+		if err != nil {
+			return fmt.Errorf("create project with timestamp: %w", err)
+		}
+		return nil
 	}
 
 	_, err := r.db.NewInsert().Model(project).Exec(ctx)
-	return err
+	if err != nil {
+		return fmt.Errorf("create project: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*Project, error) {
@@ -68,7 +74,7 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*Project, erro
 		Scan(ctx)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("find project by id: %w", err)
 	}
 	return project, nil
 }
@@ -86,7 +92,7 @@ func (r *Repository) FindByUserID(ctx context.Context, userID uuid.UUID) ([]*Pro
 		Scan(ctx)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("find projects by user id: %w", err)
 	}
 	return projects, nil
 }
@@ -106,7 +112,10 @@ func (r *Repository) Update(ctx context.Context, project *Project) error {
 		Set("updated_at = NOW()").
 		Exec(ctx)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("update project: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
@@ -119,7 +128,10 @@ func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 		Where("id = ?", id).
 		Exec(ctx)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("delete project: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) FindByPath(ctx context.Context, userID uuid.UUID, path string) (*Project, error) {
@@ -134,7 +146,7 @@ func (r *Repository) FindByPath(ctx context.Context, userID uuid.UUID, path stri
 		Scan(ctx)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("find project by path: %w", err)
 	}
 	return project, nil
 }
@@ -161,7 +173,7 @@ func (r *Repository) UpdateWithTimestamp(ctx context.Context, project *Project) 
 		Exec(ctx)
 
 	if err != nil {
-		return err
+		return fmt.Errorf("update project with timestamp: %w", err)
 	}
 
 	rowsAffected, _ := result.RowsAffected()
@@ -184,7 +196,10 @@ func (r *Repository) UpdateLastAccessed(ctx context.Context, id uuid.UUID) error
 		Where("id = ?", id).
 		Exec(ctx)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("update last accessed: %w", err)
+	}
+	return nil
 }
 
 // FindByPathAnyUser finds a project by path regardless of user
@@ -201,7 +216,7 @@ func (r *Repository) FindByPathAnyUser(ctx context.Context, path string) (*Proje
 		Scan(ctx)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("find project by path any user: %w", err)
 	}
 	return project, nil
 }
@@ -219,5 +234,8 @@ func (r *Repository) MarkCompleted(ctx context.Context, id uuid.UUID, completed 
 		Where("id = ?", id).
 		Exec(ctx)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("mark completed: %w", err)
+	}
+	return nil
 }

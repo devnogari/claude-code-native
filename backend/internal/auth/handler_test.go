@@ -15,6 +15,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // MockUserRepository implements a mock for testing
@@ -78,7 +79,7 @@ func setupTestApp(mockRepo *MockUserRepository) (*fiber.App, *auth.Service) {
 		},
 	}
 	svc := auth.NewService(cfg, nil)
-	handler := auth.NewHandler(svc, mockRepo)
+	handler := auth.NewHandler(svc, mockRepo, zap.NewNop())
 
 	app := fiber.New()
 	app.Post("/api/v1/auth/register", handler.Register)

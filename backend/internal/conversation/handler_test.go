@@ -16,6 +16,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // MockConversationRepository implements ConversationRepository for testing
@@ -133,7 +134,7 @@ func (m *MockProjectRepository) AddProject(p *project.Project) {
 
 // setupTestApp creates a test fiber app with conversation routes
 func setupTestAppWithUser(convRepo *MockConversationRepository, projRepo *MockProjectRepository, userID, username string) *fiber.App {
-	handler := conversation.NewHandler(convRepo, projRepo)
+	handler := conversation.NewHandler(convRepo, projRepo, zap.NewNop())
 
 	app := fiber.New()
 
