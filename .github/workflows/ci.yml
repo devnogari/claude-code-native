@@ -13,7 +13,9 @@ concurrency:
 jobs:
   backend:
     name: Backend (Go)
-    runs-on: ubuntu-latest
+    # PostgreSQL service containers and the Go race detector require the
+    # Docker-capable Linux pool with a system C compiler.
+    runs-on: [self-hosted, Linux, X64, org-devnogari]
 
     services:
       postgres:
@@ -61,7 +63,8 @@ jobs:
 
   frontend:
     name: Frontend (Kotlin)
-    runs-on: ubuntu-latest
+    # Compose/Kotlin native tooling remains on the prepared Linux pool.
+    runs-on: [self-hosted, Linux, X64, org-devnogari]
 
     steps:
       - name: Checkout
@@ -86,7 +89,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: devnogari-kubernetes
 
     steps:
       - name: Checkout
@@ -96,6 +99,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          cache: false
           cache-dependency-path: backend/go.sum
 
       - name: golangci-lint
